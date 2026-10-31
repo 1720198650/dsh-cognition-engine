@@ -1,0 +1,26 @@
+# DSH bundle patch — 把 cognition-engine 作为一行插件插入当前 profile 的条目列表。
+# 行 id 全局唯一；config 会原样传给 src/index.ts 的 apply(ctx, config)。
+- insert:
+    - id: cognition-engine
+      name: '@local/cognition-engine'
+      config:
+        decayHalfLifeHours: 168
+        strictThreshold: 0.12
+        assimilateThreshold: 0.55
+        overlapThreshold: 0.42
+        communityThreshold: 0.3
+        maxClusterSize: 8
+        energyDrainPerMinute: 1.5
+        # 长程任务台账落盘位置（换机器/换目录时改这一行）
+        tasksFile: D:/dshgz/cognition-engine/tasks.json
+        # 记忆与心情的落盘位置
+        stateFile: D:/dshgz/cognition-engine/cognition-state.json
+        # 上锁用的固定口令；留空则每次上锁随机生成
+        # lockToken: 换成一个你自己的口令
+        # 真模型：不填则跟随当前默认模型
+        # llmProvider: deepseek
+        # llmModel: deepseek-chat
+        heartbeatHours: 6
+        patrolIntervalHours: 3
+        idleThresholdMinutes: 5
+        recordOnly: true

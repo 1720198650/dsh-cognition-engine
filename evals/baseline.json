@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "generatedAt": "2026-10-31T17:54:46.986Z",
+  "schemaTokens": 1086,
+  "cases": {
+    "memory.strict-current": true,
+    "memory.historical-past": true,
+    "memory.belief-past": true,
+    "memory.hash-stable": true,
+    "memory.same-ms-supersede": true,
+    "memory.conflict": true,
+    "memory.decay": true,
+    "memory.remove": true,
+    "graph.assimilation": true,
+    "graph.accommodation": true,
+    "graph.polarity": true,
+    "reflection.sequence": true,
+    "reflection.parse-colon": true,
+    "proactive.observe-first": true,
+    "proactive.ignore-unlisted": true,
+    "mood.explain-consistent": true,
+    "recall.expand": true,
+    "reflection.draft": true,
+    "reflection.save": true,
+    "task.persist": true
+  }
+}
