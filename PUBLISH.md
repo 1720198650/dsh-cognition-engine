@@ -3,6 +3,11 @@
 本机当前**没有安装 Git**，也没有 GitHub 凭证，所以推送这一步需要你自己执行。
 下面是从零到仓库上线的完整步骤。
 
+> **本机实测补充（2026-11-01）**：Git 2.56 已安装到 `C:\Program Files\Git\cmd`（未进 DSH 进程的 PATH，用绝对路径调用）。
+> 但 `github.com:443` 在本网络被阻断，`git push` 会报 `Connection was reset` / `Could not connect`。
+> 本次是通过 **GitHub Git Data API**（`api.github.com`，未被阻断）把文件直接写成提交的。
+> 如果你也遇到同样问题：挂代理，或复用 `_research/api-push.mjs` 这套脚本。
+
 ## 1. 安装 Git
 
 ```powershell
