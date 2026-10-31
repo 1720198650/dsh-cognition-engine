@@ -1,0 +1,218 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "memory.strict-current",
+      "group": "记忆",
+      "checker": "memory.recall",
+      "params": {
+        "facts": [
+          { "content": "后端语言：Python", "subject": "后端语言", "validFrom": 1000 },
+          { "content": "后端语言：TypeScript", "subject": "后端语言", "validFrom": 3000 }
+        ],
+        "supersede": [0, 1],
+        "query": "后端语言",
+        "mode": "strict",
+        "now": 5000
+      },
+      "expect": { "count": 1, "content": "后端语言：TypeScript" }
+    },
+    {
+      "id": "memory.historical-past",
+      "group": "记忆",
+      "checker": "memory.recall",
+      "params": {
+        "facts": [
+          { "content": "后端语言：Python", "subject": "后端语言", "validFrom": 1000 },
+          { "content": "后端语言：TypeScript", "subject": "后端语言", "validFrom": 3000 }
+        ],
+        "supersede": [0, 1],
+        "query": "后端语言",
+        "mode": "historical",
+        "validTime": 2000,
+        "now": 5000
+      },
+      "expect": { "count": 1, "content": "后端语言：Python" }
+    },
+    {
+      "id": "memory.belief-past",
+      "group": "记忆",
+      "checker": "memory.recall",
+      "params": {
+        "facts": [
+          { "content": "部署区域：华东", "subject": "部署区域", "validFrom": 1000, "recordedAt": 1000 },
+          { "content": "部署区域：华南", "subject": "部署区域", "validFrom": 3000, "recordedAt": 3000 }
+        ],
+        "supersede": [0, 1],
+        "query": "部署区域",
+        "mode": "belief",
+        "recordedTime": 2000,
+        "now": 5000
+      },
+      "expect": { "count": 1, "content": "部署区域：华东" }
+    },
+    {
+      "id": "memory.hash-stable",
+      "group": "记忆",
+      "checker": "memory.hashStable",
+      "params": {
+        "facts": [
+          { "content": "缓存策略：先读本地", "subject": "缓存策略", "validFrom": 1000 },
+          { "content": "缓存策略：直连远端", "subject": "缓存策略", "validFrom": 2000 }
+        ],
+        "supersede": [0, 1],
+        "now": 5000
+      },
+      "expect": { "hashStable": true, "hasSupersededBy": true }
+    },
+    {
+      "id": "memory.same-ms-supersede",
+      "group": "记忆",
+      "checker": "memory.recall",
+      "params": {
+        "facts": [
+          { "content": "发布窗口：周三", "subject": "发布窗口" },
+          { "content": "发布窗口：周五", "subject": "发布窗口" }
+        ],
+        "ingestSupersede": true,
+        "query": "发布窗口",
+        "mode": "historical",
+        "validTime": 0,
+        "now": 0
+      },
+      "expect": { "count": 1, "content": "发布窗口：周三" }
+    },
+    {
+      "id": "memory.conflict",
+      "group": "记忆",
+      "checker": "memory.conflict",
+      "params": {
+        "facts": [
+          { "content": "发布窗口：周三", "subject": "发布窗口", "validFrom": 1000 },
+          { "content": "发布窗口：周五", "subject": "发布窗口", "validFrom": 2000 }
+        ],
+        "supersedeAt": 2000,
+        "now": 9000
+      },
+      "expect": { "before": 1, "after": 0, "history": 2 }
+    },
+    {
+      "id": "memory.decay",
+      "group": "记忆",
+      "checker": "memory.decay",
+      "params": {
+        "halfLifeMs": 60000,
+        "content": "值班表：每周三更新",
+        "subject": "值班表"
+      },
+      "expect": { "afterOneHalfLife": 0.5, "afterReinforce": 1 }
+    },
+    {
+      "id": "memory.remove",
+      "group": "记忆",
+      "checker": "memory.remove",
+      "params": { "content": "临时：待删除", "subject": "临时", "query": "临时" },
+      "expect": { "removed": true, "hits": 0 }
+    },
+    {
+      "id": "graph.assimilation",
+      "group": "图式",
+      "checker": "graph.ingest",
+      "params": { "texts": ["用户偏好深色主题的界面", "用户偏好深色主题的编辑器界面"] },
+      "expect": { "modes": ["accommodation", "assimilation"], "sameSchema": [true] }
+    },
+    {
+      "id": "graph.accommodation",
+      "group": "图式",
+      "checker": "graph.ingest",
+      "params": { "texts": ["用户偏好深色主题的界面", "数据库连接池需要设置超时"] },
+      "expect": { "modes": ["accommodation", "accommodation"], "sameSchema": [false], "edges": 1 }
+    },
+    {
+      "id": "graph.polarity",
+      "group": "图式",
+      "checker": "graph.polarity",
+      "params": {
+        "texts": ["用户偏好深色主题的界面", "用户偏好深色主题的编辑器界面", "用户并不偏好深色主题"]
+      },
+      "expect": { "mode": "accommodation", "conflictWithFirst": true }
+    },
+    {
+      "id": "reflection.sequence",
+      "group": "反思",
+      "checker": "reflection.sequence",
+      "params": { "query": "要不要重写遗留系统" },
+      "expect": {
+        "order": "thesis>antithesis>synthesis",
+        "contradictions": 2,
+        "synthesisHasThesis": true,
+        "synthesisHasAntithesis": true
+      }
+    },
+    {
+      "id": "reflection.parse-colon",
+      "group": "反思",
+      "checker": "reflection.parse",
+      "params": { "text": "CONTRADICTION：前提未验证\nEVIDENCE：没有实验支撑" },
+      "expect": { "count": 1, "evidence": "没有实验支撑" }
+    },
+    {
+      "id": "proactive.observe-first",
+      "group": "门卫",
+      "checker": "proactive.gate",
+      "params": {
+        "signal": { "silenceMs": 600000, "topic": "排期", "addressed": true, "listed": true },
+        "recordOnly": true
+      },
+      "expect": { "observe": "OBSERVE", "judge": "SILENT", "draftUndefined": true }
+    },
+    {
+      "id": "proactive.ignore-unlisted",
+      "group": "门卫",
+      "checker": "proactive.gate",
+      "params": { "signal": { "silenceMs": 900000, "topic": "闲聊" }, "recordOnly": true },
+      "expect": { "observe": "SILENT", "judge": "SILENT", "draftUndefined": true }
+    },
+    {
+      "id": "mood.explain-consistent",
+      "group": "心情",
+      "checker": "mood.explain",
+      "params": { "events": [["praise", 2]] },
+      "expect": { "consistent": true, "reasonIncludes": "表扬", "timeDriven": false }
+    },
+    {
+      "id": "recall.expand",
+      "group": "召回",
+      "checker": "recall.expand",
+      "params": {
+        "texts": ["部署区域：华东机房", "部署区域：华南机房", "代码风格：禁止外部依赖"],
+        "seed": "部署区域：华东机房"
+      },
+      "expect": { "related": 1, "contains": "部署区域：华南机房" }
+    },
+    {
+      "id": "reflection.draft",
+      "group": "反思",
+      "checker": "reflection.draft",
+      "params": {
+        "query": "要不要引入缓存层",
+        "draft": "我认为应该引入缓存层，因为读多写少。"
+      },
+      "expect": { "calls": 3, "llmCalls": 2, "thesisIsDraft": true }
+    },
+    {
+      "id": "reflection.save",
+      "group": "反思",
+      "checker": "reflection.save",
+      "params": { "query": "要不要把结论存进记忆" },
+      "expect": { "subjectPrefix": "结论:", "recallable": true, "source": "reflection" }
+    },
+    {
+      "id": "task.persist",
+      "group": "任务",
+      "checker": "task.persist",
+      "params": { "description": "评测：任务台账可用", "clue": "线索一" },
+      "expect": { "count": 1, "clues": 1 }
+    }
+  ]
+}
