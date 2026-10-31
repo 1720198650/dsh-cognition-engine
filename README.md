@@ -4,6 +4,8 @@
 
 一个纯 TypeScript、零运行时依赖的 DSH 插件。所有状态都存在内存 + 本地 JSON，不接数据库、不发外部请求（除非你主动打开真模型）。
 
+> 本项目是 **DeepSeek V4.1-Flash（1017）许愿式编程** 的产物：需求由人提出，代码、测试、评测与文档由模型在会话中逐轮生成、验证并修正。
+
 ```
 认知引擎  能量 ███████░░░ 70%  好感 █████░░░░░ +0  平静 · 记忆 3 · 图式 2 · 待办 1  ▸
 ```
@@ -168,6 +170,57 @@ npm run eval       # 20 条评测 + token 预算门禁
 3. **心情数值不会自行变化**——`tick()` 从未被调用，值只在事件发生时改变。
 4. **上锁是共享口令**，不是账号体系；口令泄露即失效。
 5. 真模型输出可能很长（一次反思可达数千 token），请自行控制使用频率。
+
+---
+
+## 参考与致谢
+
+本项目的机制设计来自以下开源工作。**只借鉴思想，未复制任何代码**——所有实现均为重新编写。
+
+### 记忆与图式
+
+| 项目 | 借了什么 |
+|---|---|
+| [LongMemory](https://github.com/CaviraOSS/LongMemory) | 双时态模型：`validFrom/validTo` 与 `recordedAt/supersededAt` 两条时间轴；半开区间判定；闭合区间不改变内容指纹与 id |
+| [CAM: A Constructivist View of Agentic Memory](https://github.com/rui9812/CAM)（NeurIPS 2025） | 增量重叠聚类、同化 / 顺应、超图摘要、簇大小上限 |
+| [A-MEM: Agentic Memory](https://arxiv.org/abs/2502.12110) | 卡片盒式原子笔记与记忆演化（对照参考） |
+| [MemGPT / Letta](https://github.com/letta-ai/letta) | 记忆分层与分页（对照参考） |
+| [GraphRAG](https://github.com/microsoft/graphrag) | 社区摘要参与检索；本项目的「图式扩展召回」是其最小实现 |
+| [RAPTOR](https://github.com/parthsarthi03/raptor) | 递归聚类 + 摘要的树状检索（对照参考） |
+
+### 反思
+
+| 项目 | 借了什么 |
+|---|---|
+| [Hegelion](https://github.com/Hmbown/Hegelion) | 三段式 Prompt 编排：THESIS → ANTITHESIS（`CONTRADICTION:` / `EVIDENCE:` 成对）→ SYNTHESIS，以及合成的验收条件 |
+| [Self-Refine](https://github.com/madaan/self-refine) | 生成 → 自我反馈 → 重写的迭代范式 |
+| [Reflexion](https://github.com/noahshinn/reflexion) | 反思写回记忆、供下次使用的思路 |
+| [Self-RAG](http://selfrag.github.io) | 把反思作为过程内控制信号（对照参考） |
+| [Generative Agents](https://arxiv.org/abs/2304.03442) | 「记忆 → 反思 → 回写记忆」闭环；近期性 / 重要性 / 相关性三因子检索 |
+
+### 插件机制
+
+| 项目 | 借了什么 |
+|---|---|
+| [dsh-superagent-prototype](https://github.com/deepseek-ai/dsh-superagent-prototype) | 准入矩阵与「默认不做」；Inline & Spill 的 `chars + read pointer`；Worker 异步隔离 |
+| [dsh-whale-galgame](https://gitee.com/dsh-plugin/dsh-whale-galgame) | 好感度结算的工程做法（回复选择 + token 累计 + 衰减，对照参考） |
+| [dsh-context-doctor](https://github.com/Zhenyu98/dsh-context-doctor) | 工具 schema 的 token 成本量化思路（本项目用真分词器自测） |
+| [dsh-tool-squeeze](https://github.com/w2829562572-dev/dsh-tool-squeeze) | 工具结果压缩与原文留存的取舍（评估后未采用） |
+
+### 评测方法
+
+| 项目 | 借了什么 |
+|---|---|
+| [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) | 数据集 + prompt + 指标绑定；先小样本验证判分器 |
+| [SWE-bench](https://github.com/princeton-nlp/SWE-bench) | 容器化复现、缓存键必须含输入 |
+| [Inspect AI](https://github.com/UKGovernmentBEIS/inspect_ai) | Task / Solver / Scorer 的可替换分层 |
+| [promptfoo](https://github.com/promptfoo/promptfoo) | 声明式用例 + 断言 + 基线对比，CI 中运行 |
+
+### 特别说明
+
+- 本项目由 **DeepSeek V4.1-Flash（1017）** 在「许愿式编程」模式下完成：人提需求，模型负责设计、实现、自测、修复与文档。
+- 所有参考项目仅用于理解机制；代码、测试与文档均为原创实现，未包含上述项目的源码片段。
+- 若你是上述项目的作者并认为某处借鉴过度，请开 issue，我会调整或移除。
 
 ---
 
