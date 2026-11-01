@@ -25,6 +25,8 @@ interface PluginContext {
     tools?: ToolHost;
     get?(name: string): unknown;
     effect?(callback: () => () => void): unknown;
+    /** 事件订阅（agent/pre-step 等）。 */
+    on?(event: string, listener: (...args: any[]) => unknown): () => void;
     logger?: PluginLogger;
 }
 /** 插件配置（来自 cordis.patch.yml 的 config，全部可选）。 */

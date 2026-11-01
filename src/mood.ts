@@ -29,6 +29,8 @@ export interface MoodSnapshot {
   energy: number;
   favorability: number;
   mood: MoodLabel;
+  /** 由 applyEvent 设置的瞬时情绪，例如「怀旧」「震惊/烦躁」。 */
+  emotion: string;
   /** 状态条文本，例如 `[能量 ███████░░░ 72%] [好感 ██████░░░░ +18] 状态:平静`。 */
   bar: string;
   at: number;
@@ -142,6 +144,10 @@ function clamp(value: number, min: number, max: number): number {
 export interface MoodState {
   energy: number;
   favorability: number;
+  /** 当前情绪文本（旧存档没有则为空）。 */
+  emotion?: string;
+  /** 上次结算时间（旧存档没有则按当前时间初始化）。 */
+  lastTickTime?: number;
   log: Array<{ event: MoodEvent; at: number; delta: MoodDelta }>;
 }
 
@@ -149,11 +155,12 @@ export class MoodStateMachine {
   private energyValue: number;
   private favorabilityValue: number;
   private label: MoodLabel = '平静';
+  private emotionValue = '平静';
   private readonly clock: () => number;
   private readonly energyDrainPerMinute: number;
   private readonly favorabilityDriftPerMinute: number;
   private readonly barWidth: number;
-  private lastTickAt: number;
+  private lastTickTimeValue: number;
   private readonly log: Array<{ event: MoodEvent; at: number; delta: MoodDelta }> = [];
   /** 启动时的初值，用来解释「为什么现在是这个数」。 */
   private readonly initialEnergy: number;
@@ -173,7 +180,7 @@ export class MoodStateMachine {
     this.energyDrainPerMinute = options.energyDrainPerMinute ?? 1.5;
     this.favorabilityDriftPerMinute = options.favorabilityDriftPerMinute ?? 0.5;
     this.barWidth = Math.max(4, options.barWidth ?? 10);
-    this.lastTickAt = this.clock();
+    this.lastTickTimeValue = this.clock();
     this.recomputeLabel();
   }
 
@@ -187,6 +194,16 @@ export class MoodStateMachine {
 
   get mood(): MoodLabel {
     return this.label;
+  }
+
+  /** 当前情绪文本（applyEvent 会覆盖它）。 */
+  get emotion(): string {
+    return this.emotionValue;
+  }
+
+  /** 上次结算时间戳。 */
+  get lastTickTime(): number {
+    return this.lastTickTimeValue;
   }
 
   /** 施加一个事件，返回新快照。intensity 是力度倍数，默认 1。 */
@@ -227,7 +244,7 @@ export class MoodStateMachine {
       }
       this.driftedFavorability += this.favorabilityValue - favBefore;
     }
-    this.lastTickAt += Math.max(0, dtMs);
+    this.lastTickTimeValue += Math.max(0, dtMs);
     this.recomputeLabel();
     return this.snapshot();
   }
@@ -235,8 +252,83 @@ export class MoodStateMachine {
   /** 按真实时钟推进到当前时刻。 */
   sync(): MoodSnapshot {
     const now = this.clock();
-    const dt = now - this.lastTickAt;
+    const dt = now - this.lastTickTimeValue;
     return this.tick(dt);
+  }
+
+  /** 两次结算之间的最小间隔：避免每个 step 都结算，把精力瞬间抽干。 */
+  private static readonly MIN_SETTLE_MS = 60_000;
+
+  /**
+   * 被动懒结算（不需要外部定时器）。
+   *
+   * @param now 当前时间戳
+   * @param memoryRecordCount 最近 1 小时写入的记忆条数
+   *
+   * 规则：
+   *   - 距上次结算不足 1 分钟：直接返回，避免高频调用重复扣减；
+   *   - 记忆 > 5 条：energy -= 10（心累）；
+   *   - 记忆 === 0 条：energy += 5（休息恢复）；
+   *   - favorability 按经过的小时数向 0 回归。
+   */
+  settleTime(now: number, memoryRecordCount: number): MoodSnapshot {
+    const elapsedMs = Math.max(0, now - this.lastTickTimeValue);
+    if (elapsedMs < MoodStateMachine.MIN_SETTLE_MS) {
+      return this.snapshot();
+    }
+
+    const hours = elapsedMs / 3_600_000;
+
+    if (memoryRecordCount > 5) {
+      this.energyValue = clamp(this.energyValue - 10, 0, 100);
+    } else if (memoryRecordCount === 0) {
+      this.energyValue = clamp(this.energyValue + 5, 0, 100);
+    }
+
+    const drift = this.favorabilityDriftPerMinute * 60 * hours;
+    const favBefore = this.favorabilityValue;
+    if (this.favorabilityValue > 0) {
+      this.favorabilityValue = clamp(this.favorabilityValue - drift, 0, 100);
+    } else if (this.favorabilityValue < 0) {
+      this.favorabilityValue = clamp(this.favorabilityValue + drift, -100, 0);
+    }
+    this.driftedFavorability += this.favorabilityValue - favBefore;
+
+    this.lastTickTimeValue = now;
+    this.tickCount += 1;
+    this.recomputeLabel();
+    return this.snapshot();
+  }
+
+  /**
+   * 情绪事件（由记忆/图式子系统调用）。
+   *   'CONFLICT'        favorability -= value，情绪设为「震惊/烦躁」
+   *   'NOSTALGIA'       energy += value，情绪设为「怀旧」
+   *   'SENTIMENT_BATCH' favorability += value（value 可为负）
+   */
+  applyEvent(eventType: string, value: number): MoodSnapshot {
+    const amount = Number.isFinite(value) ? value : 0;
+
+    switch (eventType) {
+      case 'CONFLICT':
+        this.favorabilityValue = clamp(this.favorabilityValue - amount, -100, 100);
+        this.recomputeLabel();
+        this.emotionValue = '震惊/烦躁';
+        break;
+      case 'NOSTALGIA':
+        this.energyValue = clamp(this.energyValue + amount, 0, 100);
+        this.recomputeLabel();
+        this.emotionValue = '怀旧';
+        break;
+      case 'SENTIMENT_BATCH':
+        this.favorabilityValue = clamp(this.favorabilityValue + amount, -100, 100);
+        this.recomputeLabel();
+        break;
+      default:
+        break;
+    }
+
+    return this.snapshot();
   }
 
   snapshot(): MoodSnapshot {
@@ -244,6 +336,7 @@ export class MoodStateMachine {
       energy: round1(this.energyValue),
       favorability: round1(this.favorabilityValue),
       mood: this.label,
+      emotion: this.emotionValue,
       bar: this.statusBar(),
       at: this.clock(),
     };
@@ -262,6 +355,11 @@ export class MoodStateMachine {
     ].join(' ');
   }
 
+  /** 带情绪的完整状态条（供页面与最终回复使用）。 */
+  getStatusBar(): string {
+    return `${this.statusBar()} 情绪:${this.emotionValue}`;
+  }
+
   /** 最近事件流水（最多 100 条）。 */
   history(): ReadonlyArray<{ event: MoodEvent; at: number; delta: MoodDelta }> {
     return this.log;
@@ -272,6 +370,8 @@ export class MoodStateMachine {
     return {
       energy: this.energyValue,
       favorability: this.favorabilityValue,
+      emotion: this.emotionValue,
+      lastTickTime: this.lastTickTimeValue,
       log: this.log.map((entry) => ({ ...entry, delta: { ...entry.delta } })),
     };
   }
@@ -282,17 +382,23 @@ export class MoodStateMachine {
     if (typeof state.favorability === 'number') {
       this.favorabilityValue = clamp(state.favorability, -100, 100);
     }
+    if (typeof state.lastTickTime === 'number') this.lastTickTimeValue = state.lastTickTime;
     this.log.length = 0;
     for (const entry of (state.log ?? []).slice(-100)) {
       this.log.push({ event: entry.event, at: entry.at, delta: { ...entry.delta } });
     }
     this.recomputeLabel();
+    if (typeof state.emotion === 'string' && state.emotion.length > 0) {
+      this.emotionValue = state.emotion;
+    }
   }
 
   /** 回到初始值（页面的「清空心情」用）。 */
   reset(): void {
     this.energyValue = this.initialEnergy;
     this.favorabilityValue = this.initialFavorability;
+    this.emotionValue = '平静';
+    this.lastTickTimeValue = this.clock();
     this.log.length = 0;
     this.drainedEnergy = 0;
     this.driftedFavorability = 0;
@@ -452,6 +558,8 @@ export class MoodStateMachine {
     }
 
     this.label = next;
+    // 标签变化时情绪回到默认值；applyEvent 会在其后覆盖成事件专属情绪。
+    this.emotionValue = next;
   }
 }
 

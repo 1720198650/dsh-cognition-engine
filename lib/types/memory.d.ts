@@ -14,10 +14,17 @@
  *     只是从「当前视图」里退场。
  *   - 严格召回只取 current truth；历史召回保留被取代的真值（point-in-time truth）。
  *
+ * 情绪联动（本次新增）：
+ *   - 每条记忆带 `sentiment`（-1.0 ~ 1.0）；
+ *   - `ingest()` 在「本条取代了旧事实」时返回 `onConflictTriggered = true`；
+ *   - `recallWithMeta()` 额外返回 `sentimentSum` 与 `isNostalgic`。
+ *
  * 存储：纯 TypeScript + Map，无任何外部数据库。
  */
 /** 召回口径。 */
 export type RecallMode = 'strict' | 'historical' | 'belief';
+/** 记忆作用域：全局共享 / 工作区共享 / 会话私有。 */
+export type MemoryScope = 'global' | 'workspace' | 'session';
 /** 一条不可变记忆事实。内容字段创建后不再改写（闭合区间时整体替换为新对象）。 */
 export interface TemporalFact {
     readonly id: string;
@@ -34,9 +41,27 @@ export interface TemporalFact {
     readonly tags: readonly string[];
     readonly source: string;
     readonly importance: number;
+    /** 作用域，默认 global。 */
+    readonly scope: MemoryScope;
+    /** scope = workspace 时的归属工作区 id。 */
+    readonly workspaceId: string | null;
+    /** scope = session 时的归属会话 id。 */
+    readonly sessionId: string | null;
+    /**
+     * 情绪值，范围 -1.0 ~ 1.0。
+     * 负数表示负面（沮丧、愤怒），正数表示正面（满意、愉快），0 为中性。
+     */
+    readonly sentiment: number;
     /** 强化量（每次 recall 命中或被显式 reinforce 时增加），不参与 hash。 */
     readonly activation: number;
     readonly lastAccessedAt: number;
+}
+/** 兼容旧命名：外部文档里把这条记录叫 MemoryNode。 */
+export type MemoryNode = TemporalFact;
+/** ingest 的返回值：事实本身 + 本次写入是否触发了「取代」。 */
+export interface IngestResult extends TemporalFact {
+    /** 本次写入是否把某条旧事实的 validTo 闭合、并标记了 supersededBy。 */
+    readonly onConflictTriggered: boolean;
 }
 /** ingest 入参。 */
 export interface IngestInput {
@@ -45,6 +70,12 @@ export interface IngestInput {
     tags?: readonly string[];
     source?: string;
     importance?: number;
+    /** 作用域，默认 global。 */
+    scope?: MemoryScope;
+    workspaceId?: string;
+    sessionId?: string;
+    /** 情绪值 -1.0 ~ 1.0，默认 0。 */
+    sentiment?: number;
     validFrom?: number;
     validTo?: number | null;
     recordedAt?: number;
@@ -61,12 +92,30 @@ export interface RecallOptions {
     minScore?: number;
     subject?: string;
     tags?: readonly string[];
+    /**
+     * 作用域过滤。
+     *   'all'（默认）→ 不过滤，保持旧行为
+     *   'global'      → 只要全局记忆
+     *   'workspace'   → 全局 + 指定工作区
+     *   'session'     → 全局 + 指定会话
+     */
+    scope?: MemoryScope | 'all';
+    workspaceId?: string;
+    sessionId?: string;
 }
 export interface RecallHit {
     fact: TemporalFact;
     score: number;
     similarity: number;
     decay: number;
+}
+/** 带情绪聚合的召回结果。 */
+export interface RecallMeta {
+    hits: RecallHit[];
+    /** 本批召回记忆的 sentiment 总和（受条数影响）。 */
+    sentimentSum: number;
+    /** 是否召回了 30 天前的核心记忆（importance ≥ CORE_IMPORTANCE）。 */
+    isNostalgic: boolean;
 }
 export interface Conflict {
     subject: string;
@@ -116,6 +165,8 @@ export interface MemoryStats {
     superseded: number;
     subjects: number;
     conflicts: number;
+    /** 全部记忆的 sentiment 平均值。 */
+    sentimentAverage: number;
 }
 export interface MemoryOptions {
     now?: () => number;
@@ -123,6 +174,10 @@ export interface MemoryOptions {
     halfLifeMs?: number;
     idPrefix?: string;
 }
+/** importance ≥ 此值视为「核心记忆」（对应需求里的 CORE 级）。 */
+export declare const CORE_IMPORTANCE = 0.8;
+/** 超过这个年龄的核心记忆会触发「怀旧」。 */
+export declare const NOSTALGIA_AGE_MS: number;
 /** 事实在世界时间 t 是否为真（含被取代的历史真值）。 */
 export declare function isValidAt(fact: TemporalFact, validTime: number): boolean;
 /** 系统在事务时间 t 是否已经知道这条事实（含后来被取代的版本）。 */
@@ -137,6 +192,8 @@ export declare function cosine(a: Map<string, number>, b: Map<string, number>): 
 export declare function contentHash(...parts: readonly string[]): string;
 /** 从正文推导主题键：优先取冒号前的短语，否则取前 16 个字符。 */
 export declare function deriveSubject(content: string): string;
+/** 情绪值钳制到 -1.0 ~ 1.0。 */
+export declare function clampSentiment(value: number): number;
 export declare class TemporalMemoryStore {
     private readonly facts;
     private readonly bySubject;
@@ -152,8 +209,11 @@ export declare class TemporalMemoryStore {
     /**
      * 写入一条记忆。内容与时间戳立即冻结；重复内容（同 hash）直接返回既有事实，
      * 不做覆盖写，这就是「不可变内容」的落地方式。
+     *
+     * 返回 `IngestResult`：事实字段全部保留，另外带 `onConflictTriggered`——
+     * 当本次写入通过 `supersedes` 把某条旧事实的 validTo 闭合时，它为 true。
      */
-    ingest(input: IngestInput): TemporalFact;
+    ingest(input: IngestInput): IngestResult;
     get(id: string): TemporalFact | undefined;
     all(): readonly TemporalFact[];
     /** 删除一条事实（连同索引与分词缓存）。用于纠正错误数据、清理测试数据。 */
@@ -175,12 +235,17 @@ export declare class TemporalMemoryStore {
     /** 显式强化：提升激活量并重置衰减计时。 */
     reinforce(id: string, amount?: number, now?: number): TemporalFact;
     /**
-     * 按时间口径召回。
-     *   strict     → 当前真值（被取代的、尚未生效的都不返回）
-     *   historical → 在 validTime 那个时刻为真的事实（含被取代的历史版本）
-     *   belief     → 在 recordedTime 那个事务时刻系统已经知道的版本
+     * 按时间口径召回（保持原签名，返回命中数组）。
+     * 需要情绪聚合时用 `recallWithMeta()`。
      */
     recall(query: string, options?: RecallOptions): RecallHit[];
+    /**
+     * 按时间口径召回，并计算本批结果的情绪聚合。
+     *
+     *   sentimentSum = 命中记忆的 sentiment 之和
+     *   isNostalgic  = 是否命中「30 天前 + 核心权重」的记忆
+     */
+    recallWithMeta(query: string, options?: RecallOptions): RecallMeta;
     /**
      * Inline & Spill：按需装载。
      * 近期记忆直接给正文（可截断并标记 chars / truncated），
@@ -197,8 +262,9 @@ export declare class TemporalMemoryStore {
     stats(): MemoryStats;
     /** 导出为纯 JSON（可自行落盘到 .json 文件，仍然不依赖数据库）。 */
     serialize(): TemporalFact[];
-    /** 从 serialize() 的结果恢复。 */
+    /** 从 serialize() 的结果恢复；兼容早期没有 sentiment 字段的存档。 */
     restore(facts: readonly TemporalFact[]): void;
+    private visibleByScope;
     private visible;
     private findByHash;
 }

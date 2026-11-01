@@ -14,11 +14,19 @@
  *     只是从「当前视图」里退场。
  *   - 严格召回只取 current truth；历史召回保留被取代的真值（point-in-time truth）。
  *
+ * 情绪联动（本次新增）：
+ *   - 每条记忆带 `sentiment`（-1.0 ~ 1.0）；
+ *   - `ingest()` 在「本条取代了旧事实」时返回 `onConflictTriggered = true`；
+ *   - `recallWithMeta()` 额外返回 `sentimentSum` 与 `isNostalgic`。
+ *
  * 存储：纯 TypeScript + Map，无任何外部数据库。
  */
 
 /** 召回口径。 */
 export type RecallMode = 'strict' | 'historical' | 'belief';
+
+/** 记忆作用域：全局共享 / 工作区共享 / 会话私有。 */
+export type MemoryScope = 'global' | 'workspace' | 'session';
 
 /** 一条不可变记忆事实。内容字段创建后不再改写（闭合区间时整体替换为新对象）。 */
 export interface TemporalFact {
@@ -36,9 +44,29 @@ export interface TemporalFact {
   readonly tags: readonly string[];
   readonly source: string;
   readonly importance: number;
+  /** 作用域，默认 global。 */
+  readonly scope: MemoryScope;
+  /** scope = workspace 时的归属工作区 id。 */
+  readonly workspaceId: string | null;
+  /** scope = session 时的归属会话 id。 */
+  readonly sessionId: string | null;
+  /**
+   * 情绪值，范围 -1.0 ~ 1.0。
+   * 负数表示负面（沮丧、愤怒），正数表示正面（满意、愉快），0 为中性。
+   */
+  readonly sentiment: number;
   /** 强化量（每次 recall 命中或被显式 reinforce 时增加），不参与 hash。 */
   readonly activation: number;
   readonly lastAccessedAt: number;
+}
+
+/** 兼容旧命名：外部文档里把这条记录叫 MemoryNode。 */
+export type MemoryNode = TemporalFact;
+
+/** ingest 的返回值：事实本身 + 本次写入是否触发了「取代」。 */
+export interface IngestResult extends TemporalFact {
+  /** 本次写入是否把某条旧事实的 validTo 闭合、并标记了 supersededBy。 */
+  readonly onConflictTriggered: boolean;
 }
 
 /** ingest 入参。 */
@@ -48,6 +76,12 @@ export interface IngestInput {
   tags?: readonly string[];
   source?: string;
   importance?: number;
+  /** 作用域，默认 global。 */
+  scope?: MemoryScope;
+  workspaceId?: string;
+  sessionId?: string;
+  /** 情绪值 -1.0 ~ 1.0，默认 0。 */
+  sentiment?: number;
   validFrom?: number;
   validTo?: number | null;
   recordedAt?: number;
@@ -65,6 +99,16 @@ export interface RecallOptions {
   minScore?: number;
   subject?: string;
   tags?: readonly string[];
+  /**
+   * 作用域过滤。
+   *   'all'（默认）→ 不过滤，保持旧行为
+   *   'global'      → 只要全局记忆
+   *   'workspace'   → 全局 + 指定工作区
+   *   'session'     → 全局 + 指定会话
+   */
+  scope?: MemoryScope | 'all';
+  workspaceId?: string;
+  sessionId?: string;
 }
 
 export interface RecallHit {
@@ -72,6 +116,15 @@ export interface RecallHit {
   score: number;
   similarity: number;
   decay: number;
+}
+
+/** 带情绪聚合的召回结果。 */
+export interface RecallMeta {
+  hits: RecallHit[];
+  /** 本批召回记忆的 sentiment 总和（受条数影响）。 */
+  sentimentSum: number;
+  /** 是否召回了 30 天前的核心记忆（importance ≥ CORE_IMPORTANCE）。 */
+  isNostalgic: boolean;
 }
 
 export interface Conflict {
@@ -123,6 +176,8 @@ export interface MemoryStats {
   superseded: number;
   subjects: number;
   conflicts: number;
+  /** 全部记忆的 sentiment 平均值。 */
+  sentimentAverage: number;
 }
 
 export interface MemoryOptions {
@@ -133,6 +188,12 @@ export interface MemoryOptions {
 }
 
 const DEFAULT_HALF_LIFE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** importance ≥ 此值视为「核心记忆」（对应需求里的 CORE 级）。 */
+export const CORE_IMPORTANCE = 0.8;
+
+/** 超过这个年龄的核心记忆会触发「怀旧」。 */
+export const NOSTALGIA_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 /* ------------------------------------------------------------------ */
 /* 时间可见性：逐条对齐 LongMemory bitemporal.ts                        */
@@ -225,6 +286,14 @@ function clamp01(value: number): number {
   return value;
 }
 
+/** 情绪值钳制到 -1.0 ~ 1.0。 */
+export function clampSentiment(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (value < -1) return -1;
+  if (value > 1) return 1;
+  return value;
+}
+
 /* ------------------------------------------------------------------ */
 /* TemporalMemoryStore                                                 */
 /* ------------------------------------------------------------------ */
@@ -256,8 +325,11 @@ export class TemporalMemoryStore {
   /**
    * 写入一条记忆。内容与时间戳立即冻结；重复内容（同 hash）直接返回既有事实，
    * 不做覆盖写，这就是「不可变内容」的落地方式。
+   *
+   * 返回 `IngestResult`：事实字段全部保留，另外带 `onConflictTriggered`——
+   * 当本次写入通过 `supersedes` 把某条旧事实的 validTo 闭合时，它为 true。
    */
-  ingest(input: IngestInput): TemporalFact {
+  ingest(input: IngestInput): IngestResult {
     const content = input.content.trim();
     if (content.length === 0) throw new Error('ingest: content 不能为空');
 
@@ -276,7 +348,9 @@ export class TemporalMemoryStore {
     const hash = contentHash(subject, content, String(validFrom));
 
     const existing = this.findByHash(hash);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) {
+      return { ...existing, onConflictTriggered: false };
+    }
 
     const fact: TemporalFact = Object.freeze({
       id: `${this.idPrefix}-${++this.seq}-${hash.slice(0, 6)}`,
@@ -291,6 +365,10 @@ export class TemporalMemoryStore {
       tags: Object.freeze([...(input.tags ?? [])]),
       source: input.source ?? 'manual',
       importance: clamp01(input.importance ?? 0.5),
+      scope: input.scope ?? 'global',
+      workspaceId: input.workspaceId ?? null,
+      sessionId: input.sessionId ?? null,
+      sentiment: clampSentiment(input.sentiment ?? 0),
       activation: 0,
       lastAccessedAt: this.clock(),
     });
@@ -301,8 +379,17 @@ export class TemporalMemoryStore {
     bucket.add(fact.id);
     this.bySubject.set(fact.subject, bucket);
 
-    if (input.supersedes !== undefined) this.supersede(input.supersedes, fact.id, validFrom);
-    return this.facts.get(fact.id) ?? fact;
+    let onConflictTriggered = false;
+    if (input.supersedes !== undefined) {
+      const previous = this.facts.get(input.supersedes);
+      if (previous !== undefined) {
+        this.supersede(input.supersedes, fact.id, validFrom);
+        onConflictTriggered = previous.supersededAt === null;
+      }
+    }
+
+    const stored = this.facts.get(fact.id) ?? fact;
+    return { ...stored, onConflictTriggered };
   }
 
   get(id: string): TemporalFact | undefined {
@@ -389,12 +476,20 @@ export class TemporalMemoryStore {
   }
 
   /**
-   * 按时间口径召回。
-   *   strict     → 当前真值（被取代的、尚未生效的都不返回）
-   *   historical → 在 validTime 那个时刻为真的事实（含被取代的历史版本）
-   *   belief     → 在 recordedTime 那个事务时刻系统已经知道的版本
+   * 按时间口径召回（保持原签名，返回命中数组）。
+   * 需要情绪聚合时用 `recallWithMeta()`。
    */
   recall(query: string, options: RecallOptions = {}): RecallHit[] {
+    return this.recallWithMeta(query, options).hits;
+  }
+
+  /**
+   * 按时间口径召回，并计算本批结果的情绪聚合。
+   *
+   *   sentimentSum = 命中记忆的 sentiment 之和
+   *   isNostalgic  = 是否命中「30 天前 + 核心权重」的记忆
+   */
+  recallWithMeta(query: string, options: RecallOptions = {}): RecallMeta {
     const mode = options.mode ?? 'strict';
     const now = this.clock();
     const limit = options.limit ?? 5;
@@ -405,6 +500,7 @@ export class TemporalMemoryStore {
     for (const fact of this.facts.values()) {
       if (!this.visible(fact, mode, options, now)) continue;
       if (options.subject !== undefined && fact.subject !== options.subject) continue;
+      if (!this.visibleByScope(fact, options)) continue;
       if (options.tags !== undefined && options.tags.length > 0) {
         const own = new Set(fact.tags);
         if (!options.tags.every((tag) => own.has(tag))) continue;
@@ -424,6 +520,7 @@ export class TemporalMemoryStore {
 
     hits.sort((a, b) => b.score - a.score || b.fact.validFrom - a.fact.validFrom);
     const top = hits.slice(0, limit);
+
     for (const hit of top) {
       const bumped: TemporalFact = Object.freeze({
         ...hit.fact,
@@ -433,7 +530,18 @@ export class TemporalMemoryStore {
       this.facts.set(hit.fact.id, bumped);
       hit.fact = bumped;
     }
-    return top;
+
+    let sentimentSum = 0;
+    let isNostalgic = false;
+    for (const hit of top) {
+      sentimentSum += hit.fact.sentiment;
+      const age = now - hit.fact.recordedAt;
+      if (hit.fact.importance >= CORE_IMPORTANCE && age >= NOSTALGIA_AGE_MS) {
+        isNostalgic = true;
+      }
+    }
+
+    return { hits: top, sentimentSum, isNostalgic };
   }
 
   /**
@@ -543,9 +651,11 @@ export class TemporalMemoryStore {
     const now = this.clock();
     let current = 0;
     let superseded = 0;
+    let sentimentSum = 0;
     for (const fact of this.facts.values()) {
       if (fact.supersededAt !== null) superseded += 1;
       if (isCurrent(fact, now)) current += 1;
+      sentimentSum += fact.sentiment;
     }
     return {
       total: this.facts.size,
@@ -553,6 +663,7 @@ export class TemporalMemoryStore {
       superseded,
       subjects: this.bySubject.size,
       conflicts: this.conflicts().length,
+      sentimentAverage: this.facts.size === 0 ? 0 : Number((sentimentSum / this.facts.size).toFixed(3)),
     };
   }
 
@@ -561,18 +672,35 @@ export class TemporalMemoryStore {
     return [...this.facts.values()].map((fact) => ({ ...fact }));
   }
 
-  /** 从 serialize() 的结果恢复。 */
+  /** 从 serialize() 的结果恢复；兼容早期没有 sentiment 字段的存档。 */
   restore(facts: readonly TemporalFact[]): void {
-    for (const fact of facts) {
-      const frozen = Object.freeze({ ...fact, tags: Object.freeze([...fact.tags]) });
-      this.facts.set(frozen.id, frozen);
-      this.tokens.set(frozen.id, tokenize(`${frozen.subject} ${frozen.content}`));
-      const bucket = this.bySubject.get(frozen.subject) ?? new Set<string>();
-      bucket.add(frozen.id);
-      this.bySubject.set(frozen.subject, bucket);
-      const tail = Number.parseInt(frozen.id.split('-')[1] ?? '0', 10);
+    for (const raw of facts) {
+      const fact: TemporalFact = Object.freeze({
+        ...raw,
+        tags: Object.freeze([...(raw.tags ?? [])]),
+        sentiment: clampSentiment(raw.sentiment ?? 0),
+        scope: raw.scope ?? 'global',
+        workspaceId: raw.workspaceId ?? null,
+        sessionId: raw.sessionId ?? null,
+      });
+      this.facts.set(fact.id, fact);
+      this.tokens.set(fact.id, tokenize(`${fact.subject} ${fact.content}`));
+      const bucket = this.bySubject.get(fact.subject) ?? new Set<string>();
+      bucket.add(fact.id);
+      this.bySubject.set(fact.subject, bucket);
+      const tail = Number.parseInt(fact.id.split('-')[1] ?? '0', 10);
       if (Number.isFinite(tail) && tail > this.seq) this.seq = tail;
     }
+  }
+
+  private visibleByScope(fact: TemporalFact, options: RecallOptions): boolean {
+    const scope = options.scope ?? 'all';
+    if (scope === 'all') return true;
+    if (fact.scope === 'global') return true;
+    if (fact.scope === 'workspace') {
+      return options.workspaceId !== undefined && fact.workspaceId === options.workspaceId;
+    }
+    return options.sessionId !== undefined && fact.sessionId === options.sessionId;
   }
 
   private visible(

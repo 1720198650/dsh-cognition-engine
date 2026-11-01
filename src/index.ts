@@ -19,7 +19,7 @@ import { SchemaGraphManager, expandBySchema } from './graph.ts';
 import { MoodStateMachine } from './mood.ts';
 import type { MoodEvent, MoodLabel, MoodState } from './mood.ts';
 import { JsonStateStore } from './persist.ts';
-import { buildDetail } from './views.ts';
+import { buildDetail, buildCoreDigest } from './views.ts';
 import { DialecticalReflectionEngine, MockDialecticalLLM, ReflectionWorker } from './reflection.ts';
 import { ProactiveGate } from './proactive.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
@@ -87,6 +87,8 @@ interface PluginContext {
   tools?: ToolHost;
   get?(name: string): unknown;
   effect?(callback: () => () => void): unknown;
+  /** 事件订阅（agent/pre-step 等）。 */
+  on?(event: string, listener: (...args: any[]) => unknown): () => void;
   logger?: PluginLogger;
 }
 
@@ -217,6 +219,25 @@ function optionalNumber(args: Record<string, unknown>, key: string): number | un
 /** 统一把 unknown 异常转成一行文本。 */
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** 从 agent/pre-step 的 payload 里取最后一条用户消息的纯文本。 */
+function latestUserText(payload: unknown): string {
+  const messages = (payload as { messages?: unknown[] } | undefined)?.messages;
+  if (!Array.isArray(messages) || messages.length === 0) return '';
+  const last = messages[messages.length - 1] as { content?: unknown };
+  if (typeof last?.content === 'string') return last.content;
+  if (!Array.isArray(last?.content)) return '';
+  return last.content
+    .filter(
+      (block): block is { type: string; text: string } =>
+        typeof block === 'object' &&
+        block !== null &&
+        (block as { type?: unknown }).type === 'text' &&
+        typeof (block as { text?: unknown }).text === 'string',
+    )
+    .map((block) => block.text)
+    .join(' ');
 }
 
 const textOutput = {
@@ -534,24 +555,38 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         subject: { type: 'string', description: '冲突检测的主题键，省略取冒号前短语。' },
         tags: { type: 'array', items: { type: 'string' }, description: '标签。' },
         importance: { type: 'number', description: '重要度 0..1。' },
+        sentiment: { type: 'number', description: '情绪值 -1.0 ~ 1.0，默认 0。' },
         validFrom: { type: 'number', description: '开始为真的 Unix 毫秒。' },
         supersedes: { type: 'string', description: '被取代的旧事实 id。' },
         source: {
           type: 'string',
           description: '来源：user / agent（默认）/ test（测试数据）/ imported。',
         },
+        scope: {
+          type: 'string',
+          enum: ['global', 'workspace', 'session'],
+          description: '作用域，默认 global。session 时自动绑定当前会话。',
+        },
       },
     },
     output: textOutput,
-    async execute(args: unknown): Promise<string> {
+    async execute(args: unknown, exec?: unknown): Promise<string> {
       const input = asRecord(args);
       const text = requireString(input, 'text');
+      const scopeValue = (optionalString(input, 'scope') ?? 'global') as 'global' | 'workspace' | 'session';
+      const agentId = (exec as { agent?: { id?: string } } | undefined)?.agent?.id;
       const fact = memory.ingest({
         content: text,
         source: optionalString(input, 'source') ?? 'agent',
-        ...pick(input, ['subject', 'tags', 'importance', 'validFrom', 'supersedes']),
+        ...pick(input, ['subject', 'tags', 'importance', 'sentiment', 'validFrom', 'supersedes']),
+        scope: scopeValue,
+        ...(scopeValue === 'session' && agentId !== undefined ? { sessionId: agentId } : {}),
       } as IngestInputLike);
-      graph.ingest(text);
+
+      // 写入发生点 = 情绪联动点：取代旧事实 → CONFLICT 15；图式语义冲突 → CONFLICT 10
+      const graphOutcome = graph.ingest(text);
+      if (fact.onConflictTriggered) mood.applyEvent('CONFLICT', 15);
+      if (graphOutcome.cognitiveDissonance) mood.applyEvent('CONFLICT', 10);
       touch();
 
       return JSON.stringify({
@@ -593,19 +628,26 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         render: { type: 'boolean', description: 'Inline&Spill：近期给正文，久远只给 ID。' },
         inlineChars: { type: 'number', description: 'render 单条上限，默认 240。' },
         expand: { type: 'boolean', description: '按图式带出同簇其他记忆（related）。' },
+        scope: {
+          type: 'string',
+          enum: ['all', 'global', 'workspace', 'session'],
+          description: '作用域过滤，默认 all。',
+        },
       },
     },
     output: textOutput,
-    async execute(args: unknown): Promise<string> {
+    async execute(args: unknown, exec?: unknown): Promise<string> {
       const input = asRecord(args);
       const query = requireString(input, 'query');
       const rawMode = optionalString(input, 'mode') ?? 'strict';
       if (rawMode !== 'strict' && rawMode !== 'historical' && rawMode !== 'belief') {
         throw new Error('mode 只能是 strict / historical / belief');
       }
+      const agentId = (exec as { agent?: { id?: string } } | undefined)?.agent?.id;
       const options = {
         mode: rawMode as RecallMode,
-        ...pick(input, ['validTime', 'recordedTime', 'limit', 'subject', 'tags', 'inlineChars']),
+        ...pick(input, ['validTime', 'recordedTime', 'limit', 'subject', 'tags', 'inlineChars', 'scope']),
+        ...(agentId === undefined ? {} : { sessionId: agentId }),
       } as RecallOptionsLike;
 
       if (input.render === true) return JSON.stringify(memory.render(query, options));
@@ -705,13 +747,17 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         {
           mood: {
             bar: current.bar,
+            statusBar: mood.getStatusBar(),
             label: current.mood as MoodLabel,
+            emotion: current.emotion,
             energy: current.energy,
             favorability: current.favorability,
           },
           memory: memory.stats(),
           graph: graph.stats(),
           communities: graph.summarize(),
+          /** 跨会话核心记忆块（≤400 字）。 */
+          digest: buildCoreDigest(memory),
           tasks: {
             pending: taskManager.get_pending_tasks().length,
             due: taskManager.check_due_tasks().length,
@@ -752,6 +798,25 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       if (subject !== undefined) removed += memory.removeBySubject(subject);
       touch();
       return JSON.stringify({ removed, memory: memory.stats() });
+    },
+  };
+
+  const cognitionContext = {
+    name: 'cognition_context',
+    description: '读取跨会话核心记忆（≤400 字的摘要）。新会话开头先调它，能想起之前定下的事。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+    output: textOutput,
+    async execute(): Promise<string> {
+      const digest = buildCoreDigest(memory);
+      return JSON.stringify({
+        digest,
+        empty: digest.length === 0,
+        total: memory.stats().total,
+      });
     },
   };
 
@@ -831,10 +896,45 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     },
   };
 
-  for (const definition of [remember, recall, forget, reflect, state, manageLongTask]) {
+  for (const definition of [remember, recall, forget, reflect, state, cognitionContext, manageLongTask]) {
     assertObjectSchema(definition.name, definition.parameters);
     disposers.push(tools.register(definition));
   }
+
+  /**
+   * agent/pre-step：模型每一步开始前做一次被动结算与情绪联动。
+   * 不能阻断流程——任何异常都吞掉，最后必须 return next()。
+   */
+  const onPreStep = ctx.on?.(
+    'agent/pre-step',
+    async (payload: unknown, next: () => Promise<unknown>) => {
+      try {
+        const now = Date.now();
+
+        // 1) 最近 1 小时写入的记忆条数
+        const recentMemoryCount = memory
+          .all()
+          .filter((fact) => now - fact.recordedAt <= 3_600_000).length;
+
+        // 2) 懒结算
+        mood.settleTime(now, recentMemoryCount);
+
+        // 3) 用最后一条用户消息做召回，带出怀旧与情绪批次
+        const query = latestUserText(payload);
+        if (query.length > 0) {
+          const meta = memory.recallWithMeta(query, { mode: 'strict', limit: 5 });
+          if (meta.isNostalgic) mood.applyEvent('NOSTALGIA', 5);
+          if (meta.sentimentSum !== 0) mood.applyEvent('SENTIMENT_BATCH', meta.sentimentSum);
+        }
+
+        touch();
+      } catch {
+        // 情绪联动失败不能影响主流程
+      }
+      return next();
+    },
+  );
+  if (typeof onPreStep === 'function') disposers.push(onPreStep);
 
   /**
    * 后台巡视：每隔 patrolIntervalHours 检查 tasks.json，

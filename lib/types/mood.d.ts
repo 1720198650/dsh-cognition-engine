@@ -18,6 +18,8 @@ export interface MoodSnapshot {
     energy: number;
     favorability: number;
     mood: MoodLabel;
+    /** 由 applyEvent 设置的瞬时情绪，例如「怀旧」「震惊/烦躁」。 */
+    emotion: string;
     /** 状态条文本，例如 `[能量 ███████░░░ 72%] [好感 ██████░░░░ +18] 状态:平静`。 */
     bar: string;
     at: number;
@@ -84,6 +86,10 @@ export declare const MOOD_DELTAS: Readonly<Record<MoodEvent, MoodDelta>>;
 export interface MoodState {
     energy: number;
     favorability: number;
+    /** 当前情绪文本（旧存档没有则为空）。 */
+    emotion?: string;
+    /** 上次结算时间（旧存档没有则按当前时间初始化）。 */
+    lastTickTime?: number;
     log: Array<{
         event: MoodEvent;
         at: number;
@@ -94,11 +100,12 @@ export declare class MoodStateMachine {
     private energyValue;
     private favorabilityValue;
     private label;
+    private emotionValue;
     private readonly clock;
     private readonly energyDrainPerMinute;
     private readonly favorabilityDriftPerMinute;
     private readonly barWidth;
-    private lastTickAt;
+    private lastTickTimeValue;
     private readonly log;
     /** 启动时的初值，用来解释「为什么现在是这个数」。 */
     private readonly initialEnergy;
@@ -112,15 +119,43 @@ export declare class MoodStateMachine {
     get energy(): number;
     get favorability(): number;
     get mood(): MoodLabel;
+    /** 当前情绪文本（applyEvent 会覆盖它）。 */
+    get emotion(): string;
+    /** 上次结算时间戳。 */
+    get lastTickTime(): number;
     /** 施加一个事件，返回新快照。intensity 是力度倍数，默认 1。 */
     apply(event: MoodEvent, intensity?: number): MoodSnapshot;
     /** 推进时间：精力自然流失，好感向 0 回归。 */
     tick(dtMs: number): MoodSnapshot;
     /** 按真实时钟推进到当前时刻。 */
     sync(): MoodSnapshot;
+    /** 两次结算之间的最小间隔：避免每个 step 都结算，把精力瞬间抽干。 */
+    private static readonly MIN_SETTLE_MS;
+    /**
+     * 被动懒结算（不需要外部定时器）。
+     *
+     * @param now 当前时间戳
+     * @param memoryRecordCount 最近 1 小时写入的记忆条数
+     *
+     * 规则：
+     *   - 距上次结算不足 1 分钟：直接返回，避免高频调用重复扣减；
+     *   - 记忆 > 5 条：energy -= 10（心累）；
+     *   - 记忆 === 0 条：energy += 5（休息恢复）；
+     *   - favorability 按经过的小时数向 0 回归。
+     */
+    settleTime(now: number, memoryRecordCount: number): MoodSnapshot;
+    /**
+     * 情绪事件（由记忆/图式子系统调用）。
+     *   'CONFLICT'        favorability -= value，情绪设为「震惊/烦躁」
+     *   'NOSTALGIA'       energy += value，情绪设为「怀旧」
+     *   'SENTIMENT_BATCH' favorability += value（value 可为负）
+     */
+    applyEvent(eventType: string, value: number): MoodSnapshot;
     snapshot(): MoodSnapshot;
     /** 渲染状态条。 */
     statusBar(): string;
+    /** 带情绪的完整状态条（供页面与最终回复使用）。 */
+    getStatusBar(): string;
     /** 最近事件流水（最多 100 条）。 */
     history(): ReadonlyArray<{
         event: MoodEvent;

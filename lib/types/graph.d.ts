@@ -12,6 +12,11 @@
  *     并在社区重叠处连边；这里的 `summarize()` 输出同样的社区摘要视图。
  *   - 社区大小上限：对齐 `_limit_community_size`，超过 maxClusterSize 就切分。
  *
+ * 认知失调（本次新增）：
+ *   - 图式节点带 `isConflict` 标记；
+ *   - 同化时若某个待并入图式与观察极性相反、或顺应由极性冲突引起，
+ *     返回 `cognitiveDissonance = true`，供上层联动情绪。
+ *
  * 存储：纯 TypeScript + Map / Set，无任何外部数据库。
  */
 import type { TemporalMemoryStore } from './memory.ts';
@@ -34,6 +39,11 @@ export interface SchemaNode {
     readonly members: Set<string>;
     polarity: number;
     weight: number;
+    /**
+     * 是否为「冲突图式」。
+     * 当一条观察与某个图式语义相反、无法同化时，新建的图式会被标为 true。
+     */
+    isConflict: boolean;
 }
 export type IngestMode = 'assimilation' | 'accommodation';
 export interface IngestOutcome {
@@ -49,6 +59,8 @@ export interface IngestOutcome {
     };
     /** 内容相近但极性相反时，记录它顶撞了哪个图式。 */
     conflictWith?: string;
+    /** 本次操作是否检测到语义冲突（产生了 isConflict 图式或撞上已有冲突图式）。 */
+    cognitiveDissonance: boolean;
 }
 export interface SchemaGraphOptions {
     assimilateThreshold?: number;
@@ -62,6 +74,8 @@ export interface CommunitySummary {
     schemaIds: string[];
     size: number;
     label: string;
+    /** 该社区里是否存在冲突图式。 */
+    hasConflict: boolean;
 }
 export interface GraphStats {
     schemas: number;
@@ -71,6 +85,8 @@ export interface GraphStats {
     assimilations: number;
     accommodations: number;
     conflicts: number;
+    /** isConflict = true 的图式数量。 */
+    dissonantSchemas: number;
 }
 export declare class SchemaGraphManager {
     private readonly schemas;
@@ -95,10 +111,18 @@ export declare class SchemaGraphManager {
         label?: string;
         at?: number;
     }): IngestOutcome;
-    /** 同化：把观察并入图式（含重叠归属），并按成员数做质心增量更新。 */
+    /**
+     * 同化：把观察并入图式（含重叠归属），并按成员数做质心增量更新。
+     *
+     * 若某个待并入的图式与观察极性相反（重叠聚类可能带来这种图式），
+     * 不污染它的质心，而是把它标成 isConflict 并返回 cognitiveDissonance。
+     */
     assimilate(obs: Observation, schemaId: string, ranked?: RankedSchema[]): IngestOutcome;
-    /** 顺应：新建图式节点，并向最相近的旧图式连一条边（CAM 的超图重叠边）。 */
-    accommodate(obs: Observation, best?: RankedSchema): IngestOutcome;
+    /**
+     * 顺应：新建图式节点，并向最相近的旧图式连一条边（CAM 的超图重叠边）。
+     * 传入 conflictWith 时，新节点标记为 isConflict 并返回 cognitiveDissonance。
+     */
+    accommodate(obs: Observation, best?: RankedSchema, conflictWith?: string): IngestOutcome;
     /** 无向加权连边。 */
     connect(a: string, b: string, weight: number): void;
     neighbors(id: string, minWeight?: number): Array<{

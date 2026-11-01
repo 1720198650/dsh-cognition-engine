@@ -14,5 +14,18 @@ export interface DetailDeps {
     mood: MoodStateMachine;
     taskManager: LongHorizonTaskManager;
 }
+/** 核心记忆摘要的字数上限（≈150 tokens）。 */
+export declare const CORE_DIGEST_CHARS = 400;
+/**
+ * 跨会话「核心记忆块」（Letta memory block 的最小实现）。
+ *
+ * 取全局作用域下按 重要度 × 时近性 排序的前 N 条，压成一段有字数上限的纯文本。
+ * 返回空串表示没有可注入的内容。
+ */
+export declare function buildCoreDigest(memory: TemporalMemoryStore, options?: {
+    limit?: number;
+    chars?: number;
+    now?: number;
+}): string;
 /** 面板展开时按需拉取的明细（不走模型上下文，只给页面看）。 */
 export declare function buildDetail({ memory, graph, mood, taskManager }: DetailDeps): Record<string, unknown>;

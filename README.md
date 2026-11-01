@@ -58,12 +58,13 @@ dsh plugin --profile desktop add /path/to/cognition-engine
 
 ---
 
-## 六个工具
+## 七个工具
 
 | 工具 | 作用 |
 |---|---|
-| `cognition_remember` | 写入记忆；`supersedes` 取代旧事实，`source` 标记来源（user / agent / test / imported） |
-| `cognition_recall` | 按 `strict` / `historical` / `belief` 召回；`render` 走 Inline&Spill，`expand` 按图式扩展 |
+| `cognition_context` | **新会话先调它**：读取跨会话核心记忆（≤400 字摘要） |
+| `cognition_remember` | 写入记忆；`supersedes` 取代旧事实，`source` 标记来源，`scope` 选 global / workspace / session，`sentiment` 记情绪值 |
+| `cognition_recall` | 按 `strict` / `historical` / `belief` 召回；`render` 走 Inline&Spill，`expand` 按图式扩展，`scope` 过滤作用域 |
 | `cognition_forget` | 删除记忆：按 id、按来源（如 `test`、`reflection`）、按主题 |
 | `cognition_reflect` | 三段式反思；`draft` 审草稿，`save` 把结论存成记忆 |
 | `cognition_state` | 心情状态条 + 记忆/图式/任务统计，可施加一次心情事件 |
@@ -121,6 +122,37 @@ dsh plugin --profile desktop add /path/to/cognition-engine
 | 外部请求 | 默认零外部请求；只有打开真模型时才会调用宿主配置的模型服务 |
 
 > ⚠️ 不设 `lockToken` 且未上锁时，本机任意进程都能读取记忆正文。多人或多程序共用一台机器时请先上锁。
+
+---
+
+## 卸载
+
+插件**运行时注册的东西**（7 个工具、4 条 HTTP 路由、`agent/pre-step` 监听器、后台巡视定时器、页面状态条）会在卸载时自动撤销。
+
+但有四样东西不会自动消失，需要显式清理：
+
+| 残留 | 说明 |
+|---|---|
+| `cognition-state.json` | 记忆与心情的落盘 |
+| `tasks.json` | 长程任务台账 |
+| `AGENTS.md` 第九节 | 会继续指示模型调用已不存在的 `cognition_context` |
+| 浏览器 `localStorage['cognition-token']` | 上锁口令 |
+
+清理脚本：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\dshgz\cognition-engine\scripts\uninstall-cleanup.ps1 -Workspace D:\dshgz
+```
+
+然后移除插件本体：
+
+```text
+plugin_manager remove_bundle target=@local/cognition-engine
+```
+
+最后在页面控制台执行 `localStorage.removeItem("cognition-token")`，刷新页面。
+
+> 为什么不在 `dispose` 里自动删数据：`dispose` 在 HMR 热重载和插件重启时也会触发，自动删会把记忆每改一次代码就清空一次。运行时资源自动撤、磁盘数据交给显式脚本，是刻意的分工。
 
 ---
 
