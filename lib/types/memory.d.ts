@@ -22,7 +22,7 @@
  * 存储：纯 TypeScript + Map，无任何外部数据库。
  */
 /** 召回口径。 */
-export type RecallMode = 'strict' | 'historical' | 'belief';
+export type RecallMode = 'strict' | 'historical' | 'belief' | 'associative';
 /** 记忆作用域：全局共享 / 工作区共享 / 会话私有。 */
 export type MemoryScope = 'global' | 'workspace' | 'session';
 /** 一条不可变记忆事实。内容字段创建后不再改写（闭合区间时整体替换为新对象）。 */

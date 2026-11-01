@@ -101,6 +101,14 @@ export declare class SchemaGraphManager {
     private assimilations;
     private accommodations;
     private conflicts;
+    /** 子图式 → 父图式。 */
+    private readonly parentOf;
+    /** 父图式 → 子图式列表。 */
+    private readonly childrenOf;
+    /** 已构建的层次（level 1..N）。 */
+    private hierarchyLevels;
+    /** 上次构建层次时的 seq；seq 不变说明没有新建图式，可以跳过重建。 */
+    private hierarchyBuiltFor;
     constructor(options?: SchemaGraphOptions);
     get schemaCount(): number;
     /**
@@ -141,9 +149,29 @@ export declare class SchemaGraphManager {
      * 对应 CAM 的 persona-graph 聚类 + `_limit_community_size`。
      */
     communities(): string[][];
+    /** 对给定节点集合求重叠社区（连通分量 + 上限切分）。 */
+    private communitiesOf;
     /** 社区摘要视图（CAM 的 super graph：每个社区一个摘要节点）。 */
     summarize(): CommunitySummary[];
     stats(): GraphStats;
+    /**
+     * 构建多级图式层次（对齐 CAM 的 `run_hierarchy`）：
+     * level 0 的图式先按社区聚成 level 1 的摘要图式，再对 level 1 继续聚类，
+     * 直到社区数不再减少或到达 maxLevel。
+     */
+    buildHierarchy(maxLevel?: number): Array<{
+        level: number;
+        schemaIds: string[];
+    }>;
+    /** 父图式。 */
+    parent(id: string): string | undefined;
+    /** 子图式列表。 */
+    children(id: string): string[];
+    /** 已构建的层次快照。 */
+    hierarchy(): Array<{
+        level: number;
+        schemaIds: string[];
+    }>;
     reset(): void;
     private makeObservation;
     private rank;

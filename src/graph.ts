@@ -115,6 +115,14 @@ export class SchemaGraphManager {
   private assimilations = 0;
   private accommodations = 0;
   private conflicts = 0;
+  /** 子图式 → 父图式。 */
+  private readonly parentOf = new Map<string, string>();
+  /** 父图式 → 子图式列表。 */
+  private readonly childrenOf = new Map<string, string[]>();
+  /** 已构建的层次（level 1..N）。 */
+  private hierarchyLevels: Array<{ level: number; schemaIds: string[] }> = [];
+  /** 上次构建层次时的 seq；seq 不变说明没有新建图式，可以跳过重建。 */
+  private hierarchyBuiltFor = -1;
 
   constructor(options: SchemaGraphOptions = {}) {
     this.clock = options.now ?? (() => Date.now());
@@ -297,9 +305,16 @@ export class SchemaGraphManager {
    * 对应 CAM 的 persona-graph 聚类 + `_limit_community_size`。
    */
   communities(): string[][] {
+    return this.communitiesOf([...this.schemas.values()].filter((schema) => schema.generation === 0));
+  }
+
+  /** 对给定节点集合求重叠社区（连通分量 + 上限切分）。 */
+  private communitiesOf(list: SchemaNode[]): string[][] {
+    const allowed = new Set(list.map((schema) => schema.id));
     const seen = new Set<string>();
     const groups: string[][] = [];
-    for (const id of this.schemas.keys()) {
+    for (const node of list) {
+      const id = node.id;
       if (seen.has(id)) continue;
       const stack = [id];
       const group: string[] = [];
@@ -309,7 +324,7 @@ export class SchemaGraphManager {
         if (current === undefined) continue;
         group.push(current);
         for (const { schemaId } of this.neighbors(current, this.communityThreshold)) {
-          if (!seen.has(schemaId)) {
+          if (allowed.has(schemaId) && !seen.has(schemaId)) {
             seen.add(schemaId);
             stack.push(schemaId);
           }
@@ -358,10 +373,113 @@ export class SchemaGraphManager {
     };
   }
 
+  /**
+   * 构建多级图式层次（对齐 CAM 的 `run_hierarchy`）：
+   * level 0 的图式先按社区聚成 level 1 的摘要图式，再对 level 1 继续聚类，
+   * 直到社区数不再减少或到达 maxLevel。
+   */
+  buildHierarchy(maxLevel = 3): Array<{ level: number; schemaIds: string[] }> {
+    // 没有新建图式时跳过：父层连边是 O(n²)，不值得每次写记忆都重跑
+    if (this.hierarchyBuiltFor === this.seq && this.hierarchyLevels.length > 0) {
+      return this.hierarchyLevels;
+    }
+    this.hierarchyLevels = [];
+    let current = [...this.schemas.values()].filter((schema) => schema.generation === 0);
+    let level = 0;
+
+    while (level < maxLevel && current.length > 1) {
+      const groups = this.communitiesOf(current).filter((group) => group.length >= 2);
+      // 没有可合并的社区，或合并后没有变少 → 收敛
+      if (groups.length === 0 || groups.length >= current.length) break;
+
+      const parents: SchemaNode[] = [];
+      for (const group of groups) {
+        const children = group
+          .map((id) => this.schemas.get(id))
+          .filter((schema): schema is SchemaNode => schema !== undefined);
+        if (children.length < 2) continue;
+
+        const members = new Set<string>();
+        const centroid = new Map<string, number>();
+        for (const child of children) {
+          for (const memberId of child.members) members.add(memberId);
+          for (const [term, value] of child.centroid) {
+            centroid.set(term, (centroid.get(term) ?? 0) + value);
+          }
+        }
+        for (const [term, value] of centroid) centroid.set(term, value / children.length);
+
+        const id = `schema-L${level + 1}-${++this.seq}`;
+        const parent: SchemaNode = {
+          id,
+          label: children.map((child) => child.label).slice(0, 3).join(' / '),
+          createdAt: children[0]?.createdAt ?? this.clock(),
+          updatedAt: this.clock(),
+          generation: level + 1,
+          centroid,
+          members,
+          polarity: children.reduce((sum, child) => sum + Math.sign(child.polarity), 0) || 1,
+          weight: children.length,
+          isConflict: children.some((child) => child.isConflict),
+        };
+        this.schemas.set(id, parent);
+        this.childrenOf.set(id, children.map((child) => child.id));
+        for (const child of children) this.parentOf.set(child.id, id);
+        parents.push(parent);
+      }
+
+      if (parents.length === 0) break;
+
+      // 父层之间连边：任意两个父图式只要子图式之间有边，就连起来（CAM 的超图非重叠边）
+      for (let i = 0; i < parents.length; i += 1) {
+        const left = parents[i];
+        if (left === undefined) continue;
+        const leftChildren = this.childrenOf.get(left.id) ?? [];
+        for (let j = i + 1; j < parents.length; j += 1) {
+          const right = parents[j];
+          if (right === undefined) continue;
+          const rightChildren = new Set(this.childrenOf.get(right.id) ?? []);
+          const linked = leftChildren.some((childId) =>
+            this.neighbors(childId, this.communityThreshold).some((neighbor) =>
+              rightChildren.has(neighbor.schemaId),
+            ),
+          );
+          if (linked) this.connect(left.id, right.id, 1);
+        }
+      }
+
+      this.hierarchyLevels.push({ level: level + 1, schemaIds: parents.map((parent) => parent.id) });
+      current = parents;
+      level += 1;
+    }
+
+    this.hierarchyBuiltFor = this.seq;
+    return this.hierarchyLevels;
+  }
+
+  /** 父图式。 */
+  parent(id: string): string | undefined {
+    return this.parentOf.get(id);
+  }
+
+  /** 子图式列表。 */
+  children(id: string): string[] {
+    return this.childrenOf.get(id) ?? [];
+  }
+
+  /** 已构建的层次快照。 */
+  hierarchy(): Array<{ level: number; schemaIds: string[] }> {
+    return this.hierarchyLevels.map((entry) => ({ ...entry, schemaIds: [...entry.schemaIds] }));
+  }
+
   reset(): void {
     this.schemas.clear();
     this.edges.clear();
     this.observations.clear();
+    this.parentOf.clear();
+    this.childrenOf.clear();
+    this.hierarchyLevels = [];
+    this.hierarchyBuiltFor = -1;
     this.seq = 0;
     this.assimilations = 0;
     this.accommodations = 0;
@@ -447,7 +565,14 @@ export function expandBySchema(
   const now = Date.now();
 
   for (const content of seedContents) {
-    for (const schemaId of graph.schemasForText(content)) {
+    for (const seedSchemaId of graph.schemasForText(content)) {
+      // 爬到最高层祖先：层次越高，带出的关联越"宏观"
+      let schemaId = seedSchemaId;
+      for (let guard = 0; guard < 8; guard += 1) {
+        const parent = graph.parent(schemaId);
+        if (parent === undefined) break;
+        schemaId = parent;
+      }
       for (const text of graph.memberTexts(schemaId)) {
         if (text === content) continue;
         const fact = all.find((item) => item.content === text);

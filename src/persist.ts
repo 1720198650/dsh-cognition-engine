@@ -6,7 +6,7 @@
  */
 
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, renameSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 export interface JsonStoreOptions<T> {
@@ -37,7 +37,7 @@ export class JsonStateStore<T> {
     return this.filePath;
   }
 
-  /** 启动时恢复；文件不存在返回 false。损坏的 JSON 会抛错，不静默吞掉。 */
+  /** 启动时恢复；文件不存在返回 false。损坏的文件会备份后按空库启动，绝不阻断加载。 */
   async load(): Promise<boolean> {
     try {
       const raw = await readFile(this.filePath, 'utf8');
@@ -45,7 +45,8 @@ export class JsonStateStore<T> {
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-      throw error;
+      this.quarantine();
+      return false;
     }
   }
 
@@ -56,7 +57,17 @@ export class JsonStateStore<T> {
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-      throw error;
+      this.quarantine();
+      return false;
+    }
+  }
+
+  /** 把损坏的文件挪到一边，留档可查，同时让插件能正常启动。 */
+  private quarantine(): void {
+    try {
+      renameSync(this.filePath, `${this.filePath}.corrupt-${Date.now()}`);
+    } catch {
+      // 备份失败也不能抛：加载阶段必须活着
     }
   }
 
@@ -80,11 +91,16 @@ export class JsonStateStore<T> {
     const payload = `${JSON.stringify(this.serialize(), null, 2)}\n`;
     const target = this.filePath;
     const temp = `${target}.tmp`;
-    this.chain = this.chain.then(async () => {
-      await mkdir(dirname(target), { recursive: true });
-      await writeFile(temp, payload, 'utf8');
-      await rename(temp, target);
-    });
+    this.chain = this.chain
+      .then(async () => {
+        await mkdir(dirname(target), { recursive: true });
+        await writeFile(temp, payload, 'utf8');
+        await rename(temp, target);
+      })
+      .catch(() => {
+        // 写盘失败（磁盘满、并发 rename 竞争等）不能变成未捕获拒绝，
+        // 否则会以 unhandledRejection 形式终止宿主进程。
+      });
     return this.chain;
   }
 
@@ -94,9 +110,13 @@ export class JsonStateStore<T> {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    this.chain = this.chain.then(async () => {
-      await rm(this.filePath, { force: true });
-    });
+    this.chain = this.chain
+      .then(async () => {
+        await rm(this.filePath, { force: true });
+      })
+      .catch(() => {
+        // 删除失败同样不能变成未捕获拒绝
+      });
     await this.chain;
   }
 

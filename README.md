@@ -36,8 +36,8 @@
 - **心情状态机**：能量 / 好感两个连续量 + 带迟滞的状态标签，面板里会解释"为什么是这个值、说明什么"。
 - **长程任务台账**：`tasks.json` 原子落盘，重启恢复，超时任务自动催办。
 - **持久化**：记忆与心情写入 `cognition-state.json`，重启自动恢复；页面一键清空。
-- **真模型开关**：一键把离线推理器切成当前默认模型（走宿主 `llm` 服务）。
-- **可上锁**：给明细接口加口令，防止本机其他进程读取记忆正文。
+- **反思引擎**：可在「本地模拟」与「真实模型」之间切换；真实模型走宿主 `llm` 服务。
+- **记忆读取锁**：给读取记忆正文的接口加访问口令，防止本机其他进程偷看。
 
 ---
 
@@ -106,7 +106,7 @@ dsh plugin --profile desktop add /path/to/cognition-engine
 - **待办**：任务描述、状态、线索、超时标记
 - **记忆**：正文、来源徽章、当前/已取代、标签
 - **图式**：成员数、邻接数、极性
-- **设置**：清空记忆/心情、真模型开关、上锁与口令
+- **设置**：清空记忆/心情、反思引擎（本地模拟 / 真实模型）、记忆读取锁与访问口令
 
 页面上所有数据走 HTTP，**不进入模型上下文，不消耗 token**。
 
@@ -118,7 +118,7 @@ dsh plugin --profile desktop add /path/to/cognition-engine
 |---|---|
 | 落盘 | `cognition-state.json`（记忆 + 心情）、`tasks.json`（任务） |
 | HTTP | `GET /cognition-engine/state`（仅计数）、`GET /cognition-engine/detail`（含正文）、`POST /cognition-engine/{clear,model,lock}` |
-| 上锁 | 开启后 `detail` 与三个 `POST` 要求 `x-cognition-token`；`state` 始终公开（只有计数） |
+| 记忆读取锁 | 开启后 `detail` 与三个 `POST` 要求 `x-cognition-token`；`state` 始终公开（只有计数） |
 | 外部请求 | 默认零外部请求；只有打开真模型时才会调用宿主配置的模型服务 |
 
 > ⚠️ 不设 `lockToken` 且未上锁时，本机任意进程都能读取记忆正文。多人或多程序共用一台机器时请先上锁。
@@ -192,6 +192,24 @@ npm run eval       # 20 条评测 + token 预算门禁
 - 评测用例 20 / 20，判分器自检、打包自检 5 项
 - 工具 schema 固定开销 **1086 tokens**（预算 1400）
 - 单次调用输出上限 344 tokens（预算 600）
+
+---
+
+## 兼容性
+
+**设计原则**：只做特性探测，不做版本判断；任何宿主能力缺失都降级而不是报错。
+
+| 场景 | 行为 |
+|---|---|
+| 与其他插件工具重名 | 跳过该工具并记警告，其余 6 个照常注册 |
+| HTTP 路由被占用 | 跳过该路由，插件继续加载 |
+| 宿主没有 `webServer` / `events` / `effect` | 对应功能静默关闭，不抛错 |
+| `agent/pre-step` 的 `next` 缺失 | 返回 `undefined`，不阻断模型步骤 |
+| 宿主更新导致工具 schema 不被接受 | 该工具注册失败，但不影响其他工具 |
+
+**刻意不做的事**（避免和其他插件打架）：不修改全局 patch、不覆写系统提示、不接管 `tools/post-execute`、不声明 `peerDependencies`（避免 pnpm 的 `ERESOLVE`）。
+
+**已验证环境**：DSH 0.1.x（desktop profile）+ Node 22。每次 `npm run eval` 都会回归「兼容性」三项。
 
 ---
 

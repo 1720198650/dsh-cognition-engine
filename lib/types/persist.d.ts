@@ -21,10 +21,12 @@ export declare class JsonStateStore<T> {
     private closed;
     constructor(options: JsonStoreOptions<T>);
     get path(): string;
-    /** 启动时恢复；文件不存在返回 false。损坏的 JSON 会抛错，不静默吞掉。 */
+    /** 启动时恢复；文件不存在返回 false。损坏的文件会备份后按空库启动，绝不阻断加载。 */
     load(): Promise<boolean>;
     /** 同步恢复，用于插件加载阶段——避免工具在异步恢复完成前读到空库。 */
     loadSync(): boolean;
+    /** 把损坏的文件挪到一边，留档可查，同时让插件能正常启动。 */
+    private quarantine;
     /** 标记有变更，延迟合并写盘。 */
     schedule(): void;
     /** 立即写盘（卸载前调用）。 */

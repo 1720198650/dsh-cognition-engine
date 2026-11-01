@@ -23,7 +23,7 @@
  */
 
 /** 召回口径。 */
-export type RecallMode = 'strict' | 'historical' | 'belief';
+export type RecallMode = 'strict' | 'historical' | 'belief' | 'associative';
 
 /** 记忆作用域：全局共享 / 工作区共享 / 会话私有。 */
 export type MemoryScope = 'global' | 'workspace' | 'session';
@@ -716,6 +716,10 @@ export class TemporalMemoryStore {
         return isValidAt(fact, options.validTime ?? now);
       case 'belief':
         return isRecordedAt(fact, options.recordedTime ?? now);
+      case 'associative':
+        // 联想模式：不做时间过滤，被取代的、未来的都参与排序，
+        // 由「相似度 + 激活量 + 重要度」决定谁浮上来（对齐 LongMemory 的 associative recall）。
+        return true;
       default:
         return false;
     }

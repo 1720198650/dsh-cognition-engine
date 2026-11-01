@@ -364,6 +364,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       provider,
       model,
       maxTokens: 800,
+      // 单段最多等 90 秒，避免模型卡住把整个反思流程挂死
+      signal: AbortSignal.timeout(90_000),
       messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
     })) {
       if (chunk.type === 'text-delta' && typeof chunk.text === 'string') text += chunk.text;
@@ -469,28 +471,35 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     ): void => {
       const method = options.method ?? 'GET';
       const requireAuth = options.requireAuth === true;
-      disposers.push(
-        webServer.register({
-          kind: 'exact',
-          path,
-          handler: (request, response) => {
-            try {
-              const req = request as { method?: string; url?: string };
-              if ((req.method ?? 'GET').toUpperCase() !== method) {
-                send(response, 405, { error: 'method not allowed' });
-                return;
+      try {
+        disposers.push(
+          webServer.register({
+            kind: 'exact',
+            path,
+            handler: (request, response) => {
+              try {
+                const req = request as { method?: string; url?: string };
+                if ((req.method ?? 'GET').toUpperCase() !== method) {
+                  send(response, 405, { error: 'method not allowed' });
+                  return;
+                }
+                if (requireAuth && !authorized(request)) {
+                  send(response, 401, { error: 'unauthorized' });
+                  return;
+                }
+                send(response, 200, produce(new URL(req.url ?? path, 'http://local')));
+              } catch (error) {
+                send(response, 500, { error: messageOf(error) });
               }
-              if (requireAuth && !authorized(request)) {
-                send(response, 401, { error: 'unauthorized' });
-                return;
-              }
-              send(response, 200, produce(new URL(req.url ?? path, 'http://local')));
-            } catch (error) {
-              send(response, 500, { error: messageOf(error) });
-            }
-          },
-        }),
-      );
+            },
+          }),
+        );
+      } catch (error) {
+        // 路由被别的插件占用：跳过，不能把插件加载搞挂
+        ctx.logger?.warn?.(
+          `cognition-engine: 路由 ${path} 注册失败（可能与其他插件冲突）: ${messageOf(error)}`,
+        );
+      }
     };
 
     route('/cognition-engine/state', () => snapshot());
@@ -545,27 +554,27 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const remember = {
     name: 'cognition_remember',
     description:
-      '写入一条双时态记忆。用 supersedes 取代旧事实：旧事实闭合 validTo/supersededAt，保留 id 与 hash，仍可历史召回。返回 id、hash 与残留冲突。',
+      '写入双时态记忆；supersedes 取代旧事实（保留 id/hash，可历史召回）。返回 id、hash、残留冲突。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       required: ['text'],
       properties: {
         text: { type: 'string', description: '事实原文。' },
-        subject: { type: 'string', description: '冲突检测的主题键，省略取冒号前短语。' },
+        subject: { type: 'string', description: '主题键，默认取冒号前短语。' },
         tags: { type: 'array', items: { type: 'string' }, description: '标签。' },
         importance: { type: 'number', description: '重要度 0..1。' },
-        sentiment: { type: 'number', description: '情绪值 -1.0 ~ 1.0，默认 0。' },
+        sentiment: { type: 'number', description: '情绪 -1..1，默认 0。' },
         validFrom: { type: 'number', description: '开始为真的 Unix 毫秒。' },
         supersedes: { type: 'string', description: '被取代的旧事实 id。' },
         source: {
           type: 'string',
-          description: '来源：user / agent（默认）/ test（测试数据）/ imported。',
+          description: '来源：user/agent/test/imported，默认 agent。',
         },
         scope: {
           type: 'string',
           enum: ['global', 'workspace', 'session'],
-          description: '作用域，默认 global。session 时自动绑定当前会话。',
+          description: '作用域，默认 global；session 自动绑定当前会话。',
         },
       },
     },
@@ -585,6 +594,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
       // 写入发生点 = 情绪联动点：取代旧事实 → CONFLICT 15；图式语义冲突 → CONFLICT 10
       const graphOutcome = graph.ingest(text);
+      // 重建多级图式层次（CAM 的 run_hierarchy）；图很小，成本可忽略
+      graph.buildHierarchy();
       if (fact.onConflictTriggered) mood.applyEvent('CONFLICT', 15);
       if (graphOutcome.cognitiveDissonance) mood.applyEvent('CONFLICT', 10);
       touch();
@@ -608,7 +619,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const recall = {
     name: 'cognition_recall',
     description:
-      '按时间口径召回：strict 当前真值 / historical 指定时刻为真（含已取代）/ belief 当时已知。render 走 Inline&Spill，expand 按图式带出关联。',
+      '召回记忆。strict 当前真值 / historical 该时刻为真 / belief 当时已知 / associative 联想（不过滤时间）。render 走 Inline&Spill，expand 按图式带关联。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -617,21 +628,21 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         query: { type: 'string', description: '检索语句。' },
         mode: {
           type: 'string',
-          enum: ['strict', 'historical', 'belief'],
+          enum: ['strict', 'historical', 'belief', 'associative'],
           description: '口径，默认 strict。',
         },
-        validTime: { type: 'number', description: 'historical 的「那时」，Unix 毫秒。' },
-        recordedTime: { type: 'number', description: 'belief 的「那时」，Unix 毫秒。' },
-        limit: { type: 'number', description: '条数上限，默认 5。' },
+        validTime: { type: 'number', description: 'historical 的时刻，毫秒。' },
+        recordedTime: { type: 'number', description: 'belief 的时刻，毫秒。' },
+        limit: { type: 'number', description: '条数，默认 5。' },
         subject: { type: 'string', description: '限定主题。' },
-        tags: { type: 'array', items: { type: 'string' }, description: '限定标签（全含）。' },
-        render: { type: 'boolean', description: 'Inline&Spill：近期给正文，久远只给 ID。' },
+        tags: { type: 'array', items: { type: 'string' }, description: '标签（全含）。' },
+        render: { type: 'boolean', description: '近期给正文，久远只给 ID。' },
         inlineChars: { type: 'number', description: 'render 单条上限，默认 240。' },
-        expand: { type: 'boolean', description: '按图式带出同簇其他记忆（related）。' },
+        expand: { type: 'boolean', description: '带出同图式关联。' },
         scope: {
           type: 'string',
           enum: ['all', 'global', 'workspace', 'session'],
-          description: '作用域过滤，默认 all。',
+          description: '作用域，默认 all。',
         },
       },
     },
@@ -640,8 +651,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       const input = asRecord(args);
       const query = requireString(input, 'query');
       const rawMode = optionalString(input, 'mode') ?? 'strict';
-      if (rawMode !== 'strict' && rawMode !== 'historical' && rawMode !== 'belief') {
-        throw new Error('mode 只能是 strict / historical / belief');
+      if (rawMode !== 'strict' && rawMode !== 'historical' && rawMode !== 'belief' && rawMode !== 'associative') {
+        throw new Error('mode 只能是 strict / historical / belief / associative');
       }
       const agentId = (exec as { agent?: { id?: string } } | undefined)?.agent?.id;
       const options = {
@@ -654,8 +665,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       const hits = memory.recall(query, options);
 
       // 图式接进召回：把命中项所在图式的其他成员一并带出（GraphRAG 的社区扩展思路）
+      // 联想模式自动带上图式扩展（LongMemory 的 associative recall 会混合图关联信号）
       const related =
-        input.expand === true
+        input.expand === true || rawMode === 'associative'
           ? expandBySchema(memory, graph, hits.map((hit) => hit.fact.content))
           : [];
 
@@ -754,8 +766,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
             favorability: current.favorability,
           },
           memory: memory.stats(),
-          graph: graph.stats(),
-          communities: graph.summarize(),
+          graph: { ...graph.stats(), levels: graph.hierarchy().length },
           /** 跨会话核心记忆块（≤400 字）。 */
           digest: buildCoreDigest(memory),
           tasks: {
@@ -823,7 +834,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const manageLongTask = {
     name: 'manage_long_task',
     description:
-      '长程任务台账（tasks.json 落盘，重启恢复）。create 建任务 / update 改状态加线索 / list 查看 / due 查超时未更新 / delete 删除。后台每几小时自动巡视并复盘。',
+      '长程任务台账（落盘、重启恢复）。create / update / list / due / delete；后台定时巡视复盘。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -897,8 +908,15 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   };
 
   for (const definition of [remember, recall, forget, reflect, state, cognitionContext, manageLongTask]) {
-    assertObjectSchema(definition.name, definition.parameters);
-    disposers.push(tools.register(definition));
+    try {
+      assertObjectSchema(definition.name, definition.parameters);
+      disposers.push(tools.register(definition));
+    } catch (error) {
+      // 与其他插件重名、或宿主改了 schema 约定：只跳过这一个工具，其余照常注册
+      ctx.logger?.warn?.(
+        `cognition-engine: 工具 ${definition.name} 注册失败（可能与其他插件重名）: ${messageOf(error)}`,
+      );
+    }
   }
 
   /**
@@ -931,7 +949,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       } catch {
         // 情绪联动失败不能影响主流程
       }
-      return next();
+      // next 可能因宿主版本变化而不存在：返回 undefined 让调用方按默认处理
+      return typeof next === 'function' ? (next() as unknown) : undefined;
     },
   );
   if (typeof onPreStep === 'function') disposers.push(onPreStep);
