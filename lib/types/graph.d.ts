@@ -44,6 +44,8 @@ export interface SchemaNode {
      * 当一条观察与某个图式语义相反、无法同化时，新建的图式会被标为 true。
      */
     isConflict: boolean;
+    /** 层次节点的抽取式摘要（取自成员原文，不是 LLM 生成）。 */
+    summary?: string;
 }
 export type IngestMode = 'assimilation' | 'accommodation';
 export interface IngestOutcome {
@@ -59,6 +61,12 @@ export interface IngestOutcome {
     };
     /** 内容相近但极性相反时，记录它顶撞了哪个图式。 */
     conflictWith?: string;
+    /** 顺应时与旧图式建立关联的理由（A-MEM 风格的动态链接解释）。 */
+    linkedBy?: {
+        schemaId: string;
+        score: number;
+        terms: string[];
+    };
     /** 本次操作是否检测到语义冲突（产生了 isConflict 图式或撞上已有冲突图式）。 */
     cognitiveDissonance: boolean;
 }
@@ -109,6 +117,8 @@ export declare class SchemaGraphManager {
     private hierarchyLevels;
     /** 上次构建层次时的 seq；seq 不变说明没有新建图式，可以跳过重建。 */
     private hierarchyBuiltFor;
+    /** 边 → 连接理由（共享词与相似度）。 */
+    private readonly linkMeta;
     constructor(options?: SchemaGraphOptions);
     get schemaCount(): number;
     /**
@@ -131,6 +141,12 @@ export declare class SchemaGraphManager {
      * 传入 conflictWith 时，新节点标记为 isConflict 并返回 cognitiveDissonance。
      */
     accommodate(obs: Observation, best?: RankedSchema, conflictWith?: string): IngestOutcome;
+    /** 取某条边的连接理由。 */
+    linkReason(a: string, b: string): {
+        score: number;
+        terms: string[];
+    } | undefined;
+    private linkKey;
     /** 无向加权连边。 */
     connect(a: string, b: string, weight: number): void;
     neighbors(id: string, minWeight?: number): Array<{
@@ -172,6 +188,17 @@ export declare class SchemaGraphManager {
         level: number;
         schemaIds: string[];
     }>;
+    /**
+     * Personalized PageRank（HippoRAG 的核心检索信号，arXiv:2405.14831）。
+     *
+     * 以命中图式为种子，在加权图上做幂迭代，把相关度沿边传播出去——
+     * 比单纯看余弦相似度更能带出「隔一层但相关」的图式。
+     */
+    personalizedPageRank(seeds: readonly string[], alpha?: number, iterations?: number): Map<string, number>;
+    /**
+     * 抽取式代表：挑与图式质心最接近的成员原文（RAPTOR 摘要的零成本替代）。
+     */
+    representatives(schemaId: string, limit?: number): string[];
     reset(): void;
     private makeObservation;
     private rank;

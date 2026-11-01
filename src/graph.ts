@@ -48,6 +48,8 @@ export interface SchemaNode {
    * 当一条观察与某个图式语义相反、无法同化时，新建的图式会被标为 true。
    */
   isConflict: boolean;
+  /** 层次节点的抽取式摘要（取自成员原文，不是 LLM 生成）。 */
+  summary?: string;
 }
 
 export type IngestMode = 'assimilation' | 'accommodation';
@@ -62,6 +64,8 @@ export interface IngestOutcome {
   linkedTo?: { schemaId: string; weight: number };
   /** 内容相近但极性相反时，记录它顶撞了哪个图式。 */
   conflictWith?: string;
+  /** 顺应时与旧图式建立关联的理由（A-MEM 风格的动态链接解释）。 */
+  linkedBy?: { schemaId: string; score: number; terms: string[] };
   /** 本次操作是否检测到语义冲突（产生了 isConflict 图式或撞上已有冲突图式）。 */
   cognitiveDissonance: boolean;
 }
@@ -123,6 +127,8 @@ export class SchemaGraphManager {
   private hierarchyLevels: Array<{ level: number; schemaIds: string[] }> = [];
   /** 上次构建层次时的 seq；seq 不变说明没有新建图式，可以跳过重建。 */
   private hierarchyBuiltFor = -1;
+  /** 边 → 连接理由（共享词与相似度）。 */
+  private readonly linkMeta = new Map<string, { score: number; terms: string[] }>();
 
   constructor(options: SchemaGraphOptions = {}) {
     this.clock = options.now ?? (() => Date.now());
@@ -225,10 +231,20 @@ export class SchemaGraphManager {
     this.edgeBucket(id);
 
     let linkedTo: { schemaId: string; weight: number } | undefined;
+    let linkedBy: { schemaId: string; score: number; terms: string[] } | undefined;
     if (best !== undefined) {
       const weight = Math.max(best.similarity, 0.01);
       this.connect(id, best.schemaId, weight);
       linkedTo = { schemaId: best.schemaId, weight };
+      // A-MEM 风格：记录「为什么连上它」——共享词 + 相似度
+      const target = this.schemas.get(best.schemaId);
+      if (target !== undefined) {
+        const terms = [...obs.tokens.keys()]
+          .filter((term) => target.centroid.has(term))
+          .slice(0, 3);
+        this.linkMeta.set(this.linkKey(id, best.schemaId), { score: best.similarity, terms });
+        linkedBy = { schemaId: best.schemaId, score: Number(best.similarity.toFixed(3)), terms };
+      }
     }
 
     this.accommodations += 1;
@@ -240,8 +256,18 @@ export class SchemaGraphManager {
       createdSchemaId: id,
       cognitiveDissonance: conflictWith !== undefined,
       ...(linkedTo === undefined ? {} : { linkedTo }),
+      ...(linkedBy === undefined ? {} : { linkedBy }),
       ...(conflictWith === undefined ? {} : { conflictWith }),
     };
+  }
+
+  /** 取某条边的连接理由。 */
+  linkReason(a: string, b: string): { score: number; terms: string[] } | undefined {
+    return this.linkMeta.get(this.linkKey(a, b));
+  }
+
+  private linkKey(a: string, b: string): string {
+    return a < b ? `${a}|${b}` : `${b}|${a}`;
   }
 
   /** 无向加权连边。 */
@@ -346,7 +372,10 @@ export class SchemaGraphManager {
   summarize(): CommunitySummary[] {
     return this.communities().map((schemaIds, index) => {
       const labels = schemaIds
-        .map((id) => this.schemas.get(id)?.label ?? id)
+        .map((id) => {
+          const schema = this.schemas.get(id);
+          return schema?.summary ?? schema?.label ?? id;
+        })
         .slice(0, 3)
         .join(' / ');
       const hasConflict = schemaIds.some((id) => this.schemas.get(id)?.isConflict === true);
@@ -421,6 +450,11 @@ export class SchemaGraphManager {
           polarity: children.reduce((sum, child) => sum + Math.sign(child.polarity), 0) || 1,
           weight: children.length,
           isConflict: children.some((child) => child.isConflict),
+          // RAPTOR 的零成本替代：用代表成员原文当摘要，不调 LLM
+          summary: children
+            .flatMap((child) => this.representatives(child.id, 1))
+            .slice(0, 2)
+            .join('；'),
         };
         this.schemas.set(id, parent);
         this.childrenOf.set(id, children.map((child) => child.id));
@@ -472,12 +506,74 @@ export class SchemaGraphManager {
     return this.hierarchyLevels.map((entry) => ({ ...entry, schemaIds: [...entry.schemaIds] }));
   }
 
+  /**
+   * Personalized PageRank（HippoRAG 的核心检索信号，arXiv:2405.14831）。
+   *
+   * 以命中图式为种子，在加权图上做幂迭代，把相关度沿边传播出去——
+   * 比单纯看余弦相似度更能带出「隔一层但相关」的图式。
+   */
+  personalizedPageRank(seeds: readonly string[], alpha = 0.85, iterations = 20): Map<string, number> {
+    const nodes = [...this.schemas.keys()];
+    const seedSet = new Set(seeds.filter((id) => this.schemas.has(id)));
+    if (nodes.length === 0 || seedSet.size === 0) return new Map();
+
+    const outSum = new Map<string, number>();
+    for (const node of nodes) {
+      let sum = 0;
+      for (const [, weight] of this.edges.get(node) ?? []) sum += weight;
+      outSum.set(node, sum);
+    }
+
+    const seedWeight = 1 / seedSet.size;
+    let rank = new Map<string, number>();
+    for (const node of nodes) rank.set(node, seedSet.has(node) ? seedWeight : 0);
+
+    for (let iter = 0; iter < iterations; iter += 1) {
+      const next = new Map<string, number>();
+      for (const node of nodes) next.set(node, 0);
+      for (const node of nodes) {
+        const current = rank.get(node) ?? 0;
+        if (current === 0) continue;
+        const sum = outSum.get(node) ?? 0;
+        if (sum === 0) continue;
+        for (const [neighbor, weight] of this.edges.get(node) ?? []) {
+          next.set(neighbor, (next.get(neighbor) ?? 0) + alpha * current * (weight / sum));
+        }
+      }
+      for (const node of nodes) {
+        const base = seedSet.has(node) ? seedWeight : 0;
+        next.set(node, (next.get(node) ?? 0) + (1 - alpha) * base);
+      }
+      rank = next;
+    }
+    return rank;
+  }
+
+  /**
+   * 抽取式代表：挑与图式质心最接近的成员原文（RAPTOR 摘要的零成本替代）。
+   */
+  representatives(schemaId: string, limit = 3): string[] {
+    const schema = this.schemas.get(schemaId);
+    if (schema === undefined) return [];
+    const scored: Array<{ text: string; score: number }> = [];
+    for (const memberId of schema.members) {
+      const obs = this.observations.get(memberId);
+      if (obs === undefined) continue;
+      const text = obs.text.trim();
+      if (text.length === 0 || scored.some((item) => item.text === text)) continue;
+      scored.push({ text, score: cosine(obs.tokens, schema.centroid) });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, limit).map((item) => item.text);
+  }
+
   reset(): void {
     this.schemas.clear();
     this.edges.clear();
     this.observations.clear();
     this.parentOf.clear();
     this.childrenOf.clear();
+    this.linkMeta.clear();
     this.hierarchyLevels = [];
     this.hierarchyBuiltFor = -1;
     this.seq = 0;

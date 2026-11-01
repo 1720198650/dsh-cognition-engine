@@ -282,6 +282,26 @@ async function main(): Promise<void> {
     assert.equal(graph.summarize().length, communities.length);
   });
 
+  await test('PPR 让隔一层的图式也拿到分数', () => {
+    const g = new SchemaGraphManager({ assimilateThreshold: 0.95, overlapThreshold: 0.95, communityThreshold: 0.2 });
+    const a = g.ingest('部署区域 华东机房 迁移');
+    g.ingest('华东机房 迁移窗口 每周三');
+    const c = g.ingest('迁移窗口 每周三 变更审批');
+
+    const ranks = g.personalizedPageRank([a.schemaId]);
+    assert.equal(ranks.size, 3, '三个图式都应参与传播');
+    assert.ok((ranks.get(c.schemaId) ?? 0) > 0, '隔一层的图式也应获得非零分数');
+    assert.ok((ranks.get(a.schemaId) ?? 0) > 0, '种子自身应有分数');
+  });
+
+  await test('顺应时记录连接理由', () => {
+    const g = new SchemaGraphManager({ assimilateThreshold: 0.95, overlapThreshold: 0.95 });
+    g.ingest('部署区域 华东机房 迁移');
+    const second = g.ingest('华东机房 迁移窗口 每周三');
+    assert.ok(second.linkedBy !== undefined, '应记录 linkedBy');
+    assert.ok((second.linkedBy?.terms.length ?? 0) > 0, '应带出共享词');
+  });
+
   /* ---------------------------------------------------------------- */
   section('[6] 辩证反思：三次串行调用');
 
