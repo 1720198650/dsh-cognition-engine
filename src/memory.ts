@@ -15,9 +15,7 @@
  *   - 严格召回只取 current truth；历史召回保留被取代的真值（point-in-time truth）。
  *
  * 情绪联动（本次新增）：
- *   - 每条记忆带 `sentiment`（-1.0 ~ 1.0）；
  *   - `ingest()` 在「本条取代了旧事实」时返回 `onConflictTriggered = true`；
- *   - `recallWithMeta()` 额外返回 `sentimentSum` 与 `isNostalgic`。
  *
  * 存储：纯 TypeScript + Map，无任何外部数据库。
  */
@@ -50,11 +48,6 @@ export interface TemporalFact {
   readonly workspaceId: string | null;
   /** scope = session 时的归属会话 id。 */
   readonly sessionId: string | null;
-  /**
-   * 情绪值，范围 -1.0 ~ 1.0。
-   * 负数表示负面（沮丧、愤怒），正数表示正面（满意、愉快），0 为中性。
-   */
-  readonly sentiment: number;
   /** 强化量（每次 recall 命中或被显式 reinforce 时增加），不参与 hash。 */
   readonly activation: number;
   readonly lastAccessedAt: number;
@@ -80,8 +73,6 @@ export interface IngestInput {
   scope?: MemoryScope;
   workspaceId?: string;
   sessionId?: string;
-  /** 情绪值 -1.0 ~ 1.0，默认 0。 */
-  sentiment?: number;
   validFrom?: number;
   validTo?: number | null;
   recordedAt?: number;
@@ -118,13 +109,9 @@ export interface RecallHit {
   decay: number;
 }
 
-/** 带情绪聚合的召回结果。 */
+/** 召回结果。 */
 export interface RecallMeta {
   hits: RecallHit[];
-  /** 本批召回记忆的 sentiment 总和（受条数影响）。 */
-  sentimentSum: number;
-  /** 是否召回了 30 天前的核心记忆（importance ≥ CORE_IMPORTANCE）。 */
-  isNostalgic: boolean;
 }
 
 export interface Conflict {
@@ -176,8 +163,6 @@ export interface MemoryStats {
   superseded: number;
   subjects: number;
   conflicts: number;
-  /** 全部记忆的 sentiment 平均值。 */
-  sentimentAverage: number;
 }
 
 export interface MemoryOptions {
@@ -286,14 +271,6 @@ function clamp01(value: number): number {
   return value;
 }
 
-/** 情绪值钳制到 -1.0 ~ 1.0。 */
-export function clampSentiment(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  if (value < -1) return -1;
-  if (value > 1) return 1;
-  return value;
-}
-
 /* ------------------------------------------------------------------ */
 /* TemporalMemoryStore                                                 */
 /* ------------------------------------------------------------------ */
@@ -368,7 +345,6 @@ export class TemporalMemoryStore {
       scope: input.scope ?? 'global',
       workspaceId: input.workspaceId ?? null,
       sessionId: input.sessionId ?? null,
-      sentiment: clampSentiment(input.sentiment ?? 0),
       activation: 0,
       lastAccessedAt: this.clock(),
     });
@@ -486,8 +462,7 @@ export class TemporalMemoryStore {
   /**
    * 按时间口径召回，并计算本批结果的情绪聚合。
    *
-   *   sentimentSum = 命中记忆的 sentiment 之和
-   *   isNostalgic  = 是否命中「30 天前 + 核心权重」的记忆
+     *   isNostalgic  = 是否命中「30 天前 + 核心权重」的记忆
    */
   recallWithMeta(query: string, options: RecallOptions = {}): RecallMeta {
     const mode = options.mode ?? 'strict';
@@ -531,17 +506,7 @@ export class TemporalMemoryStore {
       hit.fact = bumped;
     }
 
-    let sentimentSum = 0;
-    let isNostalgic = false;
-    for (const hit of top) {
-      sentimentSum += hit.fact.sentiment;
-      const age = now - hit.fact.recordedAt;
-      if (hit.fact.importance >= CORE_IMPORTANCE && age >= NOSTALGIA_AGE_MS) {
-        isNostalgic = true;
-      }
-    }
-
-    return { hits: top, sentimentSum, isNostalgic };
+    return { hits: top };
   }
 
   /**
@@ -651,11 +616,9 @@ export class TemporalMemoryStore {
     const now = this.clock();
     let current = 0;
     let superseded = 0;
-    let sentimentSum = 0;
     for (const fact of this.facts.values()) {
       if (fact.supersededAt !== null) superseded += 1;
       if (isCurrent(fact, now)) current += 1;
-      sentimentSum += fact.sentiment;
     }
     return {
       total: this.facts.size,
@@ -663,7 +626,6 @@ export class TemporalMemoryStore {
       superseded,
       subjects: this.bySubject.size,
       conflicts: this.conflicts().length,
-      sentimentAverage: this.facts.size === 0 ? 0 : Number((sentimentSum / this.facts.size).toFixed(3)),
     };
   }
 
@@ -672,13 +634,12 @@ export class TemporalMemoryStore {
     return [...this.facts.values()].map((fact) => ({ ...fact }));
   }
 
-  /** 从 serialize() 的结果恢复；兼容早期没有 sentiment 字段的存档。 */
+  /** 从 serialize() 的结果恢复；缺失字段按默认值补齐。 */
   restore(facts: readonly TemporalFact[]): void {
     for (const raw of facts) {
       const fact: TemporalFact = Object.freeze({
         ...raw,
         tags: Object.freeze([...(raw.tags ?? [])]),
-        sentiment: clampSentiment(raw.sentiment ?? 0),
         scope: raw.scope ?? 'global',
         workspaceId: raw.workspaceId ?? null,
         sessionId: raw.sessionId ?? null,

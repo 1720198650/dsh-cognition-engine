@@ -22,7 +22,6 @@ import { resolve } from 'node:path';
 
 import { TemporalMemoryStore } from './memory.ts';
 import { SchemaGraphManager, expandBySchema } from './graph.ts';
-import { MoodStateMachine } from './mood.ts';
 import { DialecticalReflectionEngine, MockDialecticalLLM, extractContradictions } from './reflection.ts';
 import { ProactiveGate } from './proactive.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
@@ -179,22 +178,6 @@ const checkers: Record<string, (params: Params, expect: Params) => Promise<void>
     if (e.draftUndefined) equal(first.draft, undefined, '第一次判断不应有草稿');
     const second = gate.judge(first.observationId);
     equal(second.state, e.judge, '第二次判断结果不符');
-  },
-
-  'mood.explain': (p, e) => {
-    const mood = new MoodStateMachine({ energy: 70, favorability: 0, now: () => 0 });
-    for (const [event, intensity] of p.events as Array<[never, number]>) {
-      mood.apply(event, intensity ?? 1);
-    }
-    const reading = mood.explain();
-    if (e.consistent) {
-      equal(reading.energy.value, mood.energy, '解释里的能量应等于当前能量');
-      equal(reading.favorability.value, mood.favorability, '解释里的好感应等于当前好感');
-    }
-    if (e.reasonIncludes !== undefined) {
-      assert(reading.energy.reason.includes(e.reasonIncludes), `理由应包含「${e.reasonIncludes}」`);
-    }
-    if (e.timeDriven !== undefined) equal(reading.timeDriven, e.timeDriven, '时间推进标记不符');
   },
 
   'recall.expand': (p, e) => {

@@ -46,7 +46,6 @@ window.__ModuleLoader__.load({
         storage: '存储位置',
         clear: '清空',
         clearMemory: '清空记忆',
-        clearMood: '清空心情',
         clearAll: '清空全部',
         realModel: '反思引擎',
         realMode: '真实模型',
@@ -99,7 +98,6 @@ window.__ModuleLoader__.load({
         storage: 'Storage',
         clear: 'Clear',
         clearMemory: 'Memory',
-        clearMood: 'Mood',
         clearAll: 'All',
         realModel: 'Reflection engine',
         realMode: 'Real model',
@@ -265,7 +263,7 @@ window.__ModuleLoader__.load({
         const [state, setState] = React.useState(null);
         const [failure, setFailure] = React.useState(null);
         const [open, setOpen] = React.useState(false);
-        const [tab, setTab] = React.useState('mood');
+        const [tab, setTab] = React.useState('summary');
         const [detail, setDetail] = React.useState(null);
         const [detailError, setDetailError] = React.useState(null);
         const [tick, setTick] = React.useState(0);
@@ -360,7 +358,7 @@ window.__ModuleLoader__.load({
 
         const toggle = () => setOpen((value) => !value);
 
-        if (!state || !state.mood) {
+        if (!state) {
           return h(
             'div',
             { style: S.row, title: failure || '' },
@@ -369,15 +367,10 @@ window.__ModuleLoader__.load({
           );
         }
 
-        const mood = state.mood;
-        const energy = Number(mood.energy) || 0;
-        const favor = Number(mood.favorability) || 0;
         const memoryCount = (state.memory || {}).total || 0;
         const schemaCount = (state.graph || {}).schemas || 0;
         const taskCount = (state.tasks || {}).pending || 0;
         const samples = state.samples || 0;
-        const favorColor =
-          favor >= 0 ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)';
 
         const row = h(
           'div',
@@ -396,21 +389,6 @@ window.__ModuleLoader__.load({
             },
           },
           h('span', { style: { ...S.group, ...S.name } }, dict.name),
-          h(
-            'span',
-            { style: S.group },
-            h('span', null, dict.energy),
-            h(Bar, { ratio: energy / 100, color: 'var(--dsw-alias-brand-primary)', label: dict.energy }),
-            h('span', { style: S.value }, `${Math.round(energy)}%`),
-          ),
-          h(
-            'span',
-            { style: S.group },
-            h('span', null, dict.favor),
-            h(Bar, { ratio: (favor + 100) / 200, color: favorColor, label: dict.favor }),
-            h('span', { style: S.value }, favor >= 0 ? `+${Math.round(favor)}` : `${Math.round(favor)}`),
-          ),
-          h('span', { style: S.value }, mood.label),
           h('span', { style: S.sep }, '·'),
           h('span', null, `${dict.memory} ${memoryCount}`),
           h('span', { style: S.sep }, '·'),
@@ -430,7 +408,7 @@ window.__ModuleLoader__.load({
         if (!open) return h('div', { style: S.root }, row);
 
         const tabs = [
-          ['mood', dict.state],
+          ['summary', dict.state],
           ['tasks', `${dict.tasks} ${detail ? detail.tasks.length : ''}`.trim()],
           ['memories', `${dict.memories} ${detail ? detail.memories.length : ''}`.trim()],
           ['schemas', `${dict.schemas} ${detail ? detail.schemas.length : ''}`.trim()],
@@ -461,7 +439,6 @@ window.__ModuleLoader__.load({
               `${dict.storage}：${(state.storage || {}).state || '-'}`,
               h('span', null, `${dict.clear}：`),
               button(dict.clearMemory, () => post('/cognition-engine/clear?scope=memory')),
-              button(dict.clearMood, () => post('/cognition-engine/clear?scope=mood')),
               button(dict.clearAll, () => post('/cognition-engine/clear?scope=all')),
             ),
             section(
@@ -497,28 +474,13 @@ window.__ModuleLoader__.load({
           body = h('div', { style: S.empty }, `${dict.noDetail} (${detailError})`);
         } else if (!detail) {
           body = h('div', { style: S.empty }, dict.loading);
-        } else if (tab === 'mood') {
-          const reading = (title, item) =>
-            h(
-              'div',
-              { key: title, style: S.item },
-              h('div', { style: S.itemTitle }, `${title} ${item.value}　${item.band}`),
-              h('div', { style: S.explain }, `${dict.why}：${item.reason}`),
-              h('div', { style: S.explain }, `${dict.means}：${item.meaning}`),
-            );
+        } else if (tab === 'summary') {
           body = h(
             'div',
             null,
-            reading(dict.energy, detail.mood.energy),
-            reading(dict.favor, detail.mood.favorability),
-            h(
-              'div',
-              { style: S.item },
-              h('div', { style: S.itemTitle }, `${dict.label}：${detail.mood.mood.label}`),
-              h('div', { style: S.explain }, `${dict.why}：${detail.mood.mood.reason}`),
-              h('div', { style: S.explain }, `${dict.means}：${detail.mood.mood.meaning}`),
-            ),
-            detail.mood.timeDriven ? null : h('div', { style: S.empty }, dict.noTime),
+            h('div', { style: S.item }, h('div', { style: S.itemTitle }, `${dict.memory} ${(detail.counts || {}).memories || 0}`)),
+            h('div', { style: S.item }, h('div', { style: S.itemTitle }, `${dict.schema} ${(detail.counts || {}).schemas || 0}`)),
+            h('div', { style: S.item }, h('div', { style: S.itemTitle }, `${dict.tasks} ${(detail.counts || {}).tasks || 0}`)),
           );
         } else if (tab === 'tasks') {
           body = renderList(detail.tasks, (task) => {

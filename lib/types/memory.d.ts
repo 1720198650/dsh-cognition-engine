@@ -15,9 +15,7 @@
  *   - 严格召回只取 current truth；历史召回保留被取代的真值（point-in-time truth）。
  *
  * 情绪联动（本次新增）：
- *   - 每条记忆带 `sentiment`（-1.0 ~ 1.0）；
  *   - `ingest()` 在「本条取代了旧事实」时返回 `onConflictTriggered = true`；
- *   - `recallWithMeta()` 额外返回 `sentimentSum` 与 `isNostalgic`。
  *
  * 存储：纯 TypeScript + Map，无任何外部数据库。
  */
@@ -47,11 +45,6 @@ export interface TemporalFact {
     readonly workspaceId: string | null;
     /** scope = session 时的归属会话 id。 */
     readonly sessionId: string | null;
-    /**
-     * 情绪值，范围 -1.0 ~ 1.0。
-     * 负数表示负面（沮丧、愤怒），正数表示正面（满意、愉快），0 为中性。
-     */
-    readonly sentiment: number;
     /** 强化量（每次 recall 命中或被显式 reinforce 时增加），不参与 hash。 */
     readonly activation: number;
     readonly lastAccessedAt: number;
@@ -74,8 +67,6 @@ export interface IngestInput {
     scope?: MemoryScope;
     workspaceId?: string;
     sessionId?: string;
-    /** 情绪值 -1.0 ~ 1.0，默认 0。 */
-    sentiment?: number;
     validFrom?: number;
     validTo?: number | null;
     recordedAt?: number;
@@ -109,13 +100,9 @@ export interface RecallHit {
     similarity: number;
     decay: number;
 }
-/** 带情绪聚合的召回结果。 */
+/** 召回结果。 */
 export interface RecallMeta {
     hits: RecallHit[];
-    /** 本批召回记忆的 sentiment 总和（受条数影响）。 */
-    sentimentSum: number;
-    /** 是否召回了 30 天前的核心记忆（importance ≥ CORE_IMPORTANCE）。 */
-    isNostalgic: boolean;
 }
 export interface Conflict {
     subject: string;
@@ -165,8 +152,6 @@ export interface MemoryStats {
     superseded: number;
     subjects: number;
     conflicts: number;
-    /** 全部记忆的 sentiment 平均值。 */
-    sentimentAverage: number;
 }
 export interface MemoryOptions {
     now?: () => number;
@@ -192,8 +177,6 @@ export declare function cosine(a: Map<string, number>, b: Map<string, number>): 
 export declare function contentHash(...parts: readonly string[]): string;
 /** 从正文推导主题键：优先取冒号前的短语，否则取前 16 个字符。 */
 export declare function deriveSubject(content: string): string;
-/** 情绪值钳制到 -1.0 ~ 1.0。 */
-export declare function clampSentiment(value: number): number;
 export declare class TemporalMemoryStore {
     private readonly facts;
     private readonly bySubject;
@@ -242,8 +225,7 @@ export declare class TemporalMemoryStore {
     /**
      * 按时间口径召回，并计算本批结果的情绪聚合。
      *
-     *   sentimentSum = 命中记忆的 sentiment 之和
-     *   isNostalgic  = 是否命中「30 天前 + 核心权重」的记忆
+       *   isNostalgic  = 是否命中「30 天前 + 核心权重」的记忆
      */
     recallWithMeta(query: string, options?: RecallOptions): RecallMeta;
     /**
@@ -262,7 +244,7 @@ export declare class TemporalMemoryStore {
     stats(): MemoryStats;
     /** 导出为纯 JSON（可自行落盘到 .json 文件，仍然不依赖数据库）。 */
     serialize(): TemporalFact[];
-    /** 从 serialize() 的结果恢复；兼容早期没有 sentiment 字段的存档。 */
+    /** 从 serialize() 的结果恢复；缺失字段按默认值补齐。 */
     restore(facts: readonly TemporalFact[]): void;
     private visibleByScope;
     private visible;

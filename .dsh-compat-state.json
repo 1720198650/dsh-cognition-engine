@@ -1,11 +1,4 @@
 {
   "version": 1,
-  "facts": [],
-  "mood": {
-    "energy": 70,
-    "favorability": 0,
-    "emotion": "平静",
-    "lastTickTime": 1793508628539,
-    "log": []
-  }
+  "facts": []
 }

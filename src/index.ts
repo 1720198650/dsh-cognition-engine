@@ -8,7 +8,7 @@
  *   cognition_remember  写入一条双时态记忆（可指定 validFrom / supersedes）
  *   cognition_recall    按 strict / historical / belief 三种时间口径召回
  *   cognition_reflect   三段式辩证反思（thesis → antithesis → synthesis，串行三次）
- *   cognition_state     心情状态条 + 记忆与图式网络统计
+ *   cognition_state     记忆与图式网络统计
  */
 
 import { randomUUID } from 'node:crypto';
@@ -16,8 +16,6 @@ import { randomUUID } from 'node:crypto';
 import { TemporalMemoryStore } from './memory.ts';
 import type { TemporalFact } from './memory.ts';
 import { SchemaGraphManager, expandBySchema } from './graph.ts';
-import { MoodStateMachine } from './mood.ts';
-import type { MoodEvent, MoodLabel, MoodState } from './mood.ts';
 import { JsonStateStore } from './persist.ts';
 import { buildDetail, buildCoreDigest } from './views.ts';
 import { DialecticalReflectionEngine, MockDialecticalLLM, ReflectionWorker } from './reflection.ts';
@@ -74,7 +72,6 @@ interface DefaultModelHost {
 interface PersistedState {
   version: number;
   facts: TemporalFact[];
-  mood: MoodState;
 }
 
 interface PluginLogger {
@@ -100,9 +97,6 @@ export interface CognitionConfig {
   overlapThreshold?: number;
   communityThreshold?: number;
   maxClusterSize?: number;
-  energyDrainPerMinute?: number;
-  initialEnergy?: number;
-  initialFavorability?: number;
   /** 多久没更新就算需要催办（小时）。 */
   heartbeatHours?: number;
   /** 后台巡视间隔（小时）。 */
@@ -113,7 +107,7 @@ export interface CognitionConfig {
   recordOnly?: boolean;
   /** tasks.json 路径，默认 <cwd>/tasks.json。 */
   tasksFile?: string;
-  /** 记忆与心情的落盘路径，默认 <cwd>/cognition-state.json。 */
+  /** 记忆的落盘路径，默认 <cwd>/cognition-state.json。 */
   stateFile?: string;
   /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
   lockToken?: string;
@@ -140,15 +134,6 @@ export const name = 'cognition-engine';
 export const inject = ['tools'];
 
 const HOUR_MS = 60 * 60 * 1000;
-const MOOD_EVENTS: readonly MoodEvent[] = [
-  'praise',
-  'insult',
-  'success',
-  'failure',
-  'conflict',
-  'rest',
-  'ignore',
-];
 
 function numberOr(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -163,9 +148,6 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     overlapThreshold: numberOr(config.overlapThreshold, 0.42),
     communityThreshold: numberOr(config.communityThreshold, 0.3),
     maxClusterSize: Math.max(1, Math.round(numberOr(config.maxClusterSize, 8))),
-    energyDrainPerMinute: numberOr(config.energyDrainPerMinute, 1.5),
-    initialEnergy: numberOr(config.initialEnergy, 70),
-    initialFavorability: numberOr(config.initialFavorability, 0),
     heartbeatHours: Math.max(0.01, numberOr(config.heartbeatHours, 6)),
     patrolIntervalHours: Math.max(0.01, numberOr(config.patrolIntervalHours, 3)),
     idleThresholdMinutes: Math.max(0.1, numberOr(config.idleThresholdMinutes, 5)),
@@ -211,35 +193,12 @@ function optionalString(args: Record<string, unknown>, key: string): string | un
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
-function optionalNumber(args: Record<string, unknown>, key: string): number | undefined {
-  const value = args[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
 /** 统一把 unknown 异常转成一行文本。 */
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 从 agent/pre-step 的 payload 里取最后一条用户消息的纯文本。 */
-function latestUserText(payload: unknown): string {
-  const messages = (payload as { messages?: unknown[] } | undefined)?.messages;
-  if (!Array.isArray(messages) || messages.length === 0) return '';
-  const last = messages[messages.length - 1] as { content?: unknown };
-  if (typeof last?.content === 'string') return last.content;
-  if (!Array.isArray(last?.content)) return '';
-  return last.content
-    .filter(
-      (block): block is { type: string; text: string } =>
-        typeof block === 'object' &&
-        block !== null &&
-        (block as { type?: unknown }).type === 'text' &&
-        typeof (block as { text?: unknown }).text === 'string',
-    )
-    .map((block) => block.text)
-    .join(' ');
-}
-
+/** 工具返回统一走纯文本。 */
 const textOutput = {
   schema: { type: 'string' as const },
   render: (_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> => [
@@ -313,18 +272,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     communityThreshold: config.communityThreshold,
     maxClusterSize: config.maxClusterSize,
   });
-  const mood = new MoodStateMachine({
-    energy: config.initialEnergy,
-    favorability: config.initialFavorability,
-    energyDrainPerMinute: config.energyDrainPerMinute,
-  });
-  // —— 落盘：记忆 + 心情 ——
+  // —— 落盘：记忆 ——
   const stateStore = new JsonStateStore<PersistedState>({
     ...(config.stateFile === undefined ? {} : { filePath: config.stateFile }),
-    serialize: () => ({ version: 1, facts: memory.serialize(), mood: mood.serialize() }),
+    serialize: () => ({ version: 1, facts: memory.serialize() }),
     restore: (data) => {
       if (Array.isArray(data.facts)) memory.restore(data.facts);
-      if (data.mood !== undefined) mood.restore(data.mood);
     },
   });
   try {
@@ -404,14 +357,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
   /** 页面可视化用的快照（纯 JSON，客户端每 2 秒拉一次）。 */
   const snapshot = (): Record<string, unknown> => {
-    const current = mood.snapshot();
     return {
-      mood: {
-        energy: current.energy,
-        favorability: current.favorability,
-        label: current.mood,
-        bar: current.bar,
-      },
       memory: memory.stats(),
       /** 标记为 test 的事实条数：页面上用来提醒「这些不是真事」。 */
       samples: memory.all().filter((fact) => fact.source === 'test').length,
@@ -440,7 +386,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   };
 
   /** 面板展开时按需拉取的明细（不走模型上下文，只给页面看）。 */
-  const detail = (): Record<string, unknown> => buildDetail({ memory, graph, mood, taskManager });
+  const detail = (): Record<string, unknown> => buildDetail({ memory, graph, taskManager });
 
   // 宿主 → 页面 的数据桥：Client 半区 fetch('/cognition-engine/state')
   // 注意：不能放在 /api 前缀下——那条前缀归 API 网关所有，会先被它 401 掉。
@@ -508,23 +454,20 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     /** 读 ?name=true 这类布尔开关。 */
     const flag = (url: URL, name: string): boolean => url.searchParams.get(name) === 'true';
 
-    // 清空：scope = memory / mood / all
+    // 清空：scope = memory / all
     route(
       '/cognition-engine/clear',
       (url) => {
         const scope = url.searchParams.get('scope') ?? 'memory';
-        if (scope !== 'memory' && scope !== 'mood' && scope !== 'all') {
-          throw new Error('scope 只能是 memory / mood / all');
+        if (scope !== 'memory' && scope !== 'all') {
+          throw new Error('scope 只能是 memory / all');
         }
         let removed = 0;
-        if (scope !== 'mood') {
-          removed = memory.all().length;
-          for (const fact of memory.all()) memory.remove(fact.id);
-          graph.reset();
-        }
-        if (scope !== 'memory') mood.reset();
+        removed = memory.all().length;
+        for (const fact of memory.all()) memory.remove(fact.id);
+        graph.reset();
         void stateStore.flush();
-        return { cleared: scope, removed, memory: memory.stats() };
+        return { cleared: 'memory', removed, memory: memory.stats() };
       },
       { method: 'POST', requireAuth: true },
     );
@@ -564,7 +507,6 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         subject: { type: 'string', description: '主题键，默认取冒号前短语。' },
         tags: { type: 'array', items: { type: 'string' }, description: '标签。' },
         importance: { type: 'number', description: '重要度 0..1。' },
-        sentiment: { type: 'number', description: '情绪 -1..1，默认 0。' },
         validFrom: { type: 'number', description: '开始为真的 Unix 毫秒。' },
         supersedes: { type: 'string', description: '被取代的旧事实 id。' },
         source: {
@@ -587,17 +529,14 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       const fact = memory.ingest({
         content: text,
         source: optionalString(input, 'source') ?? 'agent',
-        ...pick(input, ['subject', 'tags', 'importance', 'sentiment', 'validFrom', 'supersedes']),
+        ...pick(input, ['subject', 'tags', 'importance', 'validFrom', 'supersedes']),
         scope: scopeValue,
         ...(scopeValue === 'session' && agentId !== undefined ? { sessionId: agentId } : {}),
       } as IngestInputLike);
 
-      // 写入发生点 = 情绪联动点：取代旧事实 → CONFLICT 15；图式语义冲突 → CONFLICT 10
-      const graphOutcome = graph.ingest(text);
+      graph.ingest(text);
       // 重建多级图式层次（CAM 的 run_hierarchy）；图很小，成本可忽略
       graph.buildHierarchy();
-      if (fact.onConflictTriggered) mood.applyEvent('CONFLICT', 15);
-      if (graphOutcome.cognitiveDissonance) mood.applyEvent('CONFLICT', 10);
       touch();
 
       return JSON.stringify({
@@ -729,42 +668,16 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
   const state = {
     name: 'cognition_state',
-    description:
-      '查看认知引擎状态：心情状态条、记忆库统计、图式网络统计。可用 event 施加一次心情事件。',
+    description: '查看认知引擎状态：记忆库统计、图式网络统计、待办与跨会话摘要。',
     parameters: {
       type: 'object',
       additionalProperties: false,
-      properties: {
-        event: {
-          type: 'string',
-          enum: [...MOOD_EVENTS],
-          description: '施加一次心情事件。',
-        },
-        intensity: { type: 'number', description: '力度倍数，默认 1。' },
-      },
+      properties: {},
     },
     output: textOutput,
-    async execute(args: unknown): Promise<string> {
-      const input = asRecord(args);
-      const event = optionalString(input, 'event');
-      if (event !== undefined) {
-        if (!MOOD_EVENTS.includes(event as MoodEvent)) {
-          throw new Error(`event 只能是 ${MOOD_EVENTS.join(' / ')}`);
-        }
-        mood.apply(event as MoodEvent, optionalNumber(input, 'intensity') ?? 1);
-        touch();
-      }
-      const current = mood.snapshot();
+    async execute(): Promise<string> {
       return JSON.stringify(
         {
-          mood: {
-            bar: current.bar,
-            statusBar: mood.getStatusBar(),
-            label: current.mood as MoodLabel,
-            emotion: current.emotion,
-            energy: current.energy,
-            favorability: current.favorability,
-          },
           memory: memory.stats(),
           graph: { ...graph.stats(), levels: graph.hierarchy().length },
           /** 跨会话核心记忆块（≤400 字）。 */
@@ -918,42 +831,6 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       );
     }
   }
-
-  /**
-   * agent/pre-step：模型每一步开始前做一次被动结算与情绪联动。
-   * 不能阻断流程——任何异常都吞掉，最后必须 return next()。
-   */
-  const onPreStep = ctx.on?.(
-    'agent/pre-step',
-    async (payload: unknown, next: () => Promise<unknown>) => {
-      try {
-        const now = Date.now();
-
-        // 1) 最近 1 小时写入的记忆条数
-        const recentMemoryCount = memory
-          .all()
-          .filter((fact) => now - fact.recordedAt <= 3_600_000).length;
-
-        // 2) 懒结算
-        mood.settleTime(now, recentMemoryCount);
-
-        // 3) 用最后一条用户消息做召回，带出怀旧与情绪批次
-        const query = latestUserText(payload);
-        if (query.length > 0) {
-          const meta = memory.recallWithMeta(query, { mode: 'strict', limit: 5 });
-          if (meta.isNostalgic) mood.applyEvent('NOSTALGIA', 5);
-          if (meta.sentimentSum !== 0) mood.applyEvent('SENTIMENT_BATCH', meta.sentimentSum);
-        }
-
-        touch();
-      } catch {
-        // 情绪联动失败不能影响主流程
-      }
-      // next 可能因宿主版本变化而不存在：返回 undefined 让调用方按默认处理
-      return typeof next === 'function' ? (next() as unknown) : undefined;
-    },
-  );
-  if (typeof onPreStep === 'function') disposers.push(onPreStep);
 
   /**
    * 后台巡视：每隔 patrolIntervalHours 检查 tasks.json，

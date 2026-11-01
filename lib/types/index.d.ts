@@ -8,7 +8,7 @@
  *   cognition_remember  写入一条双时态记忆（可指定 validFrom / supersedes）
  *   cognition_recall    按 strict / historical / belief 三种时间口径召回
  *   cognition_reflect   三段式辩证反思（thesis → antithesis → synthesis，串行三次）
- *   cognition_state     心情状态条 + 记忆与图式网络统计
+ *   cognition_state     记忆与图式网络统计
  */
 import { TemporalMemoryStore } from './memory.ts';
 import type { TemporalFact } from './memory.ts';
@@ -37,9 +37,6 @@ export interface CognitionConfig {
     overlapThreshold?: number;
     communityThreshold?: number;
     maxClusterSize?: number;
-    energyDrainPerMinute?: number;
-    initialEnergy?: number;
-    initialFavorability?: number;
     /** 多久没更新就算需要催办（小时）。 */
     heartbeatHours?: number;
     /** 后台巡视间隔（小时）。 */
@@ -50,7 +47,7 @@ export interface CognitionConfig {
     recordOnly?: boolean;
     /** tasks.json 路径，默认 <cwd>/tasks.json。 */
     tasksFile?: string;
-    /** 记忆与心情的落盘路径，默认 <cwd>/cognition-state.json。 */
+    /** 记忆的落盘路径，默认 <cwd>/cognition-state.json。 */
     stateFile?: string;
     /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
     lockToken?: string;

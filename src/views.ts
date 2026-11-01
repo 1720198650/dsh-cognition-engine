@@ -8,13 +8,11 @@
 import { isCurrent } from './memory.ts';
 import type { TemporalMemoryStore } from './memory.ts';
 import type { SchemaGraphManager } from './graph.ts';
-import type { MoodStateMachine } from './mood.ts';
 import type { LongHorizonTaskManager } from './task_manager.ts';
 
 export interface DetailDeps {
   memory: TemporalMemoryStore;
   graph: SchemaGraphManager;
-  mood: MoodStateMachine;
   taskManager: LongHorizonTaskManager;
 }
 
@@ -58,7 +56,7 @@ export function buildCoreDigest(
 }
 
 /** 面板展开时按需拉取的明细（不走模型上下文，只给页面看）。 */
-export function buildDetail({ memory, graph, mood, taskManager }: DetailDeps): Record<string, unknown> {
+export function buildDetail({ memory, graph, taskManager }: DetailDeps): Record<string, unknown> {
   const now = Date.now();
 
   const memories = memory
@@ -108,11 +106,11 @@ export function buildDetail({ memory, graph, mood, taskManager }: DetailDeps): R
     }));
 
   return {
-    mood: mood.explain(),
     tasks,
     memories,
     schemas,
     communities: graph.summarize(),
+    hierarchy: graph.hierarchy(),
     counts: {
       tasks: tasks.filter((task) => task.status !== 'COMPLETED').length,
       memories: memories.length,

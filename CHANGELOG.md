@@ -1,5 +1,32 @@
 # 更新报告
 
+## v0.2.0（2026-11-01）— 移除心情状态机
+
+**破坏性变更**：删除 `mood.ts`（能量 / 好感 / 六种状态标签 / 迟滞阈值）。
+
+**为什么删**：三根支柱——LongMemory 的双时态记忆、CAM 的建构主义图式、Hegelion 的辩证反思——里没有它。它也不驱动任何模型行为，只是在页面上画了一根进度条。留着会让人误以为它有用。
+
+**连带移除**：
+
+- 记忆的 `sentiment` 字段（它唯一的消费者就是心情）
+- `recallWithMeta()` 的 `sentimentSum` / `isNostalgic`
+- `cognition_state` 的 `event` / `intensity` 参数
+- `agent/pre-step` 监听器（它的全部工作就是心情结算）
+- 配置项 `initialEnergy` / `initialFavorability` / `energyDrainPerMinute`
+- 页面状态条上的能量 / 好感，以及「心情」页签
+- 清空路由的 `scope=mood`
+
+**保留**：图式的 `isConflict` / `cognitiveDissonance`——它有独立语义，将来可以用于提示「这条记忆与已有图式冲突」。
+
+| 项 | 变化 |
+|---|---|
+| 工具 schema | 1159 → **1076**（-83） |
+| 代码 | 约 -700 行 |
+| 单元测试 | 33 → 29 |
+| 评测 | 20 → 19 |
+
+**存档兼容**：旧 `cognition-state.json` 里多出来的 `mood` / `sentiment` 字段会被忽略，记忆本身不受影响。
+
 ## v0.1.1（2026-11-01）
 
 本次更新把记忆、图式、情绪三者打通，补上跨会话能力，并做了一轮兼容性与体积优化。

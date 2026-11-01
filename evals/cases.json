@@ -174,13 +174,6 @@
       "expect": { "observe": "SILENT", "judge": "SILENT", "draftUndefined": true }
     },
     {
-      "id": "mood.explain-consistent",
-      "group": "心情",
-      "checker": "mood.explain",
-      "params": { "events": [["praise", 2]] },
-      "expect": { "consistent": true, "reasonIncludes": "表扬", "timeDriven": false }
-    },
-    {
       "id": "recall.expand",
       "group": "召回",
       "checker": "recall.expand",
