@@ -1,7 +1,9 @@
-# 依赖与构建产物
+# 依赖与缓存
 node_modules/
-lib/
 .npm-cache/
+
+# lib/ 需要提交：DSH 从 GitHub 源码安装时不会执行构建，
+# 没有 lib/ 插件就跑不起来。它由 `npm run build` 生成，改源码后请一起提交。
 
 # 运行期数据（不要提交）
 cognition-state.json

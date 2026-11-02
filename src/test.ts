@@ -11,7 +11,6 @@ import { resolve } from 'node:path';
 
 import { TemporalMemoryStore, contentHash, isCurrent, tokenize } from './memory.ts';
 import { SchemaGraphManager } from './graph.ts';
-import { MoodStateMachine } from './mood.ts';
 import {
   DialecticalReflectionEngine,
   MockDialecticalLLM,
@@ -283,65 +282,33 @@ async function main(): Promise<void> {
     assert.equal(graph.summarize().length, communities.length);
   });
 
-  /* ---------------------------------------------------------------- */
-  section('[5] 心情状态机');
+  await test('PPR 让隔一层的图式也拿到分数', () => {
+    const g = new SchemaGraphManager({ assimilateThreshold: 0.95, overlapThreshold: 0.95, communityThreshold: 0.2 });
+    const a = g.ingest('部署区域 华东机房 迁移');
+    g.ingest('华东机房 迁移窗口 每周三');
+    const c = g.ingest('迁移窗口 每周三 变更审批');
 
-  await test('表扬/侮辱改变好感度', () => {
-    const mood = new MoodStateMachine({ energy: 70, favorability: 0, now: () => 0 });
-    const afterPraise = mood.apply('praise', 2);
-    assert.equal(afterPraise.favorability, 24);
-    assert.equal(afterPraise.mood, '平静', '24 未到 25，仍为平静');
-
-    const afterInsult = mood.apply('insult');
-    assert.equal(afterInsult.favorability, 6);
+    const ranks = g.personalizedPageRank([a.schemaId]);
+    assert.equal(ranks.size, 3, '三个图式都应参与传播');
+    assert.ok((ranks.get(c.schemaId) ?? 0) > 0, '隔一层的图式也应获得非零分数');
+    assert.ok((ranks.get(a.schemaId) ?? 0) > 0, '种子自身应有分数');
   });
 
-  await test('状态标签带迟滞，不在阈值附近抖动', () => {
-    const mood = new MoodStateMachine({ energy: 70, favorability: 0, now: () => 0 });
-    mood.apply('praise', 2); // +24
-    mood.apply('praise', 1); // +36 → 愉悦
-    assert.equal(mood.mood, '愉悦');
-
-    mood.apply('insult', 2); // -36 → 0
-    assert.equal(mood.mood, '平静');
-
-    mood.apply('insult', 1); // -18，高于 -20，仍是平静
-    assert.equal(mood.mood, '平静', '未到 -20 不进入戒备');
-
-    mood.apply('insult', 1); // -36 → 戒备
-    assert.equal(mood.mood, '戒备');
-
-    mood.apply('insult', 2); // -72 → 敌意
-    assert.equal(mood.mood, '敌意');
+  await test('顺应时记录连接理由', () => {
+    const g = new SchemaGraphManager({ assimilateThreshold: 0.95, overlapThreshold: 0.95 });
+    g.ingest('部署区域 华东机房 迁移');
+    const second = g.ingest('华东机房 迁移窗口 每周三');
+    assert.ok(second.linkedBy !== undefined, '应记录 linkedBy');
+    assert.ok((second.linkedBy?.terms.length ?? 0) > 0, '应带出共享词');
   });
 
-  await test('精力随时间流失，耗尽后进入疲惫', () => {
-    const mood = new MoodStateMachine({
-      energy: 70,
-      favorability: 0,
-      now: () => 0,
-      energyDrainPerMinute: 6,
-    });
-    assert.equal(mood.mood, '平静');
-    mood.tick(10 * 60_000); // 10 分钟 × 6 = -60
-    assert.equal(mood.energy, 10);
-    assert.equal(mood.mood, '疲惫');
+  await test('纯虚词 bigram 被过滤，实词组合保留', () => {
+    const noise = tokenize('的是 了的');
+    assert.equal(noise.size, 0, '纯虚词不应产生 token');
 
-    mood.apply('rest', 3); // +42
-    assert.equal(mood.energy, 52);
-    assert.equal(mood.mood, '平静', '回到 25 以上应退出疲惫');
-  });
-
-  await test('状态条格式稳定', () => {
-    const mood = new MoodStateMachine({ energy: 72, favorability: 18, now: () => 0 });
-    const bar = mood.statusBar();
-    assert.match(
-      bar,
-      /^\[能量 [█░]{10} \d+%\] \[好感 [█░]{10} [+-]?\d+\] 状态:(兴奋|愉悦|平静|戒备|敌意|疲惫)$/,
-    );
-    assert.ok(bar.includes('能量'));
-    assert.ok(bar.includes('好感'));
-    assert.ok(bar.includes('状态:'));
+    const kept = tokenize('在华东机房');
+    assert.ok(kept.has('在华'), '含实词的 bigram 必须保留');
+    assert.ok(kept.has('华东'), '实词 bigram 必须保留');
   });
 
   /* ---------------------------------------------------------------- */
@@ -358,6 +325,30 @@ async function main(): Promise<void> {
     assert.equal(parsed.length, 2);
     assert.equal(parsed[0]?.description, '前提未验证');
     assert.equal(parsed[1]?.evidence, '样本只有一次');
+  });
+
+  await test('归档后不进 strict，但历史仍可查', () => {
+    const store = new TemporalMemoryStore({ now: () => 10_000 });
+    const fact = store.ingest({ content: '临时约定：周五发版', subject: '发版', validFrom: 1000 });
+
+    store.setArchived(fact.id, true);
+    assert.equal(store.recall('发版', { mode: 'strict' }).length, 0, '归档后不应出现在 strict');
+    assert.equal(store.recall('发版', { mode: 'historical', validTime: 5000 }).length, 1, '历史仍可查');
+    assert.equal(store.stats().archived, 1);
+
+    store.setArchived(fact.id, false);
+    assert.equal(store.recall('发版', { mode: 'strict' }).length, 1, '取消归档后恢复');
+  });
+
+  await test('autoArchive 只归档长期未访问的记忆', () => {
+    let now = 1_000;
+    const store = new TemporalMemoryStore({ now: () => now });
+    const old = store.ingest({ content: '很久以前的约定', subject: '旧' });
+
+    now = 200 * 86_400_000; // 把时钟推到 200 天后
+    const archived = store.autoArchive({ idleDays: 180 });
+    assert.ok(archived.includes(old.id), '超过 180 天未访问应被归档');
+    assert.equal(store.stats().archived, 1);
   });
 
   await test('三次调用严格按 thesis → antithesis → synthesis 串行', async () => {

@@ -8,7 +8,7 @@
  *   cognition_remember  写入一条双时态记忆（可指定 validFrom / supersedes）
  *   cognition_recall    按 strict / historical / belief 三种时间口径召回
  *   cognition_reflect   三段式辩证反思（thesis → antithesis → synthesis，串行三次）
- *   cognition_state     心情状态条 + 记忆与图式网络统计
+ *   cognition_state     记忆与图式网络统计
  */
 
 import { randomUUID } from 'node:crypto';
@@ -16,11 +16,10 @@ import { randomUUID } from 'node:crypto';
 import { TemporalMemoryStore } from './memory.ts';
 import type { TemporalFact } from './memory.ts';
 import { SchemaGraphManager, expandBySchema } from './graph.ts';
-import { MoodStateMachine } from './mood.ts';
-import type { MoodEvent, MoodLabel, MoodState } from './mood.ts';
 import { JsonStateStore } from './persist.ts';
-import { buildDetail } from './views.ts';
+import { buildDetail, buildCoreDigest } from './views.ts';
 import { DialecticalReflectionEngine, MockDialecticalLLM, ReflectionWorker } from './reflection.ts';
+import { asRecord, assertObjectSchema, messageOf, optionalString, pick, requireString, textOutput } from './util.ts';
 import { ProactiveGate } from './proactive.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
 import type { LongTaskStatus } from './task_manager.ts';
@@ -70,11 +69,21 @@ interface DefaultModelHost {
   currentSelection?(): ModelSelectionLike;
 }
 
+/** 宿主 systemPrompt 服务的最小可用面（只用到 section）。 */
+interface PromptSectionLike {
+  name: string;
+  order: number;
+  text: string | ((context: unknown) => string);
+}
+
+interface SystemPromptHost {
+  section(section: PromptSectionLike): () => void;
+}
+
 /** 落盘的整体状态。 */
 interface PersistedState {
   version: number;
   facts: TemporalFact[];
-  mood: MoodState;
 }
 
 interface PluginLogger {
@@ -87,6 +96,8 @@ interface PluginContext {
   tools?: ToolHost;
   get?(name: string): unknown;
   effect?(callback: () => () => void): unknown;
+  /** 事件订阅（agent/pre-step 等）。 */
+  on?(event: string, listener: (...args: any[]) => unknown): () => void;
   logger?: PluginLogger;
 }
 
@@ -98,9 +109,6 @@ export interface CognitionConfig {
   overlapThreshold?: number;
   communityThreshold?: number;
   maxClusterSize?: number;
-  energyDrainPerMinute?: number;
-  initialEnergy?: number;
-  initialFavorability?: number;
   /** 多久没更新就算需要催办（小时）。 */
   heartbeatHours?: number;
   /** 后台巡视间隔（小时）。 */
@@ -111,7 +119,7 @@ export interface CognitionConfig {
   recordOnly?: boolean;
   /** tasks.json 路径，默认 <cwd>/tasks.json。 */
   tasksFile?: string;
-  /** 记忆与心情的落盘路径，默认 <cwd>/cognition-state.json。 */
+  /** 记忆的落盘路径，默认 <cwd>/cognition-state.json。 */
   stateFile?: string;
   /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
   lockToken?: string;
@@ -138,15 +146,6 @@ export const name = 'cognition-engine';
 export const inject = ['tools'];
 
 const HOUR_MS = 60 * 60 * 1000;
-const MOOD_EVENTS: readonly MoodEvent[] = [
-  'praise',
-  'insult',
-  'success',
-  'failure',
-  'conflict',
-  'rest',
-  'ignore',
-];
 
 function numberOr(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -161,9 +160,6 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     overlapThreshold: numberOr(config.overlapThreshold, 0.42),
     communityThreshold: numberOr(config.communityThreshold, 0.3),
     maxClusterSize: Math.max(1, Math.round(numberOr(config.maxClusterSize, 8))),
-    energyDrainPerMinute: numberOr(config.energyDrainPerMinute, 1.5),
-    initialEnergy: numberOr(config.initialEnergy, 70),
-    initialFavorability: numberOr(config.initialFavorability, 0),
     heartbeatHours: Math.max(0.01, numberOr(config.heartbeatHours, 6)),
     patrolIntervalHours: Math.max(0.01, numberOr(config.patrolIntervalHours, 3)),
     idleThresholdMinutes: Math.max(0.1, numberOr(config.idleThresholdMinutes, 5)),
@@ -192,40 +188,6 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
   };
 }
 
-function asRecord(args: unknown): Record<string, unknown> {
-  return typeof args === 'object' && args !== null ? (args as Record<string, unknown>) : {};
-}
-
-function requireString(args: Record<string, unknown>, key: string): string {
-  const value = args[key];
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`${key} 必须是非空字符串`);
-  }
-  return value;
-}
-
-function optionalString(args: Record<string, unknown>, key: string): string | undefined {
-  const value = args[key];
-  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
-}
-
-function optionalNumber(args: Record<string, unknown>, key: string): number | undefined {
-  const value = args[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-/** 统一把 unknown 异常转成一行文本。 */
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-const textOutput = {
-  schema: { type: 'string' as const },
-  render: (_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> => [
-    { type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) },
-  ],
-};
-
 /**
  * 反思回写记忆（Generative Agents 的闭环）：把 synthesis 存成一条可召回的记忆，
  * 并让结论也进图式网络，这样以后 expand 能把相关结论带出来。
@@ -248,33 +210,6 @@ export function persistReflection(
   return fact;
 }
 
-/**
- * 注册期自检：`parameters` 必须是以 `type: 'object'` 为根的 JSON Schema。
- *
- * 宿主会把 parameters 原样透传给模型 API，不校验根形状；一旦写成裸属性表，
- * 每个请求都会被判为 `got 'type: null'` 而整轮失败，且报错不指向具体插件。
- * 这里提前抛错，把故障限制在插件加载阶段。
- */
-function assertObjectSchema(name: string, parameters: unknown): void {
-  if (parameters === undefined) return;
-  const root = parameters as { type?: unknown; properties?: unknown };
-  if (root.type !== 'object' || typeof root.properties !== 'object' || root.properties === null) {
-    throw new Error(
-      `cognition-engine: 工具 ${name} 的 parameters 必须是 { type: 'object', properties: {...}, required: [...] }，裸属性表会被模型 API 拒绝`,
-    );
-  }
-}
-
-/** 只取调用方真正给的字段，避免一长串 `...(x === undefined ? {} : { x })`。 */
-function pick(source: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const key of keys) {
-    const value = source[key];
-    if (value !== undefined) out[key] = value;
-  }
-  return out;
-}
-
 type IngestInputLike = Parameters<TemporalMemoryStore['ingest']>[0];
 type RecallOptionsLike = Parameters<TemporalMemoryStore['recall']>[1];
 
@@ -292,18 +227,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     communityThreshold: config.communityThreshold,
     maxClusterSize: config.maxClusterSize,
   });
-  const mood = new MoodStateMachine({
-    energy: config.initialEnergy,
-    favorability: config.initialFavorability,
-    energyDrainPerMinute: config.energyDrainPerMinute,
-  });
-  // —— 落盘：记忆 + 心情 ——
+  // —— 落盘：记忆 ——
   const stateStore = new JsonStateStore<PersistedState>({
     ...(config.stateFile === undefined ? {} : { filePath: config.stateFile }),
-    serialize: () => ({ version: 1, facts: memory.serialize(), mood: mood.serialize() }),
+    serialize: () => ({ version: 1, facts: memory.serialize() }),
     restore: (data) => {
       if (Array.isArray(data.facts)) memory.restore(data.facts);
-      if (data.mood !== undefined) mood.restore(data.mood);
     },
   });
   try {
@@ -343,6 +272,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       provider,
       model,
       maxTokens: 800,
+      // 单段最多等 90 秒，避免模型卡住把整个反思流程挂死
+      signal: AbortSignal.timeout(90_000),
       messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
     })) {
       if (chunk.type === 'text-delta' && typeof chunk.text === 'string') text += chunk.text;
@@ -381,14 +312,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
   /** 页面可视化用的快照（纯 JSON，客户端每 2 秒拉一次）。 */
   const snapshot = (): Record<string, unknown> => {
-    const current = mood.snapshot();
     return {
-      mood: {
-        energy: current.energy,
-        favorability: current.favorability,
-        label: current.mood,
-        bar: current.bar,
-      },
       memory: memory.stats(),
       /** 标记为 test 的事实条数：页面上用来提醒「这些不是真事」。 */
       samples: memory.all().filter((fact) => fact.source === 'test').length,
@@ -417,7 +341,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   };
 
   /** 面板展开时按需拉取的明细（不走模型上下文，只给页面看）。 */
-  const detail = (): Record<string, unknown> => buildDetail({ memory, graph, mood, taskManager });
+  const detail = (): Record<string, unknown> => buildDetail({ memory, graph, taskManager });
 
   // 宿主 → 页面 的数据桥：Client 半区 fetch('/cognition-engine/state')
   // 注意：不能放在 /api 前缀下——那条前缀归 API 网关所有，会先被它 401 掉。
@@ -448,28 +372,35 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     ): void => {
       const method = options.method ?? 'GET';
       const requireAuth = options.requireAuth === true;
-      disposers.push(
-        webServer.register({
-          kind: 'exact',
-          path,
-          handler: (request, response) => {
-            try {
-              const req = request as { method?: string; url?: string };
-              if ((req.method ?? 'GET').toUpperCase() !== method) {
-                send(response, 405, { error: 'method not allowed' });
-                return;
+      try {
+        disposers.push(
+          webServer.register({
+            kind: 'exact',
+            path,
+            handler: (request, response) => {
+              try {
+                const req = request as { method?: string; url?: string };
+                if ((req.method ?? 'GET').toUpperCase() !== method) {
+                  send(response, 405, { error: 'method not allowed' });
+                  return;
+                }
+                if (requireAuth && !authorized(request)) {
+                  send(response, 401, { error: 'unauthorized' });
+                  return;
+                }
+                send(response, 200, produce(new URL(req.url ?? path, 'http://local')));
+              } catch (error) {
+                send(response, 500, { error: messageOf(error) });
               }
-              if (requireAuth && !authorized(request)) {
-                send(response, 401, { error: 'unauthorized' });
-                return;
-              }
-              send(response, 200, produce(new URL(req.url ?? path, 'http://local')));
-            } catch (error) {
-              send(response, 500, { error: messageOf(error) });
-            }
-          },
-        }),
-      );
+            },
+          }),
+        );
+      } catch (error) {
+        // 路由被别的插件占用：跳过，不能把插件加载搞挂
+        ctx.logger?.warn?.(
+          `cognition-engine: 路由 ${path} 注册失败（可能与其他插件冲突）: ${messageOf(error)}`,
+        );
+      }
     };
 
     route('/cognition-engine/state', () => snapshot());
@@ -478,23 +409,20 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     /** 读 ?name=true 这类布尔开关。 */
     const flag = (url: URL, name: string): boolean => url.searchParams.get(name) === 'true';
 
-    // 清空：scope = memory / mood / all
+    // 清空：scope = memory / all
     route(
       '/cognition-engine/clear',
       (url) => {
         const scope = url.searchParams.get('scope') ?? 'memory';
-        if (scope !== 'memory' && scope !== 'mood' && scope !== 'all') {
-          throw new Error('scope 只能是 memory / mood / all');
+        if (scope !== 'memory' && scope !== 'all') {
+          throw new Error('scope 只能是 memory / all');
         }
         let removed = 0;
-        if (scope !== 'mood') {
-          removed = memory.all().length;
-          for (const fact of memory.all()) memory.remove(fact.id);
-          graph.reset();
-        }
-        if (scope !== 'memory') mood.reset();
+        removed = memory.all().length;
+        for (const fact of memory.all()) memory.remove(fact.id);
+        graph.reset();
         void stateStore.flush();
-        return { cleared: scope, removed, memory: memory.stats() };
+        return { cleared: 'memory', removed, memory: memory.stats() };
       },
       { method: 'POST', requireAuth: true },
     );
@@ -524,34 +452,46 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const remember = {
     name: 'cognition_remember',
     description:
-      '写入一条双时态记忆。用 supersedes 取代旧事实：旧事实闭合 validTo/supersededAt，保留 id 与 hash，仍可历史召回。返回 id、hash 与残留冲突。',
+      '写入双时态记忆；supersedes 取代旧事实（保留 id/hash，可历史召回）。返回 id、hash、残留冲突。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       required: ['text'],
       properties: {
         text: { type: 'string', description: '事实原文。' },
-        subject: { type: 'string', description: '冲突检测的主题键，省略取冒号前短语。' },
+        subject: { type: 'string', description: '主题键，默认取冒号前短语。' },
         tags: { type: 'array', items: { type: 'string' }, description: '标签。' },
         importance: { type: 'number', description: '重要度 0..1。' },
         validFrom: { type: 'number', description: '开始为真的 Unix 毫秒。' },
         supersedes: { type: 'string', description: '被取代的旧事实 id。' },
         source: {
           type: 'string',
-          description: '来源：user / agent（默认）/ test（测试数据）/ imported。',
+          description: '来源：user/agent/test/imported，默认 agent。',
+        },
+        scope: {
+          type: 'string',
+          enum: ['global', 'workspace', 'session'],
+          description: '作用域，默认 global；session 自动绑定当前会话。',
         },
       },
     },
     output: textOutput,
-    async execute(args: unknown): Promise<string> {
+    async execute(args: unknown, exec?: unknown): Promise<string> {
       const input = asRecord(args);
       const text = requireString(input, 'text');
+      const scopeValue = (optionalString(input, 'scope') ?? 'global') as 'global' | 'workspace' | 'session';
+      const agentId = (exec as { agent?: { id?: string } } | undefined)?.agent?.id;
       const fact = memory.ingest({
         content: text,
         source: optionalString(input, 'source') ?? 'agent',
         ...pick(input, ['subject', 'tags', 'importance', 'validFrom', 'supersedes']),
+        scope: scopeValue,
+        ...(scopeValue === 'session' && agentId !== undefined ? { sessionId: agentId } : {}),
       } as IngestInputLike);
+
       graph.ingest(text);
+      // 重建多级图式层次（CAM 的 run_hierarchy）；图很小，成本可忽略
+      graph.buildHierarchy();
       touch();
 
       return JSON.stringify({
@@ -573,7 +513,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const recall = {
     name: 'cognition_recall',
     description:
-      '按时间口径召回：strict 当前真值 / historical 指定时刻为真（含已取代）/ belief 当时已知。render 走 Inline&Spill，expand 按图式带出关联。',
+      '召回记忆。strict 当前真值 / historical 该时刻为真 / belief 当时已知 / associative 联想（不过滤时间）。render 走 Inline&Spill，expand 按图式带关联。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -582,38 +522,60 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         query: { type: 'string', description: '检索语句。' },
         mode: {
           type: 'string',
-          enum: ['strict', 'historical', 'belief'],
+          enum: ['strict', 'historical', 'belief', 'associative'],
           description: '口径，默认 strict。',
         },
-        validTime: { type: 'number', description: 'historical 的「那时」，Unix 毫秒。' },
-        recordedTime: { type: 'number', description: 'belief 的「那时」，Unix 毫秒。' },
-        limit: { type: 'number', description: '条数上限，默认 5。' },
+        validTime: { type: 'number', description: 'historical 的时刻，毫秒。' },
+        recordedTime: { type: 'number', description: 'belief 的时刻，毫秒。' },
+        limit: { type: 'number', description: '条数，默认 5。' },
         subject: { type: 'string', description: '限定主题。' },
-        tags: { type: 'array', items: { type: 'string' }, description: '限定标签（全含）。' },
-        render: { type: 'boolean', description: 'Inline&Spill：近期给正文，久远只给 ID。' },
+        tags: { type: 'array', items: { type: 'string' }, description: '标签（全含）。' },
+        render: { type: 'boolean', description: '近期给正文，久远只给 ID。' },
         inlineChars: { type: 'number', description: 'render 单条上限，默认 240。' },
-        expand: { type: 'boolean', description: '按图式带出同簇其他记忆（related）。' },
+        expand: { type: 'boolean', description: '带出同图式关联。' },
+        scope: {
+          type: 'string',
+          enum: ['all', 'global', 'workspace', 'session'],
+          description: '作用域，默认 all。',
+        },
       },
     },
     output: textOutput,
-    async execute(args: unknown): Promise<string> {
+    async execute(args: unknown, exec?: unknown): Promise<string> {
       const input = asRecord(args);
       const query = requireString(input, 'query');
       const rawMode = optionalString(input, 'mode') ?? 'strict';
-      if (rawMode !== 'strict' && rawMode !== 'historical' && rawMode !== 'belief') {
-        throw new Error('mode 只能是 strict / historical / belief');
+      if (rawMode !== 'strict' && rawMode !== 'historical' && rawMode !== 'belief' && rawMode !== 'associative') {
+        throw new Error('mode 只能是 strict / historical / belief / associative');
       }
+      const agentId = (exec as { agent?: { id?: string } } | undefined)?.agent?.id;
       const options = {
         mode: rawMode as RecallMode,
-        ...pick(input, ['validTime', 'recordedTime', 'limit', 'subject', 'tags', 'inlineChars']),
+        ...pick(input, ['validTime', 'recordedTime', 'limit', 'subject', 'tags', 'inlineChars', 'scope']),
+        ...(agentId === undefined ? {} : { sessionId: agentId }),
       } as RecallOptionsLike;
 
       if (input.render === true) return JSON.stringify(memory.render(query, options));
       const hits = memory.recall(query, options);
 
+      // 联想模式用 Personalized PageRank 重排（HippoRAG，arXiv:2405.14831）：
+      // 把命中图式当种子，让相关度沿图传播，隔一层但相关的记忆也能浮上来。
+      if (rawMode === 'associative' && hits.length > 1) {
+        const seeds = [...new Set(hits.flatMap((hit) => graph.schemasForText(hit.fact.content)))];
+        const ranks = graph.personalizedPageRank(seeds);
+        if (ranks.size > 0) {
+          const boost = (content: string): number => {
+            const ids = graph.schemasForText(content);
+            return ids.reduce((max, id) => Math.max(max, ranks.get(id) ?? 0), 0);
+          };
+          hits.sort((a, b) => b.score + 2 * boost(b.fact.content) - (a.score + 2 * boost(a.fact.content)));
+        }
+      }
+
       // 图式接进召回：把命中项所在图式的其他成员一并带出（GraphRAG 的社区扩展思路）
+      // 联想模式自动带上图式扩展（LongMemory 的 associative recall 会混合图关联信号）
       const related =
-        input.expand === true
+        input.expand === true || rawMode === 'associative'
           ? expandBySchema(memory, graph, hits.map((hit) => hit.fact.content))
           : [];
 
@@ -675,43 +637,20 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
   const state = {
     name: 'cognition_state',
-    description:
-      '查看认知引擎状态：心情状态条、记忆库统计、图式网络统计。可用 event 施加一次心情事件。',
+    description: '查看认知引擎状态：记忆库统计、图式网络统计、待办与跨会话摘要。',
     parameters: {
       type: 'object',
       additionalProperties: false,
-      properties: {
-        event: {
-          type: 'string',
-          enum: [...MOOD_EVENTS],
-          description: '施加一次心情事件。',
-        },
-        intensity: { type: 'number', description: '力度倍数，默认 1。' },
-      },
+      properties: {},
     },
     output: textOutput,
-    async execute(args: unknown): Promise<string> {
-      const input = asRecord(args);
-      const event = optionalString(input, 'event');
-      if (event !== undefined) {
-        if (!MOOD_EVENTS.includes(event as MoodEvent)) {
-          throw new Error(`event 只能是 ${MOOD_EVENTS.join(' / ')}`);
-        }
-        mood.apply(event as MoodEvent, optionalNumber(input, 'intensity') ?? 1);
-        touch();
-      }
-      const current = mood.snapshot();
+    async execute(): Promise<string> {
       return JSON.stringify(
         {
-          mood: {
-            bar: current.bar,
-            label: current.mood as MoodLabel,
-            energy: current.energy,
-            favorability: current.favorability,
-          },
           memory: memory.stats(),
-          graph: graph.stats(),
-          communities: graph.summarize(),
+          graph: { ...graph.stats(), levels: graph.hierarchy().length },
+          /** 跨会话核心记忆块（≤400 字）。 */
+          digest: buildCoreDigest(memory),
           tasks: {
             pending: taskManager.get_pending_tasks().length,
             due: taskManager.check_due_tasks().length,
@@ -755,10 +694,29 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     },
   };
 
+  const cognitionContext = {
+    name: 'cognition_context',
+    description: '读取跨会话核心记忆（≤400 字的摘要）。新会话开头先调它，能想起之前定下的事。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+    output: textOutput,
+    async execute(): Promise<string> {
+      const digest = buildCoreDigest(memory);
+      return JSON.stringify({
+        digest,
+        empty: digest.length === 0,
+        total: memory.stats().total,
+      });
+    },
+  };
+
   const manageLongTask = {
     name: 'manage_long_task',
     description:
-      '长程任务台账（tasks.json 落盘，重启恢复）。create 建任务 / update 改状态加线索 / list 查看 / due 查超时未更新 / delete 删除。后台每几小时自动巡视并复盘。',
+      '长程任务台账（落盘、重启恢复）。create / update / list / due / delete；后台定时巡视复盘。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -831,9 +789,40 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     },
   };
 
-  for (const definition of [remember, recall, forget, reflect, state, manageLongTask]) {
-    assertObjectSchema(definition.name, definition.parameters);
-    disposers.push(tools.register(definition));
+  for (const definition of [remember, recall, forget, reflect, state, cognitionContext, manageLongTask]) {
+    try {
+      assertObjectSchema(definition.name, definition.parameters);
+      disposers.push(tools.register(definition));
+    } catch (error) {
+      // 与其他插件重名、或宿主改了 schema 约定：只跳过这一个工具，其余照常注册
+      ctx.logger?.warn?.(
+        `cognition-engine: 工具 ${definition.name} 注册失败（可能与其他插件重名）: ${messageOf(error)}`,
+      );
+    }
+  }
+
+  /**
+   * P0：把跨会话核心记忆挂进系统提示，只在真的有记忆时才产出文本。
+   *
+   * 每次装配都会调用 text()，内容永远是最新的；没有记忆时返回空串——不占 token。
+   */
+  const systemPrompt = ctx.get?.('systemPrompt') as SystemPromptHost | undefined;
+  if (systemPrompt !== undefined && typeof systemPrompt.section === 'function') {
+    try {
+      disposers.push(
+        systemPrompt.section({
+          name: 'cognition-engine-memory',
+          order: 900,
+          text: () => {
+            const digest = buildCoreDigest(memory);
+            if (digest.length === 0) return '';
+            return `${digest}\n（需要细节时调用 cognition_recall。）`;
+          },
+        }),
+      );
+    } catch (error) {
+      ctx.logger?.warn?.(`cognition-engine: 系统提示段注册失败: ${messageOf(error)}`);
+    }
   }
 
   /**
@@ -843,6 +832,14 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const patrol = async (): Promise<void> => {
     try {
       await tasksReady;
+
+      // P1 记忆生命周期：长期没被想起的记忆退出 strict 召回（不删数据）
+      const archived = memory.autoArchive({ idleDays: 180, maxActivation: 1 });
+      if (archived.length > 0) {
+        ctx.logger?.info?.(`cognition-engine: 已归档 ${archived.length} 条长期未访问的记忆`);
+        touch();
+      }
+
       const due = taskManager.check_due_tasks();
       const target = due[0];
       if (target === undefined) return;

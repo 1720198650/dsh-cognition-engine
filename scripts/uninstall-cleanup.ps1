@@ -1,0 +1,47 @@
+﻿# cognition-engine uninstall cleanup
+# Removes the plugin's data files and the AGENTS.md section it added.
+# The plugin itself must still be removed through plugin_manager / dsh plugin.
+
+param(
+    [string]$Workspace = 'D:\dshgz'
+)
+
+$ErrorActionPreference = 'Stop'
+$pluginRoot = Split-Path -Parent $PSScriptRoot
+
+# 1) data files written by the plugin
+$dataFiles = @(
+    'cognition-state.json',
+    'cognition-state.json.tmp',
+    'tasks.json',
+    'tasks.json.tmp',
+    'inject-probe.log'
+)
+foreach ($name in $dataFiles) {
+    $path = Join-Path $pluginRoot $name
+    if (Test-Path $path) {
+        Remove-Item $path -Force
+        Write-Host "[removed] $path"
+    }
+}
+
+# 2) the AGENTS.md section that points at cognition_context
+$agents = Join-Path $Workspace 'AGENTS.md'
+if (Test-Path $agents) {
+    $text = [System.IO.File]::ReadAllText($agents, [System.Text.Encoding]::UTF8)
+    $marker = '## 九、认知引擎'
+    $index = $text.IndexOf($marker)
+    if ($index -ge 0) {
+        $trimmed = $text.Substring(0, $index).TrimEnd() + "`n"
+        [System.IO.File]::WriteAllText($agents, $trimmed, (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host "[removed] cognition section from $agents"
+    } else {
+        Write-Host "[skip] no cognition section in $agents"
+    }
+}
+
+# 3) browser token
+Write-Host ''
+Write-Host 'Manual step left:' -ForegroundColor Yellow
+Write-Host '  In the DSH page console run: localStorage.removeItem("cognition-token")'
+Write-Host '  Then remove the bundle: plugin_manager remove_bundle @local/cognition-engine'

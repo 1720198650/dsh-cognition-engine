@@ -16,13 +16,12 @@
  * 本文件不注册任何工具，不进入模型上下文，运行它本身不消耗 token。
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, rmSync } from 'node:fs';
 import { rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { TemporalMemoryStore } from './memory.ts';
 import { SchemaGraphManager, expandBySchema } from './graph.ts';
-import { MoodStateMachine } from './mood.ts';
 import { DialecticalReflectionEngine, MockDialecticalLLM, extractContradictions } from './reflection.ts';
 import { ProactiveGate } from './proactive.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
@@ -179,22 +178,6 @@ const checkers: Record<string, (params: Params, expect: Params) => Promise<void>
     if (e.draftUndefined) equal(first.draft, undefined, '第一次判断不应有草稿');
     const second = gate.judge(first.observationId);
     equal(second.state, e.judge, '第二次判断结果不符');
-  },
-
-  'mood.explain': (p, e) => {
-    const mood = new MoodStateMachine({ energy: 70, favorability: 0, now: () => 0 });
-    for (const [event, intensity] of p.events as Array<[never, number]>) {
-      mood.apply(event, intensity ?? 1);
-    }
-    const reading = mood.explain();
-    if (e.consistent) {
-      equal(reading.energy.value, mood.energy, '解释里的能量应等于当前能量');
-      equal(reading.favorability.value, mood.favorability, '解释里的好感应等于当前好感');
-    }
-    if (e.reasonIncludes !== undefined) {
-      assert(reading.energy.reason.includes(e.reasonIncludes), `理由应包含「${e.reasonIncludes}」`);
-    }
-    if (e.timeDriven !== undefined) equal(reading.timeDriven, e.timeDriven, '时间推进标记不符');
   },
 
   'recall.expand': (p, e) => {
@@ -374,6 +357,121 @@ function checkPackaging(): PackCheck[] {
   return checks;
 }
 
+/* ---------------- 兼容性自检 ---------------- */
+
+/** 模拟三类真实冲突：工具重名、没有 webServer、没有事件与 effect 能力。 */
+function checkCompatibility(): PackCheck[] {
+  const checks: PackCheck[] = [];
+  const tasks = resolve(ROOT, '.dsh-compat-tasks.json');
+  const state = resolve(ROOT, '.dsh-compat-state.json');
+
+  // 1) 与其他插件工具重名：注册抛错时，其余工具仍应注册成功
+  const registered: string[] = [];
+  const flakyTools = {
+    register: (definition: { name: string }) => {
+      if (definition.name === 'cognition_state') throw new Error('duplicate tool name');
+      registered.push(definition.name);
+      return () => {};
+    },
+  };
+  let threw = false;
+  try {
+    const dispose = apply(
+      { get: (key: string) => (key === 'tools' ? flakyTools : undefined), logger: {} } as never,
+      { tasksFile: tasks, stateFile: state },
+    );
+    if (typeof dispose === 'function') dispose();
+  } catch {
+    threw = true;
+  }
+  checks.push({
+    name: '单个工具重名不会拖垮插件',
+    ok: !threw && registered.length === 6,
+    detail: `已注册 ${registered.length}/6 个其余工具`,
+  });
+
+  // 2) 宿主没有 webServer：不能抛错
+  let threwNoWeb = false;
+  try {
+    const dispose = apply(
+      { get: (key: string) => (key === 'tools' ? { register: () => () => {} } : undefined), logger: {} } as never,
+      { tasksFile: tasks, stateFile: state },
+    );
+    if (typeof dispose === 'function') dispose();
+  } catch {
+    threwNoWeb = true;
+  }
+  checks.push({ name: '缺少 webServer 时不报错', ok: !threwNoWeb });
+
+  // 3) 宿主没有事件与 effect 能力：不能抛错
+  let threwNoEvents = false;
+  try {
+    const dispose = apply(
+      { get: (key: string) => (key === 'tools' ? { register: () => () => {} } : undefined), logger: {} } as never,
+      { tasksFile: tasks, stateFile: state },
+    );
+    if (typeof dispose === 'function') dispose();
+  } catch {
+    threwNoEvents = true;
+  }
+  checks.push({ name: '缺少事件/effect 能力时不报错', ok: !threwNoEvents });
+
+  // 4) 落盘文件损坏：备份后空库启动，不能抛错
+  let threwCorrupt = false;
+  const corrupt = resolve(ROOT, '.dsh-compat-corrupt.json');
+  try {
+    writeFileSync(corrupt, '{ 这不是合法 JSON', 'utf8');
+    const dispose = apply(
+      { get: (key: string) => (key === 'tools' ? { register: () => () => {} } : undefined), logger: {} } as never,
+      { tasksFile: tasks, stateFile: corrupt },
+    );
+    if (typeof dispose === 'function') dispose();
+  } catch {
+    threwCorrupt = true;
+  } finally {
+    try {
+      rmSync(corrupt, { force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+  checks.push({ name: '落盘文件损坏时仍能启动', ok: !threwCorrupt });
+
+  // 5) systemPrompt.section 抛错（例如与其他插件的段名冲突）：不能拖垮加载
+  let threwPrompt = false;
+  let promptAttempts = 0;
+  try {
+    const dispose = apply(
+      {
+        get: (key: string) => {
+          if (key === 'tools') return { register: () => () => {} };
+          if (key === 'systemPrompt') {
+            return {
+              section: () => {
+                promptAttempts += 1;
+                throw new Error('duplicate section name');
+              },
+            };
+          }
+          return undefined;
+        },
+        logger: {},
+      } as never,
+      { tasksFile: tasks, stateFile: state },
+    );
+    if (typeof dispose === 'function') dispose();
+  } catch {
+    threwPrompt = true;
+  }
+  checks.push({
+    name: '系统提示段注册失败时不拖垮插件',
+    ok: !threwPrompt && promptAttempts === 1,
+    detail: `尝试注册 ${promptAttempts} 次`,
+  });
+
+  return checks;
+}
+
 /* ---------------- 运行 ---------------- */
 
 interface CaseSpec {
@@ -485,6 +583,12 @@ for (const check of packaging) {
   console.log(`  ${check.ok ? '✓' : '✗'} ${check.name}${check.ok || check.detail === undefined ? '' : `（${check.detail}）`}`);
 }
 
+const compatibility = checkCompatibility();
+console.log('\n兼容性');
+for (const check of compatibility) {
+  console.log(`  ${check.ok ? '✓' : '✗'} ${check.name}${check.ok || check.detail === undefined ? '' : `（${check.detail}）`}`);
+}
+
 console.log('\n结果');
 console.log(`  功能 ${passed}/${results.length} 通过`);
 console.log(`  判分器自检 ${judgeHealthy ? '✓ 正常' : '✗ 失效（本该失败的用例却通过了）'}`);
@@ -496,7 +600,13 @@ if (previous === null) {
   for (const id of regressed) console.log(`    ▼ ${id}`);
 }
 
-const allPassed = passed === results.length && schemaOk && outputOk && judgeHealthy && packaging.every((check) => check.ok);
+const allPassed =
+  passed === results.length &&
+  schemaOk &&
+  outputOk &&
+  judgeHealthy &&
+  packaging.every((check) => check.ok) &&
+  compatibility.every((check) => check.ok);
 
 if (updateBaseline || previous === null) {
   const baseline: Baseline = {

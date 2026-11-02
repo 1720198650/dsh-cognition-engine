@@ -46,18 +46,22 @@ window.__ModuleLoader__.load({
         storage: '存储位置',
         clear: '清空',
         clearMemory: '清空记忆',
-        clearMood: '清空心情',
         clearAll: '清空全部',
-        realModel: '真模型',
+        realModel: '反思引擎',
+        realMode: '真实模型',
+        localMode: '本地模拟',
+        realModelHint: '默认本地模拟；切到真实模型会调用宿主配置的模型服务。',
+        lockHint: '开启后，读取记忆正文的接口需要口令；计数接口不受影响。',
         on: '开',
         off: '关',
         unavailable: '不可用（未找到模型）',
-        lock: '上锁',
-        locked: '已上锁',
-        unlocked: '未上锁',
-        unlock: '解锁',
-        token: '口令',
-        applyToken: '用口令',
+        lock: '记忆读取锁',
+        lockOn: '开启访问锁',
+        locked: '已开启',
+        unlocked: '已关闭',
+        unlock: '关闭访问锁',
+        token: '访问口令',
+        applyToken: '保存口令',
         cleared: '已清空',
       },
       en: {
@@ -94,18 +98,22 @@ window.__ModuleLoader__.load({
         storage: 'Storage',
         clear: 'Clear',
         clearMemory: 'Memory',
-        clearMood: 'Mood',
         clearAll: 'All',
-        realModel: 'Real model',
+        realModel: 'Reflection engine',
+        realMode: 'Real model',
+        localMode: 'Local simulation',
+        realModelHint: 'Local simulation by default; switching to a real model calls the host-configured model service.',
+        lockHint: 'When on, reading memory content requires a token; the counts endpoint stays public.',
         on: 'On',
         off: 'Off',
         unavailable: 'unavailable (no model)',
-        lock: 'Lock',
-        locked: 'Locked',
-        unlocked: 'Unlocked',
-        unlock: 'Unlock',
-        token: 'Token',
-        applyToken: 'Use token',
+        lock: 'Memory read lock',
+        lockOn: 'Turn lock on',
+        locked: 'On',
+        unlocked: 'Off',
+        unlock: 'Turn lock off',
+        token: 'Access token',
+        applyToken: 'Save token',
         cleared: 'Cleared',
       },
     };
@@ -255,7 +263,7 @@ window.__ModuleLoader__.load({
         const [state, setState] = React.useState(null);
         const [failure, setFailure] = React.useState(null);
         const [open, setOpen] = React.useState(false);
-        const [tab, setTab] = React.useState('mood');
+        const [tab, setTab] = React.useState('summary');
         const [detail, setDetail] = React.useState(null);
         const [detailError, setDetailError] = React.useState(null);
         const [tick, setTick] = React.useState(0);
@@ -350,7 +358,7 @@ window.__ModuleLoader__.load({
 
         const toggle = () => setOpen((value) => !value);
 
-        if (!state || !state.mood) {
+        if (!state) {
           return h(
             'div',
             { style: S.row, title: failure || '' },
@@ -359,15 +367,10 @@ window.__ModuleLoader__.load({
           );
         }
 
-        const mood = state.mood;
-        const energy = Number(mood.energy) || 0;
-        const favor = Number(mood.favorability) || 0;
         const memoryCount = (state.memory || {}).total || 0;
         const schemaCount = (state.graph || {}).schemas || 0;
         const taskCount = (state.tasks || {}).pending || 0;
         const samples = state.samples || 0;
-        const favorColor =
-          favor >= 0 ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)';
 
         const row = h(
           'div',
@@ -386,21 +389,6 @@ window.__ModuleLoader__.load({
             },
           },
           h('span', { style: { ...S.group, ...S.name } }, dict.name),
-          h(
-            'span',
-            { style: S.group },
-            h('span', null, dict.energy),
-            h(Bar, { ratio: energy / 100, color: 'var(--dsw-alias-brand-primary)', label: dict.energy }),
-            h('span', { style: S.value }, `${Math.round(energy)}%`),
-          ),
-          h(
-            'span',
-            { style: S.group },
-            h('span', null, dict.favor),
-            h(Bar, { ratio: (favor + 100) / 200, color: favorColor, label: dict.favor }),
-            h('span', { style: S.value }, favor >= 0 ? `+${Math.round(favor)}` : `${Math.round(favor)}`),
-          ),
-          h('span', { style: S.value }, mood.label),
           h('span', { style: S.sep }, '·'),
           h('span', null, `${dict.memory} ${memoryCount}`),
           h('span', { style: S.sep }, '·'),
@@ -420,7 +408,7 @@ window.__ModuleLoader__.load({
         if (!open) return h('div', { style: S.root }, row);
 
         const tabs = [
-          ['mood', dict.state],
+          ['summary', dict.state],
           ['tasks', `${dict.tasks} ${detail ? detail.tasks.length : ''}`.trim()],
           ['memories', `${dict.memories} ${detail ? detail.memories.length : ''}`.trim()],
           ['schemas', `${dict.schemas} ${detail ? detail.schemas.length : ''}`.trim()],
@@ -451,19 +439,20 @@ window.__ModuleLoader__.load({
               `${dict.storage}：${(state.storage || {}).state || '-'}`,
               h('span', null, `${dict.clear}：`),
               button(dict.clearMemory, () => post('/cognition-engine/clear?scope=memory')),
-              button(dict.clearMood, () => post('/cognition-engine/clear?scope=mood')),
               button(dict.clearAll, () => post('/cognition-engine/clear?scope=all')),
             ),
             section(
-              `${dict.realModel}：${model.enabled ? dict.on : dict.off}`,
+              `${dict.realModel}：${model.enabled ? dict.realMode : dict.localMode}`,
               h('span', null, model.available ? `${model.provider}/${model.model}` : dict.unavailable),
-              button(model.enabled ? dict.off : dict.on, () =>
-                post(`/cognition-engine/model?enabled=${model.enabled ? 'false' : 'true'}`),
+              button(
+                model.enabled ? `切换到${dict.localMode}` : `切换到${dict.realMode}`,
+                () => post(`/cognition-engine/model?enabled=${model.enabled ? 'false' : 'true'}`),
               ),
+              h('div', { style: S.explain }, dict.realModelHint),
             ),
             section(
               `${dict.lock}：${state.locked ? dict.locked : dict.unlocked}`,
-              button(state.locked ? dict.unlock : dict.lock, () =>
+              button(state.locked ? dict.unlock : dict.lockOn, () =>
                 post(`/cognition-engine/lock?enabled=${state.locked ? 'false' : 'true'}`),
               ),
               h('input', {
@@ -477,6 +466,7 @@ window.__ModuleLoader__.load({
                 setNotice('');
                 setTick((value) => value + 1);
               }),
+              h('div', { style: S.explain }, dict.lockHint),
             ),
             notice ? h('div', { style: S.explain }, notice) : null,
           );
@@ -484,28 +474,13 @@ window.__ModuleLoader__.load({
           body = h('div', { style: S.empty }, `${dict.noDetail} (${detailError})`);
         } else if (!detail) {
           body = h('div', { style: S.empty }, dict.loading);
-        } else if (tab === 'mood') {
-          const reading = (title, item) =>
-            h(
-              'div',
-              { key: title, style: S.item },
-              h('div', { style: S.itemTitle }, `${title} ${item.value}　${item.band}`),
-              h('div', { style: S.explain }, `${dict.why}：${item.reason}`),
-              h('div', { style: S.explain }, `${dict.means}：${item.meaning}`),
-            );
+        } else if (tab === 'summary') {
           body = h(
             'div',
             null,
-            reading(dict.energy, detail.mood.energy),
-            reading(dict.favor, detail.mood.favorability),
-            h(
-              'div',
-              { style: S.item },
-              h('div', { style: S.itemTitle }, `${dict.label}：${detail.mood.mood.label}`),
-              h('div', { style: S.explain }, `${dict.why}：${detail.mood.mood.reason}`),
-              h('div', { style: S.explain }, `${dict.means}：${detail.mood.mood.meaning}`),
-            ),
-            detail.mood.timeDriven ? null : h('div', { style: S.empty }, dict.noTime),
+            h('div', { style: S.item }, h('div', { style: S.itemTitle }, `${dict.memory} ${(detail.counts || {}).memories || 0}`)),
+            h('div', { style: S.item }, h('div', { style: S.itemTitle }, `${dict.schema} ${(detail.counts || {}).schemas || 0}`)),
+            h('div', { style: S.item }, h('div', { style: S.itemTitle }, `${dict.tasks} ${(detail.counts || {}).tasks || 0}`)),
           );
         } else if (tab === 'tasks') {
           body = renderList(detail.tasks, (task) => {
