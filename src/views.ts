@@ -41,7 +41,9 @@ export function buildCoreDigest(
     .map((fact) => {
       const ageDays = Math.max(0, now - fact.recordedAt) / 86_400_000;
       const freshness = 1 / (1 + ageDays / 30);
-      return { fact, score: fact.importance * 0.7 + freshness * 0.3 };
+      // 纠正记录是「经验教训」，跨会话价值最高，加权置顶（A-MEM 式的重要性分层）
+      const weight = fact.tags.includes('correction') ? 1.4 : 0.7;
+      return { fact, score: fact.importance * weight + freshness * 0.3 };
     })
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);

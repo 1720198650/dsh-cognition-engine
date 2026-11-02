@@ -54,6 +54,11 @@ export function createTools(deps: ToolDeps) {
           type: 'string',
           description: '来源：user/agent/test/imported，默认 agent。',
         },
+        kind: {
+          type: 'string',
+          enum: ['fact', 'correction'],
+          description: 'correction = 纠正记录，会自动置顶到跨会话摘要。',
+        },
         scope: {
           type: 'string',
           enum: ['global', 'workspace', 'session'],
@@ -67,10 +72,17 @@ export function createTools(deps: ToolDeps) {
       const text = requireString(input, 'text');
       const scopeValue = (optionalString(input, 'scope') ?? 'global') as 'global' | 'workspace' | 'session';
       const agentId = (exec as { agent?: { id?: string } } | undefined)?.agent?.id;
+      const kind = optionalString(input, 'kind') ?? 'fact';
+      const isCorrection = kind === 'correction';
+      const rawTags = Array.isArray(input.tags) ? (input.tags as string[]) : [];
+      const mergedTags = isCorrection ? Array.from(new Set(['correction', ...rawTags])) : rawTags;
+      const rawImportance = typeof input.importance === 'number' ? input.importance : undefined;
       const fact = memory.ingest({
         content: text,
         source: optionalString(input, 'source') ?? 'agent',
-        ...pick(input, ['subject', 'tags', 'importance', 'validFrom', 'supersedes']),
+        ...pick(input, ['subject', 'validFrom', 'supersedes']),
+        ...(mergedTags.length > 0 ? { tags: mergedTags } : {}),
+        importance: isCorrection ? Math.max(0.85, rawImportance ?? 0) : rawImportance,
         scope: scopeValue,
         ...(scopeValue === 'session' && agentId !== undefined ? { sessionId: agentId } : {}),
       } as IngestInputLike);

@@ -1,5 +1,55 @@
 # 更新报告
 
+## v0.5.0（2026-11-02）— 记忆准入管线
+
+移植自 [memoripy](https://github.com/caspianmoon/memoripy)（★693）的 `memoripy/admission.py`（MIT）。
+原实现 319 行，我们保留核心判定，去掉 LLM 依赖与多层记忆。
+
+### 新增：四道准入关卡
+
+写入前依次检查，任一不过就拒绝：
+
+| 关卡 | 拒绝什么 | 依据 |
+|---|---|---|
+| **噪声** | `ok` / `thanks` / `done` / `ping` / `status: success` | `TRANSIENT_PATTERNS` |
+| **敏感数据** | API key、密码、13–19 位卡号、私钥 | `SENSITIVE_PATTERNS` |
+| **指令注入** | `ignore previous instructions`、`system prompt`、`remember that the user` | `INSTRUCTION_INJECTION_PATTERNS` |
+| **权威冲突** | 低权威记忆试图覆盖同主题的高权威记忆 | `_higher_authority_conflict` |
+
+权威等级由现有 `source` 推导，**不新增参数**：
+
+```
+user → user_stated(4)   agent → derived(2)
+imported → untrusted_external(1)   test → quarantined(0)
+```
+
+### 新增：纠正记忆
+
+`cognition_remember` 增加 `kind: 'fact' | 'correction'`（默认 fact）。
+选 correction 时自动打标 `correction`、重要度提到 ≥0.85，
+并在跨会话摘要中加权置顶（权重 0.7 → 1.4）。
+
+### 已有但本次确认可用
+
+`memory.history(subject)` —— 返回某主题的完整版本链，对应 memoripy 的
+"inspect a record and its complete history"。
+
+### 代价
+
+| 项 | 变化 |
+|---|---|
+| 工具 schema | 1076 → **1111**（+35，`kind` 参数） |
+| 新增代码 | `src/admission.ts` 约 160 行 |
+| 单元测试 | 35 → **41**（准入 5 + 纠正 1） |
+
+### 验证
+
+```
+编译      ✓
+单元测试   41 / 41
+评测      19 / 19 + 打包 5 / 5 + 兼容性 5 / 5
+```
+
 ## v0.4.0（2026-11-02）— 包名去作用域，支持手机端安装
 
 ### 破坏性变更

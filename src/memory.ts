@@ -21,6 +21,8 @@
  */
 
 /** 召回口径。 */
+import { describeRejection, evaluateAdmission } from './admission.ts';
+
 export type RecallMode = 'strict' | 'historical' | 'belief' | 'associative';
 
 /** 记忆作用域：全局共享 / 工作区共享 / 会话私有。 */
@@ -344,6 +346,20 @@ export class TemporalMemoryStore {
     const existing = this.findByHash(hash);
     if (existing !== undefined) {
       return { ...existing, onConflictTriggered: false };
+    }
+
+    // 准入策略（移植自 memoripy/admission.py）：
+    // 噪声 → 敏感数据 → 指令注入 → 权威冲突，任一不过就不写入。
+    const decision = evaluateAdmission({
+      text: content,
+      subject,
+      source: input.source ?? 'agent',
+      existing: [...this.facts.values()]
+        .filter((fact) => fact.supersededAt === null && !fact.archived)
+        .map((fact) => ({ id: fact.id, subject: fact.subject, content: fact.content, source: fact.source })),
+    });
+    if (decision.action === 'reject') {
+      throw new Error(`记忆未准入：${describeRejection(decision)}`);
     }
 
     const fact: TemporalFact = Object.freeze({
@@ -677,6 +693,7 @@ export class TemporalMemoryStore {
     }
     return archivedIds;
   }
+
 
   /** 导出为纯 JSON（可自行落盘到 .json 文件，仍然不依赖数据库）。 */
   serialize(): TemporalFact[] {

@@ -71,6 +71,11 @@ export declare function createTools(deps: ToolDeps): readonly [{
                 type: string;
                 description: string;
             };
+            kind: {
+                type: string;
+                enum: string[];
+                description: string;
+            };
             scope: {
                 type: string;
                 enum: string[];
