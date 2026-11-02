@@ -251,10 +251,21 @@ npm run eval       # 20 条评测 + token 预算门禁
 |---|---|
 | [LongMemory](https://github.com/CaviraOSS/LongMemory) | 双时态模型：`validFrom/validTo` 与 `recordedAt/supersededAt` 两条时间轴；半开区间判定；闭合区间不改变内容指纹与 id |
 | [CAM: A Constructivist View of Agentic Memory](https://github.com/rui9812/CAM)（NeurIPS 2025） | 增量重叠聚类、同化 / 顺应、超图摘要、簇大小上限 |
-| [A-MEM: Agentic Memory](https://arxiv.org/abs/2502.12110) | 卡片盒式原子笔记与记忆演化（对照参考） |
+| [A-MEM: Agentic Memory](https://arxiv.org/abs/2502.12110)（NeurIPS 2025） | 卡片盒式动态链接：新笔记写入时分析历史笔记并建立语义连接。本项目的 `linkedBy` 记录「为什么连上它」（共享词 + 相似度）即源于此 |
 | [MemGPT / Letta](https://github.com/letta-ai/letta) | 记忆分层与分页（对照参考） |
 | [GraphRAG](https://github.com/microsoft/graphrag) | 社区摘要参与检索；本项目的「图式扩展召回」是其最小实现 |
-| [RAPTOR](https://github.com/parthsarthi03/raptor) | 递归聚类 + 摘要的树状检索（对照参考） |
+| [RAPTOR](https://arxiv.org/abs/2401.18059) | 递归聚类 + 逐层摘要的树状检索。本项目改为**抽取式**摘要——父图式取与质心最接近的成员原文，避免每层调用 LLM |
+| [HippoRAG: Neurobiologically Inspired Long-Term Memory for LLMs](https://arxiv.org/abs/2405.14831)（NeurIPS 2024） | Personalized PageRank 在知识图上传播相关度。本项目 `associative` 召回用它在图式网络上重排，让「隔一层但相关」的记忆浮上来 |
+
+### 论文引用
+
+实现中直接用到的三篇：
+
+- **HippoRAG** — Gutiérrez et al. *HippoRAG: Neurobiologically Inspired Long-Term Memory for Large Language Models.* NeurIPS 2024. [arXiv:2405.14831](https://arxiv.org/abs/2405.14831)
+- **RAPTOR** — Sarthi et al. *RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval.* [arXiv:2401.18059](https://arxiv.org/abs/2401.18059)
+- **A-MEM** — Xu et al. *A-MEM: Agentic Memory for LLM Agents.* NeurIPS 2025. [arXiv:2502.12110](https://arxiv.org/abs/2502.12110)
+
+图式网络的建构主义框架另见 CAM（NeurIPS 2025），辩证反思的 Prompt 编排另见 Hegelion，见下方各节。
 
 ### 反思
 
