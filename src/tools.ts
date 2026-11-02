@@ -247,6 +247,8 @@ export function createTools(deps: ToolDeps) {
         {
           memory: memory.stats(),
           graph: { ...graph.stats(), levels: graph.hierarchy().length },
+          /** 互相矛盾的图式对（类型化边的直接产物）。 */
+          tensions: graph.tensions(),
           /** 跨会话核心记忆块（≤400 字）。 */
           digest: buildCoreDigest(memory),
           tasks: {

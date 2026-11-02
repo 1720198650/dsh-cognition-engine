@@ -20,6 +20,9 @@
  * 存储：纯 TypeScript + Map / Set，无任何外部数据库。
  */
 
+import { classifyEdge, narrativeFor } from './edges.ts';
+import type { EdgeKind, SchemaEdge } from './edges.ts';
+export type { EdgeKind, SchemaEdge } from './edges.ts';
 import { cosine, isCurrent, tokenize } from './memory.ts';
 import type { TemporalMemoryStore } from './memory.ts';
 
@@ -52,19 +55,6 @@ export interface SchemaNode {
   summary?: string;
 }
 
-/** 图式之间边的语义类型（参照 memoryweb / Graphiti 的 typed edges）。 */
-export type EdgeKind = 'support' | 'contradict' | 'refine' | 'supersede';
-
-/** 一条带类型与叙事说明的边。 */
-export interface SchemaEdge {
-  readonly from: string;
-  readonly to: string;
-  readonly kind: EdgeKind;
-  readonly weight: number;
-  /** 一句话说明「为什么这条边存在」（memoryweb 的 narrative 设计）。 */
-  readonly narrative: string;
-  readonly createdAt: number;
-}
 
 export type IngestMode = 'assimilation' | 'accommodation';
 
@@ -120,35 +110,6 @@ function detectPolarity(text: string): 1 | -1 {
   return NEGATIONS.some((marker) => lower.includes(marker)) ? -1 : 1;
 }
 
-/**
- * 由现有信号推导边的类型——**不需要 LLM**：
- *   极性相反            → contradict
- *   高度相似（≥0.8）    → refine（一方是另一方的细化）
- *   其余高相似          → support
- */
-function classifyEdge(a: SchemaNode, b: SchemaNode): EdgeKind {
-  // 只有「极性相反」这一条是可靠的：它由分词后的否定词检测而来。
-  // 「细化 vs 并列」在二元组粒度上无法可靠区分（实测会把
-  // 「四个空格」与「两个空格」误判为细化），因此不做自动推断。
-  if (Math.sign(a.polarity) !== Math.sign(b.polarity)) return 'contradict';
-  return 'support';
-}
-
-/** 一句话说明这条边为什么存在（memoryweb 的 narrative 设计）。 */
-function narrativeFor(kind: EdgeKind, a: SchemaNode, b: SchemaNode): string {
-  const left = a.label.slice(0, 24);
-  const right = b.label.slice(0, 24);
-  switch (kind) {
-    case 'contradict':
-      return `「${left}」与「${right}」主题相近但结论相反`;
-    case 'refine':
-      return `「${left}」是「${right}」的细化`;
-    case 'supersede':
-      return `「${left}」取代了「${right}」`;
-    default:
-      return `「${left}」与「${right}」相互支撑`;
-  }
-}
 
 export class SchemaGraphManager {
   private readonly schemas = new Map<string, SchemaNode>();
@@ -334,6 +295,31 @@ export class SchemaGraphManager {
       .filter((edge) => edge.weight >= minWeight)
       .map((edge) => ({ schemaId: edge.to, weight: edge.weight, kind: edge.kind, narrative: edge.narrative }))
       .sort((a, b) => b.weight - a.weight);
+  }
+
+  /**
+   * 所有「矛盾」类型的边——哪两个图式在互相打架。
+   * 对应 memoryweb 的 narrative edge：不仅告诉你冲突，还告诉你为什么冲突。
+   */
+  tensions(): Array<{ a: string; b: string; aLabel: string; bLabel: string; narrative: string }> {
+    const seen = new Set<string>();
+    const out: Array<{ a: string; b: string; aLabel: string; bLabel: string; narrative: string }> = [];
+    for (const [id, bucket] of this.edges) {
+      for (const edge of bucket.values()) {
+        if (edge.kind !== 'contradict') continue;
+        const key = id < edge.to ? `${id}|${edge.to}` : `${edge.to}|${id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          a: id,
+          b: edge.to,
+          aLabel: this.schemas.get(id)?.label ?? id,
+          bLabel: this.schemas.get(edge.to)?.label ?? edge.to,
+          narrative: edge.narrative,
+        });
+      }
+    }
+    return out;
   }
 
   get(id: string): SchemaNode | undefined {

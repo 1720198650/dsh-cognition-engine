@@ -19,6 +19,8 @@
  *
  * 存储：纯 TypeScript + Map / Set，无任何外部数据库。
  */
+import type { EdgeKind } from './edges.ts';
+export type { EdgeKind, SchemaEdge } from './edges.ts';
 import type { TemporalMemoryStore } from './memory.ts';
 export interface Observation {
     readonly id: string;
@@ -46,18 +48,6 @@ export interface SchemaNode {
     isConflict: boolean;
     /** 层次节点的抽取式摘要（取自成员原文，不是 LLM 生成）。 */
     summary?: string;
-}
-/** 图式之间边的语义类型（参照 memoryweb / Graphiti 的 typed edges）。 */
-export type EdgeKind = 'support' | 'contradict' | 'refine' | 'supersede';
-/** 一条带类型与叙事说明的边。 */
-export interface SchemaEdge {
-    readonly from: string;
-    readonly to: string;
-    readonly kind: EdgeKind;
-    readonly weight: number;
-    /** 一句话说明「为什么这条边存在」（memoryweb 的 narrative 设计）。 */
-    readonly narrative: string;
-    readonly createdAt: number;
 }
 export type IngestMode = 'assimilation' | 'accommodation';
 export interface IngestOutcome {
@@ -167,6 +157,17 @@ export declare class SchemaGraphManager {
         schemaId: string;
         weight: number;
         kind: EdgeKind;
+        narrative: string;
+    }>;
+    /**
+     * 所有「矛盾」类型的边——哪两个图式在互相打架。
+     * 对应 memoryweb 的 narrative edge：不仅告诉你冲突，还告诉你为什么冲突。
+     */
+    tensions(): Array<{
+        a: string;
+        b: string;
+        aLabel: string;
+        bLabel: string;
         narrative: string;
     }>;
     get(id: string): SchemaNode | undefined;
