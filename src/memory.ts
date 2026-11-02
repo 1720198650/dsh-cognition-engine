@@ -306,6 +306,8 @@ export class TemporalMemoryStore {
   private readonly bySubject = new Map<string, Set<string>>();
   /** 用户可配置的准入规则。 */
   private rules: AdmissionRules = DEFAULT_RULES;
+  /** 同主题自动取代的相似度阈值。 */
+
   private readonly tokens = new Map<string, Map<string, number>>();
   private readonly clock: () => number;
   private readonly halfLifeMs: number;

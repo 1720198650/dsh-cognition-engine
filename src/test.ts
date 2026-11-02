@@ -245,7 +245,7 @@ async function main(): Promise<void> {
     assert.equal(graph.stats().assimilations, 1);
   });
 
-  await test('不相干观察触发顺应并连一条边', () => {
+  await test('不相干观察触发顺应且不连边（低于连边阈值）', () => {
     const graph = new SchemaGraphManager({ now: () => 1 });
     const first = graph.ingest('用户偏好深色主题的界面');
     const other = graph.ingest('数据库连接池需要设置超时');
@@ -253,7 +253,20 @@ async function main(): Promise<void> {
     assert.equal(other.mode, 'accommodation');
     assert.notEqual(other.schemaId, first.schemaId);
     assert.equal(graph.schemaCount, 2);
-    assert.equal(graph.neighbors(other.schemaId).length, 1, '新图式应与最相近的旧图式连边');
+    // 相似度低于 edgeThreshold 时不连边：否则毫不相干的内容仅凭一两个共有词
+    // 就会连成「主题相近但结论相反」，把真的矛盾淹没在误报里。
+    assert.equal(graph.neighbors(other.schemaId).length, 0, '不相干内容不应连边');
+    assert.equal(other.linkedTo, undefined);
+    assert.equal(graph.tensions().length, 0, '不应产生假矛盾');
+  });
+
+  await test('相近内容仍会连边（阈值不过度收紧）', () => {
+    const graph = new SchemaGraphManager({ now: () => 1 });
+    const first = graph.ingest('项目使用 TypeScript 编写');
+    const other = graph.ingest('这个项目用 TypeScript 开发');
+
+    assert.notEqual(other.schemaId, first.schemaId);
+    assert.equal(graph.neighbors(other.schemaId).length, 1, '内容相近应连边');
     assert.equal(other.linkedTo?.schemaId, first.schemaId);
   });
 

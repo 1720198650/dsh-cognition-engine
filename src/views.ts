@@ -35,7 +35,7 @@ export function buildCoreDigest(
 
   // 只取全局、未被取代、未归档、且不是 test 来源的记忆——
   // 调试数据（source: 'test'）不该被注入到每个会话的系统提示里。
-  const candidates = memory
+  const sorted = memory
     .all()
     .filter((fact) => fact.scope === 'global' && fact.supersededAt === null && !fact.archived && fact.source !== 'test')
     .map((fact) => {
@@ -45,8 +45,16 @@ export function buildCoreDigest(
       const weight = fact.tags.includes('correction') ? 1.4 : 0.7;
       return { fact, score: fact.importance * weight + freshness * 0.3 };
     })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+    .sort((a, b) => b.score - a.score);
+
+  // 同一主题只保留得分最高的一条：否则两代规则会重复占用摘要名额，
+  // 把「工作区结构」「文档规范」这些真正不同的信息挤出去。
+  const seenSubjects = new Set<string>();
+  const candidates = sorted.filter((entry) => {
+    if (seenSubjects.has(entry.fact.subject)) return false;
+    seenSubjects.add(entry.fact.subject);
+    return true;
+  }).slice(0, limit);
 
   if (candidates.length === 0) return '';
 

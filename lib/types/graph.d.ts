@@ -76,6 +76,8 @@ export interface IngestOutcome {
 }
 export interface SchemaGraphOptions {
     assimilateThreshold?: number;
+    /** 建边的最低相似度，低于它各自独立、不连线。 */
+    edgeThreshold?: number;
     overlapThreshold?: number;
     communityThreshold?: number;
     maxClusterSize?: number;
@@ -106,6 +108,7 @@ export declare class SchemaGraphManager {
     private readonly observations;
     private readonly clock;
     private readonly assimilateThreshold;
+    private readonly edgeThreshold;
     private readonly overlapThreshold;
     private readonly communityThreshold;
     private readonly maxClusterSize;

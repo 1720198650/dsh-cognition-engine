@@ -76,6 +76,8 @@ export interface IngestOutcome {
 
 export interface SchemaGraphOptions {
   assimilateThreshold?: number;
+  /** 建边的最低相似度，低于它各自独立、不连线。 */
+  edgeThreshold?: number;
   overlapThreshold?: number;
   communityThreshold?: number;
   maxClusterSize?: number;
@@ -117,6 +119,7 @@ export class SchemaGraphManager {
   private readonly observations = new Map<string, Observation>();
   private readonly clock: () => number;
   private readonly assimilateThreshold: number;
+  private readonly edgeThreshold: number;
   private readonly overlapThreshold: number;
   private readonly communityThreshold: number;
   private readonly maxClusterSize: number;
@@ -138,6 +141,7 @@ export class SchemaGraphManager {
   constructor(options: SchemaGraphOptions = {}) {
     this.clock = options.now ?? (() => Date.now());
     this.assimilateThreshold = options.assimilateThreshold ?? 0.55;
+  this.edgeThreshold = options.edgeThreshold ?? 0.18;
     this.overlapThreshold = options.overlapThreshold ?? 0.42;
     this.communityThreshold = options.communityThreshold ?? 0.3;
     this.maxClusterSize = options.maxClusterSize ?? 8;
@@ -237,7 +241,9 @@ export class SchemaGraphManager {
 
     let linkedTo: { schemaId: string; weight: number } | undefined;
     let linkedBy: { schemaId: string; score: number; terms: string[]; kind: EdgeKind; narrative: string } | undefined;
-    if (best !== undefined) {
+    // 连边必须有下限：原本只要「最相似的那个」就无条件连边，
+    // 导致毫不相干的内容仅因共享一两个词就被连成「主题相近但结论相反」。
+    if (best !== undefined && best.similarity >= this.edgeThreshold) {
       const weight = Math.max(best.similarity, 0.01);
       const target = this.schemas.get(best.schemaId);
       const edgeKind = target === undefined ? 'support' : classifyEdge(schema, target);

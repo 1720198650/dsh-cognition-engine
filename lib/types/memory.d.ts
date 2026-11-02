@@ -192,6 +192,7 @@ export declare class TemporalMemoryStore {
     private readonly bySubject;
     /** 用户可配置的准入规则。 */
     private rules;
+    /** 同主题自动取代的相似度阈值。 */
     private readonly tokens;
     private readonly clock;
     private readonly halfLifeMs;

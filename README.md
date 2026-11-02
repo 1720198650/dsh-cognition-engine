@@ -48,6 +48,9 @@
   设计移植自 [memoripy](https://github.com/caspianmoon/memoripy) 的 `admission.py`。
 - **关系带类型**：两条记忆之间的关系会写明是「互相支持」还是「互相矛盾」（`support` / `contradict`），
   并附一句话说明为什么把它们连起来。结构参照 [memoryweb](https://github.com/corbym/memoryweb) 的叙事边。
+
+- **不相干不硬连**：两条内容相似度低于阈值时各自独立成主题，不会被连成「主题相近」。
+  此前只要是最相似的一个就无条件连边，导致毫不相干的内容仅凭一两个共有词就被报成矛盾。
 - **矛盾可见**：`cognition_state` 返回 `tensions`（图式之间的矛盾边）与
   `memoryConflicts`（同主题互斥的事实对），冲突不再只是节点上的一個布尔值。
 - **纠正记忆**：`cognition_remember` 传 `kind: 'correction'` 会自动打标、提升重要度，
