@@ -625,13 +625,24 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots'],
       apply(ctx) {
-        const Dock = createDock(ctx);
-        ctx.slots.inject('conversation.composer.dock', () =>
-          ctx.slots.register(
-            { name: 'conversation.composer.dock', id: 'cognition-mood', order: 6 },
-            Dock,
-          ),
-        );
+        // 降级：手机端或精简渲染层可能没有 slots 服务，此时不显示状态条，但不影响插件其他功能
+        if (!ctx || !ctx.slots || typeof ctx.slots.register !== 'function') {
+          return;
+        }
+        try {
+          const Dock = createDock(ctx);
+          ctx.slots.inject('conversation.composer.dock', () =>
+            ctx.slots.register(
+              { name: 'conversation.composer.dock', id: 'cognition-mood', order: 6 },
+              Dock,
+            ),
+          );
+        } catch (error) {
+          // 槽位被占用或宿主不支持：静默跳过，工具与记忆功能不受影响
+          if (ctx.logger && typeof ctx.logger.warn === 'function') {
+            ctx.logger.warn('cognition-engine: 状态条槽位注册失败，已降级为不显示');
+          }
+        }
       },
     };
   },
