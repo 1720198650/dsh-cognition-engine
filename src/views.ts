@@ -80,7 +80,10 @@ export function buildDetail({ memory, graph, taskManager }: DetailDeps): Record<
       tags: fact.tags,
       importance: fact.importance,
       activation: Number(fact.activation.toFixed(2)),
-      current: isCurrent(fact, now),
+      current: isCurrent(fact, now) && fact.mergedInto === undefined,
+      mergedInto: fact.mergedInto,
+      recordedAt: fact.recordedAt,
+      revisedAt: fact.revisedAt,
     }));
 
   const schemas = graph.all().map((schema) => ({
@@ -90,6 +93,10 @@ export function buildDetail({ memory, graph, taskManager }: DetailDeps): Record<
     polarity: schema.polarity,
     updatedAt: schema.updatedAt,
     neighbors: graph.neighbors(schema.id).length,
+    /** 这个主题下的记忆原文（最多 6 条，供页面展开查看）。 */
+    memberTexts: graph.memberTexts(schema.id).slice(0, 6).map((text) =>
+      text.length > 80 ? text.slice(0, 80) + '…' : text,
+    ),
   }));
 
   const tasks = taskManager

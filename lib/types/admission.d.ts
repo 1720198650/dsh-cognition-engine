@@ -32,6 +32,18 @@ export interface ExistingFact {
     content: string;
     source: string;
 }
+/** 用户可开关的四条规则。 */
+export interface AdmissionRules {
+    /** 拦截寒暄/心跳（ok、谢谢、ping…）。 */
+    transient: boolean;
+    /** 拦截密钥/密码/卡号。 */
+    sensitive: boolean;
+    /** 拦截"忽略之前的指令"。 */
+    injection: boolean;
+    /** 低权威不得覆盖高权威。 */
+    authority: boolean;
+}
+export declare const DEFAULT_RULES: AdmissionRules;
 export interface AdmissionInput {
     text: string;
     subject: string;
@@ -44,6 +56,6 @@ export interface AdmissionInput {
  *
  * 顺序与 memoripy 一致：噪声 → 敏感 → 注入 → 权威冲突。
  */
-export declare function evaluateAdmission(input: AdmissionInput): AdmissionDecision;
+export declare function evaluateAdmission(input: AdmissionInput, rules?: AdmissionRules): AdmissionDecision;
 /** 把拒绝原因转成给人看的一句话。 */
 export declare function describeRejection(decision: AdmissionDecision): string;

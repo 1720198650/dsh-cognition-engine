@@ -20,6 +20,14 @@ export interface LongTask {
   lastUpdatedAt: number;
   /** 线索：每次更新追加一条。 */
   context: string[];
+  /** 任务开始时间（用户可自定义），毫秒。 */
+  startAt?: number;
+  /** 兼容字段：不再作为截止时间使用（任务改为提醒式）。 */
+  endAt?: number;
+  /** 手动排序号，小的在前。 */
+  order?: number;
+  /** 是否与相邻任务并行推进。 */
+  parallel?: boolean;
 }
 
 export interface DueTask extends LongTask {
@@ -104,7 +112,7 @@ export class LongHorizonTaskManager {
   }
 
   /** 创建任务并落盘。 */
-  async create_task(description: string): Promise<LongTask> {
+  async create_task(description: string, span?: { startAt?: number; endAt?: number; order?: number; parallel?: boolean }): Promise<LongTask> {
     const text = description.trim();
     if (text.length === 0) throw new Error('create_task: description 不能为空');
     await this.load();
@@ -117,10 +125,26 @@ export class LongHorizonTaskManager {
       createdAt: now,
       lastUpdatedAt: now,
       context: [],
+      ...(span?.startAt === undefined ? {} : { startAt: span.startAt }),
+      ...(span?.endAt === undefined ? {} : { endAt: span.endAt }),
+      ...(span?.order === undefined ? {} : { order: span.order }),
+      ...(span?.parallel === undefined ? {} : { parallel: span.parallel }),
     };
     this.tasks.set(task.id, task);
     await this.persist();
     return { ...task, context: [...task.context] };
+  }
+
+  /** 调整排序号或并行标记（不改状态）。 */
+  async set_meta(id: string, meta: { order?: number; parallel?: boolean }): Promise<LongTask | undefined> {
+    await this.load();
+    const task = this.tasks.get(id);
+    if (task === undefined) return undefined;
+    if (meta.order !== undefined) task.order = meta.order;
+    if (meta.parallel !== undefined) task.parallel = meta.parallel;
+    task.lastUpdatedAt = this.clock();
+    await this.persist();
+    return cloneTask(task);
   }
 
   /** 更新进度：状态必填，线索可追加。 */
@@ -190,9 +214,12 @@ export class LongHorizonTaskManager {
   }
 
   private sorted(): LongTask[] {
-    return [...this.tasks.values()].sort(
-      (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id),
-    );
+    return [...this.tasks.values()].sort((a, b) => {
+      const ao = a.order ?? Number.MAX_SAFE_INTEGER;
+      const bo = b.order ?? Number.MAX_SAFE_INTEGER;
+      if (ao !== bo) return ao - bo;
+      return a.createdAt - b.createdAt;
+    });
   }
 
   /** 串行化写入：临时文件 + rename，保证读者永远看不到半个文件。 */

@@ -341,6 +341,9 @@ export function createTools(deps: ToolDeps) {
           description: 'update：新状态。',
         },
         context: { type: 'string', description: 'update：追加线索，换行分隔。' },
+        startAt: { type: 'number', description: 'create：任务开始时间（毫秒）。' },
+        order: { type: 'number', description: 'create：排序号，小的在前。' },
+        parallel: { type: 'boolean', description: 'create：是否与相邻任务并行推进。' },
       },
     },
     output: textOutput,
@@ -351,7 +354,12 @@ export function createTools(deps: ToolDeps) {
 
       switch (action) {
         case 'create': {
-          const task = await taskManager.create_task(requireString(input, 'description'));
+          const task = await taskManager.create_task(requireString(input, 'description'), {
+        ...(typeof input.startAt === 'number' ? { startAt: input.startAt } : {}),
+        ...(typeof input.endAt === 'number' ? { endAt: input.endAt } : {}),
+        ...(typeof input.order === 'number' ? { order: input.order } : {}),
+        ...(typeof input.parallel === 'boolean' ? { parallel: input.parallel } : {}),
+      });
           return JSON.stringify({ task, store: taskManager.path });
         }
         case 'update': {

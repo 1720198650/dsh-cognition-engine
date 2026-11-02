@@ -21,7 +21,8 @@
  */
 
 /** 召回口径。 */
-import { describeRejection, evaluateAdmission } from './admission.ts';
+import { DEFAULT_RULES, describeRejection, evaluateAdmission } from './admission.ts';
+import type { AdmissionRules } from './admission.ts';
 
 export type RecallMode = 'strict' | 'historical' | 'belief' | 'associative';
 
@@ -54,6 +55,10 @@ export interface TemporalFact {
   readonly activation: number;
   /** 是否已归档：不进 strict 召回，但历史与联想仍可查。 */
   readonly archived: boolean;
+  /** 最近一次手动修正的时间（用户改过内容/状态/录入时间）。 */
+  readonly revisedAt?: number;
+  /** 已被归并到哪条记忆（归并后不进 strict 召回，但历史仍可查）。 */
+  readonly mergedInto?: string;
   readonly lastAccessedAt: number;
 }
 
@@ -297,6 +302,8 @@ function clamp01(value: number): number {
 export class TemporalMemoryStore {
   private readonly facts = new Map<string, TemporalFact>();
   private readonly bySubject = new Map<string, Set<string>>();
+  /** 用户可配置的准入规则。 */
+  private rules: AdmissionRules = DEFAULT_RULES;
   private readonly tokens = new Map<string, Map<string, number>>();
   private readonly clock: () => number;
   private readonly halfLifeMs: number;
@@ -357,7 +364,7 @@ export class TemporalMemoryStore {
       existing: [...this.facts.values()]
         .filter((fact) => fact.supersededAt === null && !fact.archived)
         .map((fact) => ({ id: fact.id, subject: fact.subject, content: fact.content, source: fact.source })),
-    });
+    }, this.rules);
     if (decision.action === 'reject') {
       throw new Error(`记忆未准入：${describeRejection(decision)}`);
     }
@@ -666,6 +673,52 @@ export class TemporalMemoryStore {
     };
   }
 
+  /**
+   * 手动修正一条记忆：内容、主题、录入时间、有效状态。
+   *
+   * 注意 recordedAt 是双时态的事务时间轴，改动会让 belief 口径的答案偏移，
+   * 所以这里会打上 revisedAt 标记，表示「这条被人工改过」。
+   */
+  updateFact(
+    id: string,
+    patch: { content?: string; subject?: string; recordedAt?: number; superseded?: boolean },
+  ): TemporalFact | undefined {
+    const fact = this.facts.get(id);
+    if (fact === undefined) return undefined;
+
+    const content = (patch.content ?? fact.content).trim();
+    if (content.length === 0) throw new Error('content 不能为空');
+    const subject = (patch.subject ?? fact.subject).trim();
+    const recordedAt = patch.recordedAt ?? fact.recordedAt;
+    const superseded = patch.superseded ?? fact.supersededAt !== null;
+    const now = this.clock();
+
+    const next: TemporalFact = Object.freeze({
+      ...fact,
+      content,
+      subject,
+      recordedAt,
+      hash: contentHash(subject, content, String(fact.validFrom)),
+      supersededAt: superseded ? fact.supersededAt ?? now : null,
+      validTo: superseded ? fact.validTo ?? now : null,
+      supersededBy: superseded ? fact.supersededBy : null,
+      revisedAt: now,
+    });
+
+    // 维护主题索引
+    const oldBucket = this.bySubject.get(fact.subject);
+    if (oldBucket !== undefined) {
+      oldBucket.delete(id);
+      if (oldBucket.size === 0) this.bySubject.delete(fact.subject);
+    }
+    this.facts.set(id, next);
+    this.tokens.set(id, tokenize(subject + ' ' + content));
+    const bucket = this.bySubject.get(subject) ?? new Set<string>();
+    bucket.add(id);
+    this.bySubject.set(subject, bucket);
+    return next;
+  }
+
   /** 归档 / 取消归档一条记忆（不删数据，只影响 strict 召回）。 */
   setArchived(id: string, archived: boolean): boolean {
     const fact = this.facts.get(id);
@@ -694,6 +747,62 @@ export class TemporalMemoryStore {
     return archivedIds;
   }
 
+
+  /**
+   * 记忆归并：同一主题下，内容高度相似且极性一致的条目收敛成一条，
+   * 其余标记 mergedInto（不删除，历史仍可查）。
+   *
+   * 纯规则实现，不调用 LLM：相似度用词频余弦，保留重要度最高的一条作为主条目。
+   */
+  consolidate(options: { subject?: string; threshold?: number } = {}): Array<{ kept: string[]; merged: string[] }> {
+    const threshold = options.threshold ?? 0.75;
+    const out: Array<{ kept: string[]; merged: string[] }> = [];
+    const subjects = options.subject === undefined ? [...this.bySubject.keys()] : [options.subject];
+
+    for (const subject of subjects) {
+      const active = [...(this.bySubject.get(subject) ?? [])]
+        .map((id) => this.facts.get(id))
+        .filter(
+          (fact): fact is TemporalFact =>
+            fact !== undefined &&
+            fact.supersededAt === null &&
+            fact.archived !== true &&
+            fact.mergedInto === undefined,
+        )
+        .sort((a, b) => b.importance - a.importance || b.recordedAt - a.recordedAt);
+
+      if (active.length < 2) continue;
+
+      const merged: string[] = [];
+      const kept: TemporalFact[] = [];
+      for (const fact of active) {
+        const target = kept.find(
+          (candidate) =>
+            Math.sign(candidate.importance) === Math.sign(fact.importance) &&
+            cosine(this.tokens.get(candidate.id) ?? new Map(), this.tokens.get(fact.id) ?? new Map()) >= threshold,
+        );
+        if (target === undefined) {
+          kept.push(fact);
+          continue;
+        }
+        this.facts.set(fact.id, Object.freeze({ ...fact, mergedInto: target.id }));
+        merged.push(fact.id);
+      }
+      if (merged.length > 0) out.push({ kept: kept.map((f) => f.id), merged });
+    }
+    return out;
+  }
+
+  /** 设置准入规则（页面上的开关）。 */
+  setRules(rules: Partial<AdmissionRules>): AdmissionRules {
+    this.rules = { ...this.rules, ...rules };
+    return this.rules;
+  }
+
+  /** 当前准入规则。 */
+  getRules(): AdmissionRules {
+    return { ...this.rules };
+  }
 
   /** 导出为纯 JSON（可自行落盘到 .json 文件，仍然不依赖数据库）。 */
   serialize(): TemporalFact[] {
@@ -740,7 +849,7 @@ export class TemporalMemoryStore {
     switch (mode) {
       case 'strict':
         // 已归档的记忆不再算「当前真值」，但仍可被 historical / associative 查到
-        if (fact.archived === true) return false;
+        if (fact.archived === true || fact.mergedInto !== undefined) return false;
         return isCurrent(fact, now);
       case 'historical':
         return isValidAt(fact, options.validTime ?? now);

@@ -297,6 +297,18 @@ export declare function createTools(deps: ToolDeps): readonly [{
                 type: string;
                 description: string;
             };
+            startAt: {
+                type: string;
+                description: string;
+            };
+            order: {
+                type: string;
+                description: string;
+            };
+            parallel: {
+                type: string;
+                description: string;
+            };
         };
     };
     output: {

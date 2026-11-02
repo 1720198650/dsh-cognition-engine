@@ -16,7 +16,8 @@
         # tasksFile: ./tasks.json
         # 记忆落盘位置
         # stateFile: ./cognition-state.json
-        # 上锁用的固定口令；留空则每次上锁随机生成
+        # 访问口令。默认（不写）会自动生成到 .cognition-token 并启用保护；
+        # 显式写空串 '' 则完全关闭保护（同机任何程序都能读记忆正文）
         # lockToken: 换成一个你自己的口令
         # 真模型：不填则跟随当前默认模型
         # llmProvider: deepseek

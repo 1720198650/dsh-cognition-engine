@@ -105,6 +105,25 @@ export interface ExistingFact {
   source: string;
 }
 
+/** 用户可开关的四条规则。 */
+export interface AdmissionRules {
+  /** 拦截寒暄/心跳（ok、谢谢、ping…）。 */
+  transient: boolean;
+  /** 拦截密钥/密码/卡号。 */
+  sensitive: boolean;
+  /** 拦截"忽略之前的指令"。 */
+  injection: boolean;
+  /** 低权威不得覆盖高权威。 */
+  authority: boolean;
+}
+
+export const DEFAULT_RULES: AdmissionRules = Object.freeze({
+  transient: true,
+  sensitive: true,
+  injection: true,
+  authority: true,
+});
+
 export interface AdmissionInput {
   text: string;
   subject: string;
@@ -118,19 +137,19 @@ export interface AdmissionInput {
  *
  * 顺序与 memoripy 一致：噪声 → 敏感 → 注入 → 权威冲突。
  */
-export function evaluateAdmission(input: AdmissionInput): AdmissionDecision {
+export function evaluateAdmission(input: AdmissionInput, rules: AdmissionRules = DEFAULT_RULES): AdmissionDecision {
   const trust = trustFromSource(input.source);
   const text = input.text.trim();
 
-  if (TRANSIENT_PATTERNS.some((pattern) => pattern.test(text))) {
+  if (rules.transient && TRANSIENT_PATTERNS.some((pattern) => pattern.test(text))) {
     return { action: 'reject', reasons: ['transient'], trust };
   }
 
-  if (SENSITIVE_PATTERNS.some((pattern) => pattern.test(text))) {
+  if (rules.sensitive && SENSITIVE_PATTERNS.some((pattern) => pattern.test(text))) {
     return { action: 'reject', reasons: ['sensitive_data'], trust };
   }
 
-  if (INJECTION_PATTERNS.some((pattern) => pattern.test(text))) {
+  if (rules.injection && INJECTION_PATTERNS.some((pattern) => pattern.test(text))) {
     return { action: 'reject', reasons: ['instruction_injection'], trust };
   }
 
@@ -138,7 +157,7 @@ export function evaluateAdmission(input: AdmissionInput): AdmissionDecision {
   const subjectKey = normalize(input.subject);
   const valueKey = normalize(text);
 
-  for (const fact of input.existing) {
+  for (const fact of rules.authority ? input.existing : []) {
     if (normalize(fact.subject) !== subjectKey) continue;
     // 同一个说法重复写入不算冲突（交给 hash 去重）
     if (normalize(fact.content) === valueKey) continue;

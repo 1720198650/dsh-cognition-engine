@@ -1,7 +1,8 @@
 /**
  * client.js — 页面可视化（Client 半区）
  *
- * 输入框下方一条状态条；点开有五页：状态 / 待办 / 记忆 / 图式 / 设置。
+ * 两个入口：左侧栏图标打开整页面板；输入框上方横条展开为透明浮层。
+ * 页签：任务 / 记忆 / 主题 / 设置。
  * 计数每 2 秒轮询 /cognition-engine/state；明细只在展开时拉 /cognition-engine/detail。
  * 设置页可以清空数据、开关真模型、上锁并填口令。全部走 HTTP，不进模型上下文。
  */
@@ -17,15 +18,15 @@ window.__ModuleLoader__.load({
         energy: '能量',
         favor: '好感',
         memory: '记忆',
-        schema: '图式',
-        todo: '待办',
+        schema: '主题',
+        todo: '任务',
         state: '状态',
         settings: '设置',
         connecting: '连接中…',
         offline: '无数据',
-        tasks: '待办',
+        tasks: '任务',
         memories: '记忆',
-        schemas: '图式',
+        schemas: '主题',
         refresh: '刷新',
         close: '收起',
         empty: '暂无内容',
@@ -43,10 +44,18 @@ window.__ModuleLoader__.load({
         means: '说明',
         label: '状态标签',
         noTime: '本进程内时间没有推进过：这两个数只会被事件改变，不会自己变。',
-        storage: '存储位置',
-        clear: '清空',
+        storage: '数据文件',
+        clear: '数据操作',
         clearMemory: '清空记忆',
         clearAll: '清空全部',
+        rulesTitle: '记忆准入规则',
+        ruleTransient: '忽略寒暄（ok / 谢谢 / 收到）',
+        ruleSensitive: '拦截密钥与密码',
+        ruleInjection: '拦截「忽略之前的指令」',
+        ruleAuthority: '低权威不得覆盖高权威',
+        consolidate: '合并同类记忆',
+        exportData: '导出',
+        importData: '导入',
         realModel: '反思引擎',
         realMode: '真实模型',
         localMode: '本地模拟',
@@ -63,13 +72,17 @@ window.__ModuleLoader__.load({
         token: '访问口令',
         applyToken: '保存口令',
         cleared: '已清空',
+        tasksHint: '任务：跨天要做的事。记录进度，长时间没更新会被提醒，但不会打断你正在做的事。',
+        memoriesHint: '记忆：AI 跨会话能记住的事实。你说过的决定、约定、偏好都会存在这里，新会话自动带上摘要。改过的旧版本不删除，按时间能查到当时是怎么说的。',
+        schemasHint: '主题：系统自动把内容相近的记忆归成一组，再给组分层。记忆多了以后，点开一个主题能看到所有相关的事；回忆时也会顺着主题把关联记忆一起带出来。记忆少于 10 条时这一页通常是空的。',
+        needToken: '需要访问口令：打开插件目录下的 cognition-token.txt，把内容粘贴到下面',
       },
       en: {
         name: 'Cognition',
         energy: 'Energy',
         favor: 'Favor',
         memory: 'Memory',
-        schema: 'Schemas',
+        schema: 'Topics',
         todo: 'Tasks',
         state: 'State',
         settings: 'Settings',
@@ -77,7 +90,7 @@ window.__ModuleLoader__.load({
         offline: 'No data',
         tasks: 'Tasks',
         memories: 'Memories',
-        schemas: 'Schemas',
+        schemas: 'Topics',
         refresh: 'Refresh',
         close: 'Close',
         empty: 'Nothing here',
@@ -95,10 +108,18 @@ window.__ModuleLoader__.load({
         means: 'Meaning',
         label: 'Label',
         noTime: 'Time never advanced in this process: these values change only on events.',
-        storage: 'Storage',
-        clear: 'Clear',
+        storage: 'Data file',
+        clear: 'Data',
         clearMemory: 'Memory',
         clearAll: 'All',
+        rulesTitle: 'Memory rules',
+        ruleTransient: 'Ignore pleasantries',
+        ruleSensitive: 'Block secrets',
+        ruleInjection: 'Block instruction injection',
+        ruleAuthority: 'Low authority cannot override',
+        consolidate: 'Merge similar',
+        exportData: 'Export',
+        importData: 'Import',
         realModel: 'Reflection engine',
         realMode: 'Real model',
         localMode: 'Local simulation',
@@ -115,6 +136,7 @@ window.__ModuleLoader__.load({
         token: 'Access token',
         applyToken: 'Save token',
         cleared: 'Cleared',
+        needToken: 'Access token required: open cognition-token.txt in the plugin folder and paste its content below',
       },
     };
 
@@ -131,6 +153,50 @@ window.__ModuleLoader__.load({
 
     const S = {
       root: { display: 'flex', flexDirection: 'column', gap: 6 },
+      wideRoot: {
+        position: 'relative',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 6,
+        width: '100%',
+        boxSizing: 'border-box',
+      },
+      widePanel: {
+        position: 'absolute',
+        bottom: '100%',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        marginBottom: 8,
+        width: '66%',
+        minWidth: 420,
+        maxWidth: 900,
+        maxHeight: '60vh',
+        overflowY: 'auto',
+        padding: '14px 18px',
+        borderRadius: 14,
+        border: '1px solid rgba(255,255,255,0.12)',
+        background: 'rgba(28,28,32,0.92)',
+        backdropFilter: 'blur(14px)',
+        WebkitBackdropFilter: 'blur(14px)',
+        boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+        zIndex: 50,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+      },
+      panelRoot: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        padding: '20px 24px',
+        height: '100%',
+        overflowY: 'auto',
+        maxWidth: 900,
+        margin: '0 auto',
+        width: '100%',
+        boxSizing: 'border-box',
+      },
       row: {
         display: 'flex',
         alignItems: 'center',
@@ -258,12 +324,25 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function createDock(ctx) {
-      return function MoodDock() {
+    function createDock(ctx, options) {
+      return function MoodDock(props) {
+        const opts = { ...(options || {}), ...(props || {}) };
         const [state, setState] = React.useState(null);
         const [failure, setFailure] = React.useState(null);
-        const [open, setOpen] = React.useState(false);
-        const [tab, setTab] = React.useState('summary');
+        const [open, setOpen] = React.useState(opts.defaultOpen === true);
+        const [tab, setTab] = React.useState('tasks');
+        const [formOpen, setFormOpen] = React.useState(null);
+        const [editingId, setEditingId] = React.useState(null);
+        const [expandedSchema, setExpandedSchema] = React.useState(null);
+        // 毫秒 → datetime-local 需要的本地时间字符串
+        const toLocalInput = (ms) => {
+          const d = new Date(ms);
+          const pad = (n) => String(n).padStart(2, '0');
+          return (
+            d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+            'T' + pad(d.getHours()) + ':' + pad(d.getMinutes())
+          );
+        };
         const [detail, setDetail] = React.useState(null);
         const [detailError, setDetailError] = React.useState(null);
         const [tick, setTick] = React.useState(0);
@@ -356,7 +435,63 @@ window.__ModuleLoader__.load({
           };
         }, [open, tick, token]);
 
+        // 新建表单：任务（含时间段）与记忆（内容 + 主题）
+        const formFor = (key) => {
+          if (key === 'tasks') {
+            if (formOpen !== 'tasks') {
+              return h('div', { style: S.meta },
+                h('button', { type: 'button', style: S.tab, onClick: () => setFormOpen('tasks') }, '＋ 新建任务'),
+              );
+            }
+            return h(
+              'div',
+              { style: S.item },
+              h('div', { style: S.itemTitle }, '新建任务'),
+              h('input', { id: 'cogTaskDesc', placeholder: '任务描述', style: S.input }),
+              h('div', { style: S.meta },
+                h('span', null, '开始'), h('input', { id: 'cogTaskStart', type: 'datetime-local', style: S.input }),
+                h('span', null, '顺序'), h('input', { id: 'cogTaskOrder', type: 'number', placeholder: '1', style: { ...S.input, width: 70 } }),
+                h('label', { style: { display: 'inline-flex', gap: 4, alignItems: 'center' } },
+                  h('input', { id: 'cogTaskParallel', type: 'checkbox' }), '与前一项并行'),
+              ),
+              h('button', { type: 'button', style: S.tab, onClick: async () => {
+                const d = document.getElementById('cogTaskDesc').value.trim();
+                if (!d) return;
+                const s = document.getElementById('cogTaskStart').value;
+                const o = document.getElementById('cogTaskOrder').value;
+                const pl = document.getElementById('cogTaskParallel').checked;
+                await post(`/cognition-engine/task/create?description=${encodeURIComponent(d)}${s ? `&startAt=${new Date(s).getTime()}` : ''}${o ? `&order=${o}` : ''}${pl ? '&parallel=true' : ''}`);
+                setTick((v) => v + 1);
+              } }, '创建任务'),
+            );
+          }
+          if (key === 'memories') {
+            if (formOpen !== 'memories') {
+              return h('div', { style: S.meta },
+                h('button', { type: 'button', style: S.tab, onClick: () => setFormOpen('memories') }, '＋ 新建记忆'),
+              );
+            }
+            return h(
+              'div',
+              { style: S.item },
+              h('div', { style: S.itemTitle }, '新建记忆'),
+              h('input', { id: 'cogMemContent', placeholder: '记忆内容', style: S.input }),
+              h('input', { id: 'cogMemSubject', placeholder: '主题（可留空）', style: S.input }),
+              h('button', { type: 'button', style: S.tab, onClick: async () => {
+                const c = document.getElementById('cogMemContent').value.trim();
+                if (!c) return;
+                const s = document.getElementById('cogMemSubject').value.trim();
+                await post(`/cognition-engine/memory/create?content=${encodeURIComponent(c)}${s ? `&subject=${encodeURIComponent(s)}` : ''}`);
+                setTick((v) => v + 1);
+              } }, '写入记忆'),
+              h('button', { type: 'button', style: S.tab, onClick: () => setFormOpen(null) }, '收起'),
+            );
+          }
+          return null;
+        };
+
         const toggle = () => setOpen((value) => !value);
+        const rootStyle = opts.variant === 'panel' ? S.panelRoot : opts.variant === 'wide' ? S.wideRoot : S.root;
 
         if (!state) {
           return h(
@@ -405,10 +540,10 @@ window.__ModuleLoader__.load({
           h('span', { style: S.caret }, open ? '▾' : '▸'),
         );
 
-        if (!open) return h('div', { style: S.root }, row);
+        if (!open) return h('div', { style: rootStyle }, row);
 
         const tabs = [
-          ['summary', dict.state],
+          // 「状态」页签已移除：三个数字与页签标签重复，没有信息量
           ['tasks', `${dict.tasks} ${detail ? detail.tasks.length : ''}`.trim()],
           ['memories', `${dict.memories} ${detail ? detail.memories.length : ''}`.trim()],
           ['schemas', `${dict.schemas} ${detail ? detail.schemas.length : ''}`.trim()],
@@ -436,13 +571,65 @@ window.__ModuleLoader__.load({
             'div',
             null,
             section(
-              `${dict.storage}：${(state.storage || {}).state || '-'}`,
-              h('span', null, `${dict.clear}：`),
-              button(dict.clearMemory, () => post('/cognition-engine/clear?scope=memory')),
-              button(dict.clearAll, () => post('/cognition-engine/clear?scope=all')),
+              dict.rulesTitle,
+              ...[
+                ['transient', dict.ruleTransient],
+                ['sensitive', dict.ruleSensitive],
+                ['injection', dict.ruleInjection],
+                ['authority', dict.ruleAuthority],
+              ].map((pair) =>
+                h(
+                  'label',
+                  { key: pair[0], style: { ...S.tab, cursor: 'pointer', display: 'inline-flex', gap: 4, alignItems: 'center' } },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: (state.rules || {})[pair[0]] !== false,
+                    onChange: (event) => {
+                      post(`/cognition-engine/rules/set?${pair[0]}=${event.target.checked}`).then(() => setTick((v) => v + 1));
+                    },
+                  }),
+                  pair[1],
+                ),
+              ),
             ),
             section(
-              `${dict.realModel}：${model.enabled ? dict.realMode : dict.localMode}`,
+              `${dict.storage}：${state.storageFile || '-'}`,
+              button(dict.clearMemory, () => post('/cognition-engine/clear?scope=memory')),
+              button(dict.clearAll, () => post('/cognition-engine/clear?scope=all')),
+              button(dict.consolidate, () => post('/cognition-engine/consolidate').then(() => setTick((v) => v + 1))),
+              button(dict.exportData, () => {
+                window.open('/cognition-engine/export', '_blank');
+              }),
+              h(
+                'label',
+                { style: { ...S.tab, cursor: 'pointer' } },
+                dict.importData,
+                h('input', {
+                  type: 'file',
+                  accept: 'application/json,.json',
+                  style: { display: 'none' },
+                  onChange: async (event) => {
+                    const file = event.target.files && event.target.files[0];
+                    if (!file) return;
+                    const text = await file.text();
+                    await post(`/cognition-engine/import?payload=${encodeURIComponent(text)}`);
+                    setTick((value) => value + 1);
+                  },
+                }),
+              ),
+            ),
+            section(
+              dict.realModel,
+              h(
+                'span',
+                {
+                  style: {
+                    color: model.enabled ? '#58a6ff' : '#8b949e',
+                    fontWeight: 600,
+                  },
+                },
+                model.enabled ? dict.realMode : dict.localMode,
+              ),
               h('span', null, model.available ? `${model.provider}/${model.model}` : dict.unavailable),
               button(
                 model.enabled ? `切换到${dict.localMode}` : `切换到${dict.realMode}`,
@@ -451,7 +638,12 @@ window.__ModuleLoader__.load({
               h('div', { style: S.explain }, dict.realModelHint),
             ),
             section(
-              `${dict.lock}：${state.locked ? dict.locked : dict.unlocked}`,
+              dict.lock,
+              h(
+                'span',
+                { style: { color: state.locked ? '#3fb950' : '#f85149', fontWeight: 600 } },
+                state.locked ? dict.locked : dict.unlocked,
+              ),
               button(state.locked ? dict.unlock : dict.lockOn, () =>
                 post(`/cognition-engine/lock?enabled=${state.locked ? 'false' : 'true'}`),
               ),
@@ -471,7 +663,35 @@ window.__ModuleLoader__.load({
             notice ? h('div', { style: S.explain }, notice) : null,
           );
         } else if (detailError !== null) {
-          body = h('div', { style: S.empty }, `${dict.noDetail} (${detailError})`);
+          // 口令未设置或错误：直接在面板里给输入框，避免「要口令才能开口令入口」的死锁
+          const isAuth = /401|unauthorized|口令/i.test(String(detailError));
+          if (isAuth) {
+            body = h(
+              'div',
+              { style: S.item },
+              h('div', { style: S.itemTitle }, dict.needToken),
+              h('input', {
+                value: tokenDraft,
+                placeholder: dict.token,
+                onChange: (event) => setTokenDraft(event.target.value),
+                style: S.input,
+              }),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  style: S.tab,
+                  onClick: () => {
+                    rememberToken(tokenDraft.trim());
+                    setTick((value) => value + 1);
+                  },
+                },
+                dict.applyToken,
+              ),
+            );
+          } else {
+            body = h('div', { style: S.empty }, `${dict.noDetail} (${detailError})`);
+          }
         } else if (!detail) {
           body = h('div', { style: S.empty }, dict.loading);
         } else if (tab === 'summary') {
@@ -506,75 +726,106 @@ window.__ModuleLoader__.load({
                         ? h('span', { style: { color: 'var(--dsw-alias-state-warn-primary)' } }, dict.overdue)
                         : null,
                     ),
+                    h(
+                      'div',
+                      { style: S.meta },
+                      h('span', null, `#${task.order ?? '-'}${task.parallel ? ' · 并行' : ''}`),
+                      h('button', { type: 'button', style: S.tab, onClick: () => post(`/cognition-engine/task/meta?id=${task.id}&order=${(task.order ?? 0) - 1}`).then(() => setTick((v) => v + 1)) }, '↑'),
+                      h('button', { type: 'button', style: S.tab, onClick: () => post(`/cognition-engine/task/meta?id=${task.id}&order=${(task.order ?? 0) + 1}`).then(() => setTick((v) => v + 1)) }, '↓'),
+                      h('button', { type: 'button', style: S.tab, onClick: () => post(`/cognition-engine/task/meta?id=${task.id}&parallel=${!task.parallel}`).then(() => setTick((v) => v + 1)) }, task.parallel ? '取消并行' : '设为并行'),
+                    ),
                     task.context.length > 0
                       ? h('div', { style: S.clue }, task.context[task.context.length - 1])
                       : null,
                   );
                 });
         } else if (tab === 'memories') {
-          body = renderList(detail.memories, (item) =>
+          body = renderList(detail.memories, (item) => {
+            if (editingId === item.id) {
+              return h(
+                'div',
+                { key: item.id, style: S.item },
+                h('div', { style: S.itemTitle }, '编辑记忆'),
+                h('input', { id: 'ec-' + item.id, defaultValue: item.content, style: S.input }),
+                h('input', { id: 'es-' + item.id, defaultValue: item.subject, style: S.input }),
+                h(
+                  'div',
+                  { style: S.meta },
+                  h('span', null, '录入时间'),
+                  h('input', { id: 'er-' + item.id, type: 'datetime-local', defaultValue: toLocalInput(item.recordedAt), style: S.input }),
                   h(
-                    'div',
-                    { key: item.id, style: S.item },
-                    h('div', { style: S.itemTitle }, item.content),
-                    h(
-                      'div',
-                      { style: S.meta },
-                      h(
-                        'span',
-                        {
-                          style: {
-                            ...S.chip,
-                            color:
-                              item.source === 'test'
-                                ? 'var(--dsw-alias-state-warn-primary)'
-                                : item.source === 'user'
-                                  ? 'var(--dsw-alias-state-success-primary)'
-                                  : 'var(--dsw-alias-label-secondary)',
-                          },
-                        },
-                        item.source,
-                      ),
-                      h(
-                        'span',
-                        {
-                          style: {
-                            ...S.chip,
-                            color: item.current
-                              ? 'var(--dsw-alias-state-success-primary)'
-                              : 'var(--dsw-alias-label-secondary)',
-                          },
-                        },
-                        item.current ? dict.current : dict.superseded,
-                      ),
-                      h('span', null, item.subject),
-                      h('span', null, item.id),
-                      h('span', null, `${item.chars} 字`),
-                      item.tags.length > 0 ? h('span', null, item.tags.join(' · ')) : null,
-                    ),
+                    'label',
+                    { style: { display: 'inline-flex', gap: 4, alignItems: 'center' } },
+                    h('input', { id: 'ep-' + item.id, type: 'checkbox', defaultChecked: !item.current }),
+                    '标记为已失效',
                   ),
-                );
+                ),
+                h(
+                  'div',
+                  { style: S.meta },
+                  h('button', { type: 'button', style: S.tab, onClick: async () => {
+                    const c = document.getElementById('ec-' + item.id).value.trim();
+                    const sj = document.getElementById('es-' + item.id).value.trim();
+                    const r = document.getElementById('er-' + item.id).value;
+                    const sp = document.getElementById('ep-' + item.id).checked;
+                    await post('/cognition-engine/memory/update?id=' + item.id + '&content=' + encodeURIComponent(c) + '&subject=' + encodeURIComponent(sj) + (r ? '&recordedAt=' + new Date(r).getTime() : '') + '&superseded=' + sp);
+                    setEditingId(null);
+                    setTick((v) => v + 1);
+                  } }, '保存'),
+                  h('button', { type: 'button', style: S.tab, onClick: () => setEditingId(null) }, '取消'),
+                ),
+              );
+            }
+            return h(
+              'div',
+              { key: item.id, style: S.item },
+              h('div', { style: S.itemTitle }, item.content),
+              h(
+                'div',
+                { style: S.meta },
+                h('span', { style: { ...S.chip, color: item.current ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-label-secondary)' } }, item.current ? dict.current : dict.superseded),
+                item.revisedAt ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-warn-primary)' } }, '已手动修正') : null,
+                item.mergedInto ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-label-secondary)' } }, '已并入 ' + item.mergedInto) : null,
+                h('span', null, item.subject),
+                h('span', null, new Date(item.recordedAt).toLocaleString()),
+                h('span', null, item.id),
+                h('button', { type: 'button', style: S.tab, onClick: () => setEditingId(item.id) }, '编辑'),
+              ),
+            );
+          });
         } else {
-          body = renderList(detail.schemas, (item) =>
-                  h(
+          body = renderList(detail.schemas, (item) => {
+            const open = expandedSchema === item.id;
+            return h(
+              'div',
+              { key: item.id, style: S.item },
+              h('div', { style: S.itemTitle }, item.label),
+              h(
+                'div',
+                { style: S.meta },
+                h('span', null, '包含 ' + item.members + ' 条记忆'),
+                h('span', null, '相关主题 ' + item.neighbors),
+                h('span', null, item.polarity >= 0 ? '肯定倾向' : '否定倾向'),
+                h('button', { type: 'button', style: S.tab, onClick: () => setExpandedSchema(open ? null : item.id) }, open ? '收起' : '看看里面有什么'),
+              ),
+              open
+                ? h(
                     'div',
-                    { key: item.id, style: S.item },
-                    h('div', { style: S.itemTitle }, item.label),
-                    h(
-                      'div',
-                      { style: S.meta },
-                      h('span', null, item.id),
-                      h('span', null, `${dict.members} ${item.members}`),
-                      h('span', null, `${dict.links} ${item.neighbors}`),
-                      h('span', null, item.polarity >= 0 ? '极性 +' : '极性 −'),
-                    ),
-                  ),
-                );
+                    { style: S.list },
+                    (item.memberTexts || []).length === 0
+                      ? h('div', { style: S.explain }, '这个主题下还没有记忆')
+                      : (item.memberTexts || []).map((text, index) =>
+                          h('div', { key: index, style: S.clue }, '· ' + text),
+                        ),
+                  )
+                : null,
+            );
+          });
         }
 
         const panel = h(
           'div',
-          { style: S.panel, role: 'dialog', 'aria-label': dict.name },
+          { style: opts.variant === 'wide' ? S.widePanel : S.panel, role: 'dialog', 'aria-label': dict.name },
           h(
             'div',
             { style: S.tabs },
@@ -615,10 +866,18 @@ window.__ModuleLoader__.load({
               dict.close,
             ),
           ),
-          h('div', { style: S.list }, body),
+          h(
+            'div',
+            { style: S.list },
+            { tasks: dict.tasksHint, memories: dict.memoriesHint, schemas: dict.schemasHint }[tab]
+              ? h('div', { style: S.explain }, { tasks: dict.tasksHint, memories: dict.memoriesHint, schemas: dict.schemasHint }[tab])
+              : null,
+            formFor(tab),
+            body,
+          ),
         );
 
-        return h('div', { style: S.root }, row, panel);
+        return h('div', { style: rootStyle }, row, panel);
       };
     }
 
@@ -631,12 +890,36 @@ window.__ModuleLoader__.load({
         }
         try {
           const Dock = createDock(ctx);
-          ctx.slots.inject('conversation.composer.dock', () =>
-            ctx.slots.register(
-              { name: 'conversation.composer.dock', id: 'cognition-mood', order: 6 },
-              Dock,
-            ),
+          // 输入框上方全宽入口（居中、透明浮层，展开不挤压对话框）
+          const Wide = (props) => h(Dock, { ...props, defaultOpen: false, variant: 'wide' });
+          ctx.slots.inject('conversation.input.dock', () =>
+            ctx.slots.register({ name: 'conversation.input.dock', id: 'cognition-engine', order: 5 }, Wide),
           );
+          try {
+            const Panel = (props) => h(Dock, { ...props, defaultOpen: true, variant: 'panel' });
+            const Icon = (props) =>
+              h(
+                'span',
+                {
+                  style: {
+                    fontSize: Math.round((props && props.size ? props.size : 18) * 0.7),
+                    lineHeight: 1,
+                  },
+                  'aria-hidden': 'true',
+                },
+                '◈',
+              );
+            ctx.slots.inject('sidebar.panellist', () =>
+              ctx.slots.register({ name: 'sidebar.panellist', id: 'cognition-engine', order: 30, label: () => '认知引擎' }, Icon),
+            );
+            ctx.slots.inject('main', () =>
+              ctx.slots.register({ name: 'main', key: 'cognition-engine' }, Panel),
+            );
+          } catch (error) {
+            if (ctx.logger && typeof ctx.logger.warn === 'function') {
+              ctx.logger.warn('cognition-engine: 侧边栏槽位注册失败，已降级为仅状态条');
+            }
+          }
         } catch (error) {
           // 槽位被占用或宿主不支持：静默跳过，工具与记忆功能不受影响
           if (ctx.logger && typeof ctx.logger.warn === 'function') {

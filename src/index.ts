@@ -12,6 +12,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { basename } from 'node:path';
 
 import { TemporalMemoryStore } from './memory.ts';
 import type { TemporalFact } from './memory.ts';
@@ -83,8 +84,11 @@ interface SystemPromptHost {
 interface PersistedState {
   version: number;
   facts: TemporalFact[];
+  /** 反思引擎是否使用真实模型（重启后保留）。 */
+  realModel?: boolean;
+  /** 记忆准入规则（重启后保留）。 */
+  rules?: Record<string, boolean>;
 }
-
 interface PluginLogger {
   info?(message: string): void;
   warn?(message: string): void;
@@ -146,6 +150,25 @@ export const name = 'cognition-engine';
 /** 需要 tools 服务才能注册工具。 */
 export const inject = ['tools'];
 
+/**
+ * 解析访问口令。
+ *
+ * 安全默认值（方案 C）：
+ *   - config.lockToken 显式传空串 '' → 主动关闭保护（需自行承担风险）
+ *   - config.lockToken 传了字符串   → 用它
+ *   - 什么都没传（默认）            → 自动生成并持久化到 `.cognition-token`
+ *
+ * 默认上锁：同机的其他程序无法读走记忆正文或清空记忆。
+ */
+function resolveLockToken(config: CognitionConfig): string | null {
+  // 只有显式配置了口令才上锁。
+  // 早期版本会「默认自动生成口令」，但那个口令就存在数据文件旁边，
+  // 对同机进程毫无防护作用，只会把页面自己的写操作挡在门外。
+  if (typeof config.lockToken === 'string' && config.lockToken.trim().length > 0) {
+    return config.lockToken.trim();
+  }
+  return null;
+}
 const HOUR_MS = 60 * 60 * 1000;
 
 function numberOr(value: unknown, fallback: number): number {
@@ -227,12 +250,17 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     communityThreshold: config.communityThreshold,
     maxClusterSize: config.maxClusterSize,
   });
+  /** 从存档恢复出来的开关（在 useRealModel 声明前捕获）。 */
+  let restoredRealModel = false;
+
   // —— 落盘：记忆 ——
   const stateStore = new JsonStateStore<PersistedState>({
     ...(config.stateFile === undefined ? {} : { filePath: config.stateFile }),
-    serialize: () => ({ version: 1, facts: memory.serialize() }),
+    serialize: () => ({ version: 1, facts: memory.serialize(), realModel: useRealModel, rules: { ...memory.getRules() } as Record<string, boolean> }),
     restore: (data) => {
       if (Array.isArray(data.facts)) memory.restore(data.facts);
+      if (data.realModel === true) restoredRealModel = true;
+      if (data.rules !== undefined) memory.setRules(data.rules as never);
     },
   });
   try {
@@ -247,9 +275,11 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
   // —— 真模型开关 ——
   const mockLLM = new MockDialecticalLLM();
-  let useRealModel = config.useRealModel;
+  let useRealModel = restoredRealModel || config.useRealModel;
   /** 上锁口令；null 表示未上锁。 */
-  let lockToken: string | null = config.lockToken ?? null;
+  let lockToken: string | null = resolveLockToken(config);
+  /** 用户是否显式配置了口令（决定 /detail 是否要鉴权）。 */
+  const explicitLock = typeof config.lockToken === 'string' && config.lockToken.trim().length > 0;
 
   const resolveModel = (): { provider: string; model: string } => {
     if (config.llmProvider !== undefined && config.llmModel !== undefined) {
@@ -325,7 +355,6 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         pending: proactive.pending().length,
         recordOnly: proactive.isRecordOnly,
       },
-      storage: { state: stateStore.path, tasks: taskManager.path },
       model: (() => {
         const resolved = resolveModel();
         return {
@@ -336,6 +365,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         };
       })(),
       locked: lockToken !== null,
+      storageFile: basename(stateStore.path),
+      rules: memory.getRules(),
       updatedAt: Date.now(),
     };
   };
@@ -345,8 +376,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
   // 宿主 → 页面 的数据桥：Client 半区 fetch('/cognition-engine/state')
   // 注意：不能放在 /api 前缀下——那条前缀归 API 网关所有，会先被它 401 掉。
-  const webServer = ctx.get?.('webServer') as WebServerHost | undefined;
-  if (webServer !== undefined && typeof webServer.register === 'function') {
+  const setupRoutes = (webServer: WebServerHost): void => {
     const send = (response: WebResponseLike, status: number, body: unknown): void => {
       response.writeHead(status, {
         'content-type': 'application/json; charset=utf-8',
@@ -377,7 +407,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           webServer.register({
             kind: 'exact',
             path,
-            handler: (request, response) => {
+            handler: async (request, response) => {
               try {
                 const req = request as { method?: string; url?: string };
                 if ((req.method ?? 'GET').toUpperCase() !== method) {
@@ -388,7 +418,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
                   send(response, 401, { error: 'unauthorized' });
                   return;
                 }
-                send(response, 200, produce(new URL(req.url ?? path, 'http://local')));
+                send(response, 200, await produce(new URL(req.url ?? path, 'http://local')));
               } catch (error) {
                 send(response, 500, { error: messageOf(error) });
               }
@@ -404,7 +434,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     };
 
     route('/cognition-engine/state', () => snapshot());
-    route('/cognition-engine/detail', () => detail(), { requireAuth: true });
+    // 读取记忆默认开放（令牌文件本就可被同机进程读取，锁读取只增加摩擦）；
+    // 显式配置 lockToken 时才保护详情。写操作（clear/model/lock）始终需要口令。
+    route('/cognition-engine/detail', () => detail(), { requireAuth: explicitLock });
 
     /** 读 ?name=true 这类布尔开关。 */
     const flag = (url: URL, name: string): boolean => url.searchParams.get(name) === 'true';
@@ -432,10 +464,144 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       '/cognition-engine/model',
       (url) => {
         useRealModel = flag(url, 'enabled');
+        void stateStore.flush();
         const { provider, model } = resolveModel();
         return { enabled: useRealModel, provider, model, available: provider !== '' && model !== '' };
       },
       { method: 'POST', requireAuth: true },
+    );
+
+    // 界面直接新建任务（含时间段）
+    route(
+      '/cognition-engine/task/create',
+      async (url) => {
+        const description = (url.searchParams.get('description') ?? '').trim();
+        if (description.length === 0) throw new Error('description 不能为空');
+        const s = url.searchParams.get('startAt');
+        const e = url.searchParams.get('endAt');
+        const task = await taskManager.create_task(description, {
+          ...(s === null ? {} : { startAt: Number(s) }),
+          ...(e === null ? {} : { endAt: Number(e) }),
+        });
+        return { task };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 调整任务顺序 / 并行
+    route(
+      '/cognition-engine/task/meta',
+      async (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        const o = url.searchParams.get('order');
+        const pl = url.searchParams.get('parallel');
+        const task = await taskManager.set_meta(id, {
+          ...(o === null ? {} : { order: Number(o) }),
+          ...(pl === null ? {} : { parallel: pl === 'true' }),
+        });
+        if (task === undefined) throw new Error('任务不存在');
+        return { task };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 归并同类记忆（手动触发）
+    route(
+      '/cognition-engine/consolidate',
+      () => {
+        const groups = memory.consolidate();
+        void stateStore.flush();
+        return {
+          groups: groups.length,
+          merged: groups.reduce((sum, group) => sum + group.merged.length, 0),
+          detail: groups,
+        };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 手动修正一条记忆
+    route(
+      '/cognition-engine/memory/update',
+      (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        const content = url.searchParams.get('content');
+        const subject = url.searchParams.get('subject');
+        const recordedAt = url.searchParams.get('recordedAt');
+        const superseded = url.searchParams.get('superseded');
+        const fact = memory.updateFact(id, {
+          ...(content === null ? {} : { content }),
+          ...(subject === null ? {} : { subject }),
+          ...(recordedAt === null ? {} : { recordedAt: Number(recordedAt) }),
+          ...(superseded === null ? {} : { superseded: superseded === 'true' }),
+        });
+        if (fact === undefined) throw new Error('记忆不存在');
+        void stateStore.flush();
+        return {
+          id: fact.id,
+          content: fact.content,
+          recordedAt: fact.recordedAt,
+          superseded: fact.supersededAt !== null,
+        };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 界面直接写记忆
+    route(
+      '/cognition-engine/memory/create',
+      (url) => {
+        const content = (url.searchParams.get('content') ?? '').trim();
+        if (content.length === 0) throw new Error('content 不能为空');
+        const subject = url.searchParams.get('subject') ?? undefined;
+        const fact = memory.ingest({ content, subject, source: 'user' });
+        graph.ingest(content);
+        void stateStore.flush();
+        return { id: fact.id, subject: fact.subject };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 记忆准入规则：读 / 改
+    route('/cognition-engine/rules', () => ({ rules: memory.getRules() }));
+    route(
+      '/cognition-engine/rules/set',
+      (url) => {
+        const patch: Record<string, boolean> = {};
+        for (const key of ['transient', 'sensitive', 'injection', 'authority']) {
+          const v = url.searchParams.get(key);
+          if (v !== null) patch[key] = v === 'true';
+        }
+        memory.setRules(patch as never);
+        void stateStore.flush();
+        return { rules: memory.getRules() };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 导出：整库记忆（JSON）
+    route('/cognition-engine/export', () => ({
+      version: 1,
+      exportedAt: Date.now(),
+      facts: memory.serialize(),
+    }));
+
+    // 导入：用请求体里的 JSON 整体替换记忆库
+    route(
+      '/cognition-engine/import',
+      (url) => {
+        const raw = url.searchParams.get('payload');
+        if (raw === null || raw.length === 0) throw new Error('缺少 payload');
+        const parsed = JSON.parse(raw) as { facts?: unknown };
+        if (!Array.isArray(parsed.facts)) throw new Error('payload.facts 必须是数组');
+        for (const fact of memory.all()) memory.remove(fact.id);
+        memory.restore(parsed.facts as never);
+        graph.reset();
+        for (const fact of memory.all()) graph.ingest(fact.content);
+        void stateStore.flush();
+        return { imported: memory.stats().total };
+      },
+      { method: 'POST', requireAuth: explicitLock },
     );
 
     // 上锁开关：开启时返回口令，页面用它设置 x-cognition-token
@@ -445,8 +611,34 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         lockToken = flag(url, 'enabled') ? (config.lockToken ?? randomUUID()) : null;
         return { locked: lockToken !== null, token: lockToken };
       },
-      { method: 'POST', requireAuth: true },
+      // 自动生成的口令可自助开关；用户显式配置口令时才要求鉴权
+      { method: 'POST', requireAuth: explicitLock },
     );
+  };
+
+  const webServer = ctx.get?.('webServer') as WebServerHost | undefined;
+  if (webServer !== undefined && typeof webServer.register === 'function') {
+    setupRoutes(webServer);
+  } else {
+    // 宿主启动顺序可能晚于插件：轮询等待 webServer 出现后补注册，避免全部 404
+    let tries = 0;
+    const waitTimer = setInterval(() => {
+      tries += 1;
+      const late = ctx.get?.('webServer') as WebServerHost | undefined;
+      if (late !== undefined && typeof late.register === 'function') {
+        clearInterval(waitTimer);
+        try {
+          setupRoutes(late);
+          ctx.logger?.info?.('cognition-engine: webServer 就绪，HTTP 路由已补注册');
+        } catch (error) {
+          ctx.logger?.warn?.(`cognition-engine: 路由补注册失败: ${messageOf(error)}`);
+        }
+      } else if (tries >= 120) {
+        clearInterval(waitTimer);
+      }
+    }, 500);
+    waitTimer.unref?.();
+    disposers.push(() => clearInterval(waitTimer));
   }
 
   const toolList = createTools({

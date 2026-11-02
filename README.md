@@ -44,6 +44,12 @@
 - **纠正记忆**：`cognition_remember` 传 `kind: 'correction'` 会自动打标、提升重要度，
   并在跨会话摘要里置顶——「上次错在哪」比「上次说了什么」更值得记住。
 - **记忆会老化**：长期没被想起的记忆自动归档——不进 strict 召回，但历史与联想仍可查到。
+- **记忆可归并**：同主题下高度相似的条目可一键合并，被合并的标记 `mergedInto` 而不删除，历史仍可查。
+- **记忆可手动修正**：内容、主题、录入时间、有效状态都能改；改过的条目标「已手动修正」，不伪造历史。
+- **准入规则可开关**：忽略寒暄 / 拦截密钥 / 拦截指令注入 / 低权威不得覆盖高权威，四条独立开关。
+- **任务支持顺序与并行**：可设排序号与前一项并行推进；没有硬性截止时间，只有超时提醒。
+- **数据可导出导入**：整库记忆导出为 JSON，也能整体导入替换。
+- **一键安装**：Windows 与 dsh-go 各有一条命令的安装脚本。
 - **持久化**：记忆写入 `cognition-state.json`，重启自动恢复；页面一键清空。
 - **反思引擎**：可在「本地模拟」与「真实模型」之间切换；真实模型走宿主 `llm` 服务。
 - **记忆读取锁**：给读取记忆正文的接口加访问口令，防止本机其他进程偷看。
@@ -52,20 +58,41 @@
 
 ## 安装
 
-需要 DeepSeek Harness，Node.js ≥ 22。
+需要 DeepSeek Harness，Node.js ≥ 22，Git。
 
-```sh
-# 从本地目录安装（推荐先用这个）
-dsh plugin --profile desktop add /path/to/cognition-engine
+### 一条命令（Windows）
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/1720198650/dsh-cognition-engine/main/scripts/install.ps1 | iex"
 ```
 
-或让 Agent 直接调 `plugin_manager` 的 `install_bundle` 指向该目录。
+自动完成：克隆到 `%USERPROFILE%\dsh-plugins\dsh-cognition-engine` → 装依赖 → 构建 → 注册到 `desktop` profile。
 
-安装后重启一次 DSH。页面输入框下方会出现状态条。
+### 一条命令（Android / dsh-go 本机引擎）
 
-> 包名：`dsh-cognition-engine`（无作用域，便于 git+https 与手机端安装）。旧版曾用 `dsh-cognition-engine`，并同步修改 `cordis.patch.yml` 里的 `name`。
+```sh
+curl -fsSL https://raw.githubusercontent.com/1720198650/dsh-cognition-engine/main/scripts/install-dshgo.sh | sh
+```
 
----
+### 从 npm（包发布后可用）
+
+```sh
+dsh plugin --profile desktop add dsh-cognition-engine
+```
+
+### 手动安装
+
+```sh
+git clone https://github.com/1720198650/dsh-cognition-engine.git
+cd dsh-cognition-engine
+npm install && npm run build
+dsh plugin --profile desktop add .
+```
+
+安装后重启一次 DSH，左侧栏会出现 `◈` 图标。
+
+> 首次启动会生成 `cognition-token.txt`。默认不需要口令即可查看面板；
+> 只有在设置页手动开启「记忆读取锁」后才需要。
 
 ## 七个工具
 

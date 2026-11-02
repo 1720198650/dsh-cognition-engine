@@ -1,6 +1,6 @@
 {
   "name": "dsh-cognition-engine",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "type": "module",
   "description": "DSH cognition engine: bitemporal memory, constructivist schema graph, mood state machine, dialectical reflection, long-horizon tasks",
   "license": "MIT",
@@ -62,12 +62,16 @@
     "test": "tsx src/test.ts",
     "test:node": "node src/test.ts",
     "eval": "tsx src/eval.ts",
-    "eval:node": "node src/eval.ts"
+    "eval:node": "node src/eval.ts",
+    "prepublishOnly": "npm run build"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "js-tiktoken": "^1.0.21",
     "tsx": "^4.19.0",
     "typescript": "^5.9.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -19,6 +19,7 @@
  *
  * 存储：纯 TypeScript + Map，无任何外部数据库。
  */
+import type { AdmissionRules } from './admission.ts';
 export type RecallMode = 'strict' | 'historical' | 'belief' | 'associative';
 /** 记忆作用域：全局共享 / 工作区共享 / 会话私有。 */
 export type MemoryScope = 'global' | 'workspace' | 'session';
@@ -48,6 +49,10 @@ export interface TemporalFact {
     readonly activation: number;
     /** 是否已归档：不进 strict 召回，但历史与联想仍可查。 */
     readonly archived: boolean;
+    /** 最近一次手动修正的时间（用户改过内容/状态/录入时间）。 */
+    readonly revisedAt?: number;
+    /** 已被归并到哪条记忆（归并后不进 strict 召回，但历史仍可查）。 */
+    readonly mergedInto?: string;
     readonly lastAccessedAt: number;
 }
 /** 兼容旧命名：外部文档里把这条记录叫 MemoryNode。 */
@@ -183,6 +188,8 @@ export declare function deriveSubject(content: string): string;
 export declare class TemporalMemoryStore {
     private readonly facts;
     private readonly bySubject;
+    /** 用户可配置的准入规则。 */
+    private rules;
     private readonly tokens;
     private readonly clock;
     private readonly halfLifeMs;
@@ -245,6 +252,18 @@ export declare class TemporalMemoryStore {
      */
     conflicts(): Conflict[];
     stats(): MemoryStats;
+    /**
+     * 手动修正一条记忆：内容、主题、录入时间、有效状态。
+     *
+     * 注意 recordedAt 是双时态的事务时间轴，改动会让 belief 口径的答案偏移，
+     * 所以这里会打上 revisedAt 标记，表示「这条被人工改过」。
+     */
+    updateFact(id: string, patch: {
+        content?: string;
+        subject?: string;
+        recordedAt?: number;
+        superseded?: boolean;
+    }): TemporalFact | undefined;
     /** 归档 / 取消归档一条记忆（不删数据，只影响 strict 召回）。 */
     setArchived(id: string, archived: boolean): boolean;
     /**
@@ -256,6 +275,23 @@ export declare class TemporalMemoryStore {
         maxActivation?: number;
         now?: number;
     }): string[];
+    /**
+     * 记忆归并：同一主题下，内容高度相似且极性一致的条目收敛成一条，
+     * 其余标记 mergedInto（不删除，历史仍可查）。
+     *
+     * 纯规则实现，不调用 LLM：相似度用词频余弦，保留重要度最高的一条作为主条目。
+     */
+    consolidate(options?: {
+        subject?: string;
+        threshold?: number;
+    }): Array<{
+        kept: string[];
+        merged: string[];
+    }>;
+    /** 设置准入规则（页面上的开关）。 */
+    setRules(rules: Partial<AdmissionRules>): AdmissionRules;
+    /** 当前准入规则。 */
+    getRules(): AdmissionRules;
     /** 导出为纯 JSON（可自行落盘到 .json 文件，仍然不依赖数据库）。 */
     serialize(): TemporalFact[];
     /** 从 serialize() 的结果恢复；缺失字段按默认值补齐。 */
