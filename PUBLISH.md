@@ -23,7 +23,7 @@ git --version
 ## 2. 初始化仓库
 
 ```powershell
-cd D:\dshgz\cognition-engine
+cd <插件目录>
 git init
 git add .
 git commit -m "feat: dsh-cognition-engine v0.1.0"

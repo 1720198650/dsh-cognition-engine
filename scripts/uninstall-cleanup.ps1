@@ -3,7 +3,7 @@
 # The plugin itself must still be removed through plugin_manager / dsh plugin.
 
 param(
-    [string]$Workspace = 'D:\dshgz'
+    [string]$Workspace = (Get-Location).Path
 )
 
 $ErrorActionPreference = 'Stop'

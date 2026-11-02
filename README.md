@@ -86,8 +86,8 @@ dsh plugin --profile desktop add /path/to/cognition-engine
         overlapThreshold: 0.42         # 重叠聚类阈值
         communityThreshold: 0.3        # 社区连边阈值
         maxClusterSize: 8              # 单簇上限
-        tasksFile: D:/path/tasks.json
-        stateFile: D:/path/cognition-state.json
+        tasksFile: ./tasks.json
+        stateFile: ./cognition-state.json
         heartbeatHours: 6              # 多久没更新算超时
         patrolIntervalHours: 3         # 后台巡视间隔
         recordOnly: true               # 主动发言只记录不发送
@@ -141,7 +141,7 @@ dsh plugin --profile desktop add /path/to/cognition-engine
 清理脚本：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\dshgz\cognition-engine\scripts\uninstall-cleanup.ps1 -Workspace D:\dshgz
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\uninstall-cleanup.ps1 -Workspace "<工作区目录>"
 ```
 
 然后移除插件本体：
