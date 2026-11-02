@@ -601,6 +601,14 @@ export class SchemaGraphManager {
     return scored.slice(0, limit).map((item) => item.text);
   }
 
+  /** 删除一个主题：只移除聚类本身，成员记忆仍保留。 */
+  removeSchema(id: string): boolean {
+    if (!this.schemas.delete(id)) return false;
+    this.edges.delete(id);
+    for (const targets of this.edges.values()) targets.delete(id);
+    return true;
+  }
+
   reset(): void {
     this.schemas.clear();
     this.edges.clear();

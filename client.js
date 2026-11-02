@@ -733,6 +733,11 @@ window.__ModuleLoader__.load({
                       h('button', { type: 'button', style: S.tab, onClick: () => post(`/cognition-engine/task/meta?id=${task.id}&order=${(task.order ?? 0) - 1}`).then(() => setTick((v) => v + 1)) }, '↑'),
                       h('button', { type: 'button', style: S.tab, onClick: () => post(`/cognition-engine/task/meta?id=${task.id}&order=${(task.order ?? 0) + 1}`).then(() => setTick((v) => v + 1)) }, '↓'),
                       h('button', { type: 'button', style: S.tab, onClick: () => post(`/cognition-engine/task/meta?id=${task.id}&parallel=${!task.parallel}`).then(() => setTick((v) => v + 1)) }, task.parallel ? '取消并行' : '设为并行'),
+                      h('button', { type: 'button', style: { ...S.tab, color: '#f85149' }, onClick: async () => {
+                        if (!window.confirm('删除这个任务？')) return;
+                        await post('/cognition-engine/task/delete?id=' + task.id);
+                        setTick((v) => v + 1);
+                      } }, '删除'),
                     ),
                     task.context.length > 0
                       ? h('div', { style: S.clue }, task.context[task.context.length - 1])
@@ -773,6 +778,12 @@ window.__ModuleLoader__.load({
                     setTick((v) => v + 1);
                   } }, '保存'),
                   h('button', { type: 'button', style: S.tab, onClick: () => setEditingId(null) }, '取消'),
+                  h('button', { type: 'button', style: { ...S.tab, color: '#f85149' }, onClick: async () => {
+                    if (!window.confirm('删除这条记忆？删除后不再参与回忆，但数据仍保留，可恢复。')) return;
+                    await post('/cognition-engine/memory/delete?id=' + item.id);
+                    setEditingId(null);
+                    setTick((v) => v + 1);
+                  } }, '删除'),
                 ),
               );
             }
@@ -807,6 +818,11 @@ window.__ModuleLoader__.load({
                 h('span', null, '相关主题 ' + item.neighbors),
                 h('span', null, item.polarity >= 0 ? '肯定倾向' : '否定倾向'),
                 h('button', { type: 'button', style: S.tab, onClick: () => setExpandedSchema(open ? null : item.id) }, open ? '收起' : '看看里面有什么'),
+                h('button', { type: 'button', style: { ...S.tab, color: '#f85149' }, onClick: async () => {
+                  if (!window.confirm('删除这个主题？成员记忆会被保留。')) return;
+                  await post('/cognition-engine/schema/delete?id=' + item.id);
+                  setTick((v) => v + 1);
+                } }, '删除'),
               ),
               open
                 ? h(

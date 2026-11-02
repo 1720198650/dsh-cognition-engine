@@ -59,6 +59,8 @@ export interface TemporalFact {
   readonly revisedAt?: number;
   /** 已被归并到哪条记忆（归并后不进 strict 召回，但历史仍可查）。 */
   readonly mergedInto?: string;
+  /** 软删除时间：任何召回口径都不再返回，但数据保留可恢复。 */
+  readonly deletedAt?: number;
   readonly lastAccessedAt: number;
 }
 
@@ -793,6 +795,23 @@ export class TemporalMemoryStore {
     return out;
   }
 
+  /** 软删除：任何召回口径都不再返回，数据保留，可恢复。 */
+  softDelete(id: string): boolean {
+    const fact = this.facts.get(id);
+    if (fact === undefined) return false;
+    this.facts.set(id, Object.freeze({ ...fact, deletedAt: this.clock() }));
+    return true;
+  }
+
+  /** 恢复一条软删除的记忆。 */
+  restoreDeleted(id: string): boolean {
+    const fact = this.facts.get(id);
+    if (fact === undefined || fact.deletedAt === undefined) return false;
+    const { deletedAt: _drop, ...rest } = fact;
+    this.facts.set(id, Object.freeze(rest as TemporalFact));
+    return true;
+  }
+
   /** 设置准入规则（页面上的开关）。 */
   setRules(rules: Partial<AdmissionRules>): AdmissionRules {
     this.rules = { ...this.rules, ...rules };
@@ -849,7 +868,8 @@ export class TemporalMemoryStore {
     switch (mode) {
       case 'strict':
         // 已归档的记忆不再算「当前真值」，但仍可被 historical / associative 查到
-        if (fact.archived === true || fact.mergedInto !== undefined) return false;
+        if (fact.deletedAt !== undefined) return false;
+    if (fact.archived === true || fact.mergedInto !== undefined) return false;
         return isCurrent(fact, now);
       case 'historical':
         return isValidAt(fact, options.validTime ?? now);

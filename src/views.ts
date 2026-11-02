@@ -65,6 +65,7 @@ export function buildDetail({ memory, graph, taskManager }: DetailDeps): Record<
 
   const memories = memory
     .all()
+    .filter((fact) => fact.deletedAt === undefined)
     .slice()
     .sort((a, b) => b.recordedAt - a.recordedAt)
     .slice(0, 50)

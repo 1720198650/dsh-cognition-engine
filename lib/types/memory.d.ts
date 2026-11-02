@@ -53,6 +53,8 @@ export interface TemporalFact {
     readonly revisedAt?: number;
     /** 已被归并到哪条记忆（归并后不进 strict 召回，但历史仍可查）。 */
     readonly mergedInto?: string;
+    /** 软删除时间：任何召回口径都不再返回，但数据保留可恢复。 */
+    readonly deletedAt?: number;
     readonly lastAccessedAt: number;
 }
 /** 兼容旧命名：外部文档里把这条记录叫 MemoryNode。 */
@@ -288,6 +290,10 @@ export declare class TemporalMemoryStore {
         kept: string[];
         merged: string[];
     }>;
+    /** 软删除：任何召回口径都不再返回，数据保留，可恢复。 */
+    softDelete(id: string): boolean;
+    /** 恢复一条软删除的记忆。 */
+    restoreDeleted(id: string): boolean;
     /** 设置准入规则（页面上的开关）。 */
     setRules(rules: Partial<AdmissionRules>): AdmissionRules;
     /** 当前准入规则。 */

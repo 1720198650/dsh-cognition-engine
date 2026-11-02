@@ -216,6 +216,8 @@ export declare class SchemaGraphManager {
      * 抽取式代表：挑与图式质心最接近的成员原文（RAPTOR 摘要的零成本替代）。
      */
     representatives(schemaId: string, limit?: number): string[];
+    /** 删除一个主题：只移除聚类本身，成员记忆仍保留。 */
+    removeSchema(id: string): boolean;
     reset(): void;
     private makeObservation;
     private rank;

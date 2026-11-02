@@ -520,6 +520,44 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       { method: 'POST', requireAuth: explicitLock },
     );
 
+    // 删除任务
+    route(
+      '/cognition-engine/task/delete',
+      async (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        const ok = await taskManager.delete_task(id);
+        if (!ok) throw new Error('任务不存在');
+        return { id, deleted: true };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 删除主题（成员记忆保留）
+    route(
+      '/cognition-engine/schema/delete',
+      (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        if (!graph.removeSchema(id)) throw new Error('主题不存在');
+        void stateStore.flush();
+        return { id, deleted: true };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 删除 / 恢复一条记忆（软删除）
+    route(
+      '/cognition-engine/memory/delete',
+      (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        const restore = url.searchParams.get('restore') === 'true';
+        const ok = restore ? memory.restoreDeleted(id) : memory.softDelete(id);
+        if (!ok) throw new Error(restore ? '没有可恢复的记忆' : '记忆不存在');
+        void stateStore.flush();
+        return { id, deleted: !restore };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
     // 手动修正一条记忆
     route(
       '/cognition-engine/memory/update',
