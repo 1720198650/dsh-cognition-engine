@@ -15,15 +15,14 @@ import { randomUUID } from 'node:crypto';
 
 import { TemporalMemoryStore } from './memory.ts';
 import type { TemporalFact } from './memory.ts';
-import { SchemaGraphManager, expandBySchema } from './graph.ts';
+import { SchemaGraphManager } from './graph.ts';
 import { JsonStateStore } from './persist.ts';
 import { buildDetail, buildCoreDigest } from './views.ts';
 import { DialecticalReflectionEngine, MockDialecticalLLM, ReflectionWorker } from './reflection.ts';
-import { asRecord, assertObjectSchema, messageOf, optionalString, pick, requireString, textOutput } from './util.ts';
+import { assertObjectSchema, messageOf } from './util.ts';
+import { createTools } from './tools.ts';
 import { ProactiveGate } from './proactive.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
-import type { LongTaskStatus } from './task_manager.ts';
-import type { RecallMode } from './memory.ts';
 
 /* ------------------------------------------------------------------ */
 /* 宿主最小接口（不引入任何运行时依赖）                                 */
@@ -210,8 +209,6 @@ export function persistReflection(
   return fact;
 }
 
-type IngestInputLike = Parameters<TemporalMemoryStore['ingest']>[0];
-type RecallOptionsLike = Parameters<TemporalMemoryStore['recall']>[1];
 
 /* ------------------------------------------------------------------ */
 /* 插件入口                                                            */
@@ -449,345 +446,18 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     );
   }
 
-  const remember = {
-    name: 'cognition_remember',
-    description:
-      '写入双时态记忆；supersedes 取代旧事实（保留 id/hash，可历史召回）。返回 id、hash、残留冲突。',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['text'],
-      properties: {
-        text: { type: 'string', description: '事实原文。' },
-        subject: { type: 'string', description: '主题键，默认取冒号前短语。' },
-        tags: { type: 'array', items: { type: 'string' }, description: '标签。' },
-        importance: { type: 'number', description: '重要度 0..1。' },
-        validFrom: { type: 'number', description: '开始为真的 Unix 毫秒。' },
-        supersedes: { type: 'string', description: '被取代的旧事实 id。' },
-        source: {
-          type: 'string',
-          description: '来源：user/agent/test/imported，默认 agent。',
-        },
-        scope: {
-          type: 'string',
-          enum: ['global', 'workspace', 'session'],
-          description: '作用域，默认 global；session 自动绑定当前会话。',
-        },
-      },
-    },
-    output: textOutput,
-    async execute(args: unknown, exec?: unknown): Promise<string> {
-      const input = asRecord(args);
-      const text = requireString(input, 'text');
-      const scopeValue = (optionalString(input, 'scope') ?? 'global') as 'global' | 'workspace' | 'session';
-      const agentId = (exec as { agent?: { id?: string } } | undefined)?.agent?.id;
-      const fact = memory.ingest({
-        content: text,
-        source: optionalString(input, 'source') ?? 'agent',
-        ...pick(input, ['subject', 'tags', 'importance', 'validFrom', 'supersedes']),
-        scope: scopeValue,
-        ...(scopeValue === 'session' && agentId !== undefined ? { sessionId: agentId } : {}),
-      } as IngestInputLike);
-
-      graph.ingest(text);
-      // 重建多级图式层次（CAM 的 run_hierarchy）；图很小，成本可忽略
-      graph.buildHierarchy();
-      touch();
-
-      return JSON.stringify({
-        stored: {
-          id: fact.id,
-          subject: fact.subject,
-          hash: fact.hash,
-          validFrom: fact.validFrom,
-          validTo: fact.validTo,
-          recordedAt: fact.recordedAt,
-        },
-        superseded: optionalString(input, 'supersedes') ?? null,
-        conflicts: memory.conflicts(),
-        memory: memory.stats(),
-      });
-    },
-  };
-
-  const recall = {
-    name: 'cognition_recall',
-    description:
-      '召回记忆。strict 当前真值 / historical 该时刻为真 / belief 当时已知 / associative 联想（不过滤时间）。render 走 Inline&Spill，expand 按图式带关联。',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['query'],
-      properties: {
-        query: { type: 'string', description: '检索语句。' },
-        mode: {
-          type: 'string',
-          enum: ['strict', 'historical', 'belief', 'associative'],
-          description: '口径，默认 strict。',
-        },
-        validTime: { type: 'number', description: 'historical 的时刻，毫秒。' },
-        recordedTime: { type: 'number', description: 'belief 的时刻，毫秒。' },
-        limit: { type: 'number', description: '条数，默认 5。' },
-        subject: { type: 'string', description: '限定主题。' },
-        tags: { type: 'array', items: { type: 'string' }, description: '标签（全含）。' },
-        render: { type: 'boolean', description: '近期给正文，久远只给 ID。' },
-        inlineChars: { type: 'number', description: 'render 单条上限，默认 240。' },
-        expand: { type: 'boolean', description: '带出同图式关联。' },
-        scope: {
-          type: 'string',
-          enum: ['all', 'global', 'workspace', 'session'],
-          description: '作用域，默认 all。',
-        },
-      },
-    },
-    output: textOutput,
-    async execute(args: unknown, exec?: unknown): Promise<string> {
-      const input = asRecord(args);
-      const query = requireString(input, 'query');
-      const rawMode = optionalString(input, 'mode') ?? 'strict';
-      if (rawMode !== 'strict' && rawMode !== 'historical' && rawMode !== 'belief' && rawMode !== 'associative') {
-        throw new Error('mode 只能是 strict / historical / belief / associative');
-      }
-      const agentId = (exec as { agent?: { id?: string } } | undefined)?.agent?.id;
-      const options = {
-        mode: rawMode as RecallMode,
-        ...pick(input, ['validTime', 'recordedTime', 'limit', 'subject', 'tags', 'inlineChars', 'scope']),
-        ...(agentId === undefined ? {} : { sessionId: agentId }),
-      } as RecallOptionsLike;
-
-      if (input.render === true) return JSON.stringify(memory.render(query, options));
-      const hits = memory.recall(query, options);
-
-      // 联想模式用 Personalized PageRank 重排（HippoRAG，arXiv:2405.14831）：
-      // 把命中图式当种子，让相关度沿图传播，隔一层但相关的记忆也能浮上来。
-      if (rawMode === 'associative' && hits.length > 1) {
-        const seeds = [...new Set(hits.flatMap((hit) => graph.schemasForText(hit.fact.content)))];
-        const ranks = graph.personalizedPageRank(seeds);
-        if (ranks.size > 0) {
-          const boost = (content: string): number => {
-            const ids = graph.schemasForText(content);
-            return ids.reduce((max, id) => Math.max(max, ranks.get(id) ?? 0), 0);
-          };
-          hits.sort((a, b) => b.score + 2 * boost(b.fact.content) - (a.score + 2 * boost(a.fact.content)));
-        }
-      }
-
-      // 图式接进召回：把命中项所在图式的其他成员一并带出（GraphRAG 的社区扩展思路）
-      // 联想模式自动带上图式扩展（LongMemory 的 associative recall 会混合图关联信号）
-      const related =
-        input.expand === true || rawMode === 'associative'
-          ? expandBySchema(memory, graph, hits.map((hit) => hit.fact.content))
-          : [];
-
-      return JSON.stringify(
-        {
-          mode: rawMode,
-          count: hits.length,
-          ...(related.length === 0 ? {} : { related }),
-          hits: hits.map((hit) => ({
-            id: hit.fact.id,
-            subject: hit.fact.subject,
-            content: hit.fact.content,
-            score: Number(hit.score.toFixed(4)),
-            similarity: Number(hit.similarity.toFixed(4)),
-            decay: Number(hit.decay.toFixed(4)),
-            validFrom: hit.fact.validFrom,
-            validTo: hit.fact.validTo,
-            supersededBy: hit.fact.supersededBy,
-          })),
-        });
-    },
-  };
-
-  const reflect = {
-    name: 'cognition_reflect',
-    description:
-      '三段式辩证反思：THESIS → 对抗性 ANTITHESIS（CONTRADICTION/EVIDENCE 成对）→ SYNTHESIS，严格串行。给 draft 则跳过第一步；save 存结论。默认离线推理器，设置页可切真模型。',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['query'],
-      properties: {
-        query: { type: 'string', description: '要反思的问题。' },
-        draft: { type: 'string', description: '已有回答；给了就跳过第一步，直接批评并合成。' },
-        save: { type: 'boolean', description: '把 synthesis 存成记忆（subject=结论:问题）。' },
-      },
-    },
-    output: textOutput,
-    async execute(args: unknown): Promise<string> {
-      const input = asRecord(args);
-      const query = requireString(input, 'query');
-      const draft = optionalString(input, 'draft');
-      const result =
-        draft === undefined
-          ? await reflection.reflect(query)
-          : await reflection.reflectDraft(query, draft);
-      const saved = input.save === true ? persistReflection(memory, graph, result) : undefined;
-      if (saved !== undefined) touch();
-      // 只回真正有用的四块：transcript 会把三段再抄一遍，phases 恒为固定顺序，durationMs 对模型无用。
-      return JSON.stringify({
-        query: result.query,
-        thesis: result.thesis,
-        contradictions: result.contradictions,
-        synthesis: result.synthesis,
-        ...(saved === undefined ? {} : { saved: { id: saved.id, subject: saved.subject } }),
-      });
-    },
-  };
-
-  const state = {
-    name: 'cognition_state',
-    description: '查看认知引擎状态：记忆库统计、图式网络统计、待办与跨会话摘要。',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {},
-    },
-    output: textOutput,
-    async execute(): Promise<string> {
-      return JSON.stringify(
-        {
-          memory: memory.stats(),
-          graph: { ...graph.stats(), levels: graph.hierarchy().length },
-          /** 跨会话核心记忆块（≤400 字）。 */
-          digest: buildCoreDigest(memory),
-          tasks: {
-            pending: taskManager.get_pending_tasks().length,
-            due: taskManager.check_due_tasks().length,
-          },
-          proactive: {
-            pending: proactive.pending().length,
-            recordOnly: proactive.isRecordOnly,
-          },
-        });
-    },
-  };
-
-  const forget = {
-    name: 'cognition_forget',
-    description:
-      '删除记忆，用于纠正错误或清理测试数据。至少给一个条件：id 单条 / source 按来源批量（如 test、reflection）/ subject 按主题批量。',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        id: { type: 'string', description: '事实 id。' },
-        source: { type: 'string', description: '来源，如 test / reflection / agent。' },
-        subject: { type: 'string', description: '主题。' },
-      },
-    },
-    output: textOutput,
-    async execute(args: unknown): Promise<string> {
-      const input = asRecord(args);
-      const id = optionalString(input, 'id');
-      const source = optionalString(input, 'source');
-      const subject = optionalString(input, 'subject');
-      if (id === undefined && source === undefined && subject === undefined) {
-        throw new Error('cognition_forget 需要至少一个条件：id / source / subject');
-      }
-      let removed = 0;
-      if (id !== undefined) removed += memory.remove(id) ? 1 : 0;
-      if (source !== undefined) removed += memory.removeBySource(source);
-      if (subject !== undefined) removed += memory.removeBySubject(subject);
-      touch();
-      return JSON.stringify({ removed, memory: memory.stats() });
-    },
-  };
-
-  const cognitionContext = {
-    name: 'cognition_context',
-    description: '读取跨会话核心记忆（≤400 字的摘要）。新会话开头先调它，能想起之前定下的事。',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {},
-    },
-    output: textOutput,
-    async execute(): Promise<string> {
-      const digest = buildCoreDigest(memory);
-      return JSON.stringify({
-        digest,
-        empty: digest.length === 0,
-        total: memory.stats().total,
-      });
-    },
-  };
-
-  const manageLongTask = {
-    name: 'manage_long_task',
-    description:
-      '长程任务台账（落盘、重启恢复）。create / update / list / due / delete；后台定时巡视复盘。',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['action'],
-      properties: {
-        action: {
-          type: 'string',
-          enum: ['create', 'update', 'list', 'due', 'delete'],
-          description: '操作。',
-        },
-        description: { type: 'string', description: 'create：任务目标。' },
-        id: { type: 'string', description: 'update / delete：任务 id。' },
-        status: {
-          type: 'string',
-          enum: ['PENDING', 'IN_PROGRESS', 'COMPLETED'],
-          description: 'update：新状态。',
-        },
-        context: { type: 'string', description: 'update：追加线索，换行分隔。' },
-      },
-    },
-    output: textOutput,
-    async execute(args: unknown): Promise<string> {
-      await tasksReady;
-      const input = asRecord(args);
-      const action = requireString(input, 'action');
-
-      switch (action) {
-        case 'create': {
-          const task = await taskManager.create_task(requireString(input, 'description'));
-          return JSON.stringify({ task, store: taskManager.path });
-        }
-        case 'update': {
-          const id = requireString(input, 'id');
-          const rawStatus = requireString(input, 'status');
-          if (rawStatus !== 'PENDING' && rawStatus !== 'IN_PROGRESS' && rawStatus !== 'COMPLETED') {
-            throw new Error('status 只能是 PENDING / IN_PROGRESS / COMPLETED');
-          }
-          const clue = optionalString(input, 'context');
-          const task = await taskManager.update_task_progress(
-            id,
-            rawStatus as LongTaskStatus,
-            clue === undefined ? undefined : clue.split(/\r?\n/),
-          );
-          return JSON.stringify({ task, store: taskManager.path });
-        }
-        case 'list': {
-          return JSON.stringify(
-            {
-              pending: taskManager.get_pending_tasks(),
-              all: taskManager.all(),
-              store: taskManager.path,
-            });
-        }
-        case 'due': {
-          return JSON.stringify(
-            {
-              heartbeatHours: config.heartbeatHours,
-              due: taskManager.check_due_tasks(),
-            });
-        }
-        case 'delete': {
-          const id = requireString(input, 'id');
-          const removed = await taskManager.delete_task(id);
-          return JSON.stringify({ removed, store: taskManager.path });
-        }
-        default: {
-          throw new Error(`未知 action：${action}`);
-        }
-      }
-    },
-  };
+  const toolList = createTools({
+    memory,
+    graph,
+    taskManager,
+    proactive,
+    touch,
+    reflection,
+    persistReflection: (result) => persistReflection(memory, graph, result),
+    tasksReady,
+    config,
+  });
+  const [remember, recall, forget, reflect, state, cognitionContext, manageLongTask] = toolList;
 
   for (const definition of [remember, recall, forget, reflect, state, cognitionContext, manageLongTask]) {
     try {

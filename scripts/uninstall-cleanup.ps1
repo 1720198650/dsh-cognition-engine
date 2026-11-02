@@ -32,7 +32,12 @@ if (Test-Path $agents) {
     $marker = '## 九、认知引擎'
     $index = $text.IndexOf($marker)
     if ($index -ge 0) {
-        $trimmed = $text.Substring(0, $index).TrimEnd() + "`n"
+        $head = $text.Substring(0, $index).TrimEnd()
+        # 一并摘掉章节前面的 --- 分隔线，避免留下孤立的分隔符
+        if ($head.EndsWith('---')) {
+            $head = $head.Substring(0, $head.Length - 3).TrimEnd()
+        }
+        $trimmed = $head + "`n"
         [System.IO.File]::WriteAllText($agents, $trimmed, (New-Object System.Text.UTF8Encoding($false)))
         Write-Host "[removed] cognition section from $agents"
     } else {

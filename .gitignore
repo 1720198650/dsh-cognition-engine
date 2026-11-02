@@ -11,6 +11,8 @@ cognition-state.json.tmp
 tasks.json
 tasks.json.tmp
 .dsh-eval-*.json
+.dsh-compat-*
+*.corrupt-*
 
 # 研究/抓取的第三方资料
 _research/

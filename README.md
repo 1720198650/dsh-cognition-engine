@@ -167,7 +167,9 @@ plugin_manager remove_bundle target=@local/cognition-engine
 | `task_manager.ts` | 长程任务台账、原子落盘 | 自研 |
 | `persist.ts` | 记忆快照存储 | 自研 |
 | `views.ts` | 页面只读视图 | 自研 |
-| `index.ts` | 插件装配：工具、路由、巡视 | — |
+| `tools.ts` | 七个工具的参数表与执行体（状态全部来自依赖注入） | — |
+| `util.ts` | 无状态纯函数：参数收敛、schema 自检、异常转文本 | — |
+| `index.ts` | 插件装配：建实例、注册工具、HTTP 路由、巡视、生命周期 | — |
 | `client.js` | 输入框下方的状态条与面板 | — |
 
 反思闭环参考了 [Generative Agents](https://arxiv.org/abs/2304.03442) 的「记忆 → 反思 → 回写记忆」；图式扩展参考了 [GraphRAG](https://github.com/microsoft/graphrag) 的社区扩展思路。
@@ -297,4 +299,4 @@ MIT
 
 ## English
 
-`dsh-cognition-engine` is a zero-dependency DeepSeek Harness plugin that adds bitemporal memory, a constructivist schema graph, a mood state machine, dialectical reflection, and a long-horizon task ledger. Six tools, one status dock, everything stored locally.
+`dsh-cognition-engine` is a zero-dependency DeepSeek Harness plugin that adds bitemporal memory, a constructivist schema graph, dialectical reflection, and a long-horizon task ledger. Seven tools, one status dock, everything stored locally.
