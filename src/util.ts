@@ -30,12 +30,15 @@ export function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 工具返回统一走纯文本。 */
+import { buildCard } from './cards.ts';
+
+/** 工具返回统一走纯文本；同时带上 dshGo 原生卡片（构造失败自动退回普通结果）。 */
 export const textOutput = {
   schema: { type: 'string' as const },
   render: (_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> => [
     { type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) },
   ],
+  presentationMeta: (_args: unknown, value: unknown): Record<string, unknown> => buildCard(value),
 };
 
 /**

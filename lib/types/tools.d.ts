@@ -86,6 +86,7 @@ export declare function createTools(deps: ToolDeps): readonly [{
             type: "text";
             text: string;
         }>;
+        presentationMeta: (_args: unknown, value: unknown) => Record<string, unknown>;
     };
     execute(args: unknown, exec?: unknown): Promise<string>;
 }, {
@@ -155,6 +156,7 @@ export declare function createTools(deps: ToolDeps): readonly [{
             type: "text";
             text: string;
         }>;
+        presentationMeta: (_args: unknown, value: unknown) => Record<string, unknown>;
     };
     execute(args: unknown, exec?: unknown): Promise<string>;
 }, {
@@ -186,6 +188,7 @@ export declare function createTools(deps: ToolDeps): readonly [{
             type: "text";
             text: string;
         }>;
+        presentationMeta: (_args: unknown, value: unknown) => Record<string, unknown>;
     };
     execute(args: unknown): Promise<string>;
 }, {
@@ -218,6 +221,7 @@ export declare function createTools(deps: ToolDeps): readonly [{
             type: "text";
             text: string;
         }>;
+        presentationMeta: (_args: unknown, value: unknown) => Record<string, unknown>;
     };
     execute(args: unknown): Promise<string>;
 }, {
@@ -236,6 +240,7 @@ export declare function createTools(deps: ToolDeps): readonly [{
             type: "text";
             text: string;
         }>;
+        presentationMeta: (_args: unknown, value: unknown) => Record<string, unknown>;
     };
     execute(): Promise<string>;
 }, {
@@ -254,6 +259,7 @@ export declare function createTools(deps: ToolDeps): readonly [{
             type: "text";
             text: string;
         }>;
+        presentationMeta: (_args: unknown, value: unknown) => Record<string, unknown>;
     };
     execute(): Promise<string>;
 }, {
@@ -296,6 +302,7 @@ export declare function createTools(deps: ToolDeps): readonly [{
             type: "text";
             text: string;
         }>;
+        presentationMeta: (_args: unknown, value: unknown) => Record<string, unknown>;
     };
     execute(args: unknown): Promise<string>;
 }];

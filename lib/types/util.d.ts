@@ -12,7 +12,7 @@ export declare function requireString(args: Record<string, unknown>, key: string
 export declare function optionalString(args: Record<string, unknown>, key: string): string | undefined;
 /** 统一把 unknown 异常转成一行文本。 */
 export declare function messageOf(error: unknown): string;
-/** 工具返回统一走纯文本。 */
+/** 工具返回统一走纯文本；同时带上 dshGo 原生卡片（构造失败自动退回普通结果）。 */
 export declare const textOutput: {
     schema: {
         type: "string";
@@ -21,6 +21,7 @@ export declare const textOutput: {
         type: "text";
         text: string;
     }>;
+    presentationMeta: (_args: unknown, value: unknown) => Record<string, unknown>;
 };
 /**
  * 注册期自检：`parameters` 必须是以 `type: 'object'` 为根的 JSON Schema。
