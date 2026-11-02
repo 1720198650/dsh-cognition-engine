@@ -34,6 +34,15 @@
 - **图式扩展召回**：召回时可按图式把同簇的其他记忆一并带出（`expand`）。
 - **三段式反思**：THESIS → ANTITHESIS（CONTRADICTION/EVIDENCE）→ SYNTHESIS，严格串行；可对已有草稿直接审（`draft`），可把结论写回记忆（`save`）。
 - **长程任务台账**：`tasks.json` 原子落盘，重启恢复，超时任务自动催办。
+- **记忆准入**：写入前过四道关——噪声（ok/thanks）、敏感数据（密钥/卡号）、
+  指令注入（"忽略之前的指令"）、权威冲突（低权威不能覆盖高权威）。
+  设计移植自 [memoripy](https://github.com/caspianmoon/memoripy) 的 `admission.py`。
+- **类型化图式边**：边带 `support` / `contradict` 类型，并附一句话说明
+  「为什么这两条记忆相连」。结构参照 [memoryweb](https://github.com/corbym/memoryweb) 的叙事边。
+- **矛盾可见**：`cognition_state` 返回 `tensions`（图式之间的矛盾边）与
+  `memoryConflicts`（同主题互斥的事实对），冲突不再只是节点上的一個布尔值。
+- **纠正记忆**：`cognition_remember` 传 `kind: 'correction'` 会自动打标、提升重要度，
+  并在跨会话摘要里置顶——「上次错在哪」比「上次说了什么」更值得记住。
 - **记忆会老化**：长期没被想起的记忆自动归档——不进 strict 召回，但历史与联想仍可查到。
 - **持久化**：记忆写入 `cognition-state.json`，重启自动恢复；页面一键清空。
 - **反思引擎**：可在「本地模拟」与「真实模型」之间切换；真实模型走宿主 `llm` 服务。
@@ -63,7 +72,7 @@ dsh plugin --profile desktop add /path/to/cognition-engine
 | 工具 | 作用 |
 |---|---|
 | `cognition_context` | **新会话先调它**：读取跨会话核心记忆（≤400 字摘要） |
-| `cognition_remember` | 写入记忆；`supersedes` 取代旧事实，`source` 标记来源，`scope` 选 global / workspace / session |
+| `cognition_remember` | 写入记忆；`supersedes` 取代旧事实，`source` 标记来源并决定权威等级，`scope` 选 global / workspace / session，`kind: correction` 记纠正 |
 | `cognition_recall` | 按 `strict` / `historical` / `belief` 召回；`render` 走 Inline&Spill，`expand` 按图式扩展，`scope` 过滤作用域 |
 | `cognition_forget` | 删除记忆：按 id、按来源（如 `test`、`reflection`）、按主题 |
 | `cognition_reflect` | 三段式反思；`draft` 审草稿，`save` 把结论存成记忆 |
@@ -266,6 +275,15 @@ npm run eval       # 20 条评测 + token 预算门禁
 - **A-MEM** — Xu et al. *A-MEM: Agentic Memory for LLM Agents.* NeurIPS 2025. [arXiv:2502.12110](https://arxiv.org/abs/2502.12110)
 
 图式网络的建构主义框架另见 CAM（NeurIPS 2025），辩证反思的 Prompt 编排另见 Hegelion，见下方各节。
+
+### 信念修正与图结构
+
+| 项目 | 借了什么 |
+|---|---|
+| [memoripy](https://github.com/caspianmoon/memoripy)（★693） | **`admission.py` 的准入管线**：噪声过滤、敏感数据隔离、指令注入拦截、权威冲突判定（`_higher_authority_conflict`）；以及「不可变版本 + 完整历史」的模型 |
+| [memoryweb](https://github.com/corbym/memoryweb)（★14） | **叙事边** `Edge{from,to,relationship,narrative}`：边不只有权重，还要说明为什么存在 |
+| [Graphiti](https://github.com/getzep/graphiti)（★32k） | 时序边的建模方式（事实随时间为真/失效） |
+| [Kumiho](https://arxiv.org/abs/2603.17244)（arXiv:2603.17244） | **typed dependency edges** 的理论依据；AGM 信念修正与图原生记忆的对应关系 |
 
 ### 反思
 
