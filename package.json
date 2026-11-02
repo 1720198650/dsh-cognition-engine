@@ -1,6 +1,6 @@
 {
   "name": "dsh-cognition-engine",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "description": "DSH cognition engine: bitemporal memory, constructivist schema graph, mood state machine, dialectical reflection, long-horizon tasks",
   "license": "MIT",

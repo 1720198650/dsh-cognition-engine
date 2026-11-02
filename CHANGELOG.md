@@ -1,5 +1,49 @@
 # 更新报告
 
+## v0.6.0（2026-11-02）— 类型化图式边
+
+参照 [memoryweb](https://github.com/corbym/memoryweb)（★14）的 `Edge{from,to,relationship,narrative,verdict}`
+与 [Graphiti](https://github.com/getzep/graphiti)（★32424）的时序边模型，
+并以 [Kumiho, arXiv:2603.17244](https://arxiv.org/abs/2603.17244) 的「typed dependency edges」为理论指导。
+
+### 变更
+
+图式之间的边从「裸权重」升级为结构化的 `SchemaEdge`：
+
+```ts
+{ from, to, kind: 'support' | 'contradict' | 'refine' | 'supersede',
+  weight, narrative, createdAt }
+```
+
+- **`kind`**：由现有信号推导——极性相反 → `contradict`，其余 → `support`。
+- **`narrative`**：一句话说明「为什么这条边存在」，
+  例如 *「部署区域不允许使用外部依赖」与「部署区域允许使用外部依赖」主题相近但结论相反*。
+- `neighbors()` 现在返回 `{schemaId, weight, kind, narrative}`。
+
+### 一处诚实的取舍
+
+**`refine`（细化）没有做自动推导。** 实测在二元组粒度上无法可靠区分「细化」与「并列」——
+会把「四个空格」与「两个空格」误判成细化关系。类型保留在枚举里，留给将来有更好的信号时再用。
+
+这符合我们的原则：**宁可少一个类型，也不要一个会误判的类型。**
+
+### 代价
+
+| 项 | 变化 |
+|---|---|
+| 工具 schema | 1111（**未变**，纯内部结构） |
+| 单元测试 | 41 → **43** |
+| 风险 | 中——改了核心数据结构 `edges`，四处读取点全部适配并回归 |
+
+### 验证
+
+```
+编译      ✓
+单元测试   43 / 43
+评测      19 / 19 + 打包 5 / 5 + 兼容性 5 / 5
+实测      极性相反 → contradict 边 + 叙事；同极性 → support 边
+```
+
 ## v0.5.0（2026-11-02）— 记忆准入管线
 
 移植自 [memoripy](https://github.com/caspianmoon/memoripy)（★693）的 `memoripy/admission.py`（MIT）。

@@ -47,6 +47,18 @@ export interface SchemaNode {
     /** 层次节点的抽取式摘要（取自成员原文，不是 LLM 生成）。 */
     summary?: string;
 }
+/** 图式之间边的语义类型（参照 memoryweb / Graphiti 的 typed edges）。 */
+export type EdgeKind = 'support' | 'contradict' | 'refine' | 'supersede';
+/** 一条带类型与叙事说明的边。 */
+export interface SchemaEdge {
+    readonly from: string;
+    readonly to: string;
+    readonly kind: EdgeKind;
+    readonly weight: number;
+    /** 一句话说明「为什么这条边存在」（memoryweb 的 narrative 设计）。 */
+    readonly narrative: string;
+    readonly createdAt: number;
+}
 export type IngestMode = 'assimilation' | 'accommodation';
 export interface IngestOutcome {
     mode: IngestMode;
@@ -66,6 +78,8 @@ export interface IngestOutcome {
         schemaId: string;
         score: number;
         terms: string[];
+        kind: EdgeKind;
+        narrative: string;
     };
     /** 本次操作是否检测到语义冲突（产生了 isConflict 图式或撞上已有冲突图式）。 */
     cognitiveDissonance: boolean;
@@ -147,11 +161,13 @@ export declare class SchemaGraphManager {
         terms: string[];
     } | undefined;
     private linkKey;
-    /** 无向加权连边。 */
-    connect(a: string, b: string, weight: number): void;
+    /** 无向加权连边，带类型与叙事说明。 */
+    connect(a: string, b: string, weight: number, kind?: EdgeKind, narrative?: string): void;
     neighbors(id: string, minWeight?: number): Array<{
         schemaId: string;
         weight: number;
+        kind: EdgeKind;
+        narrative: string;
     }>;
     get(id: string): SchemaNode | undefined;
     all(): SchemaNode[];

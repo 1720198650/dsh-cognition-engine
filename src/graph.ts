@@ -52,6 +52,20 @@ export interface SchemaNode {
   summary?: string;
 }
 
+/** 图式之间边的语义类型（参照 memoryweb / Graphiti 的 typed edges）。 */
+export type EdgeKind = 'support' | 'contradict' | 'refine' | 'supersede';
+
+/** 一条带类型与叙事说明的边。 */
+export interface SchemaEdge {
+  readonly from: string;
+  readonly to: string;
+  readonly kind: EdgeKind;
+  readonly weight: number;
+  /** 一句话说明「为什么这条边存在」（memoryweb 的 narrative 设计）。 */
+  readonly narrative: string;
+  readonly createdAt: number;
+}
+
 export type IngestMode = 'assimilation' | 'accommodation';
 
 export interface IngestOutcome {
@@ -65,7 +79,7 @@ export interface IngestOutcome {
   /** 内容相近但极性相反时，记录它顶撞了哪个图式。 */
   conflictWith?: string;
   /** 顺应时与旧图式建立关联的理由（A-MEM 风格的动态链接解释）。 */
-  linkedBy?: { schemaId: string; score: number; terms: string[] };
+  linkedBy?: { schemaId: string; score: number; terms: string[]; kind: EdgeKind; narrative: string };
   /** 本次操作是否检测到语义冲突（产生了 isConflict 图式或撞上已有冲突图式）。 */
   cognitiveDissonance: boolean;
 }
@@ -106,9 +120,39 @@ function detectPolarity(text: string): 1 | -1 {
   return NEGATIONS.some((marker) => lower.includes(marker)) ? -1 : 1;
 }
 
+/**
+ * 由现有信号推导边的类型——**不需要 LLM**：
+ *   极性相反            → contradict
+ *   高度相似（≥0.8）    → refine（一方是另一方的细化）
+ *   其余高相似          → support
+ */
+function classifyEdge(a: SchemaNode, b: SchemaNode): EdgeKind {
+  // 只有「极性相反」这一条是可靠的：它由分词后的否定词检测而来。
+  // 「细化 vs 并列」在二元组粒度上无法可靠区分（实测会把
+  // 「四个空格」与「两个空格」误判为细化），因此不做自动推断。
+  if (Math.sign(a.polarity) !== Math.sign(b.polarity)) return 'contradict';
+  return 'support';
+}
+
+/** 一句话说明这条边为什么存在（memoryweb 的 narrative 设计）。 */
+function narrativeFor(kind: EdgeKind, a: SchemaNode, b: SchemaNode): string {
+  const left = a.label.slice(0, 24);
+  const right = b.label.slice(0, 24);
+  switch (kind) {
+    case 'contradict':
+      return `「${left}」与「${right}」主题相近但结论相反`;
+    case 'refine':
+      return `「${left}」是「${right}」的细化`;
+    case 'supersede':
+      return `「${left}」取代了「${right}」`;
+    default:
+      return `「${left}」与「${right}」相互支撑`;
+  }
+}
+
 export class SchemaGraphManager {
   private readonly schemas = new Map<string, SchemaNode>();
-  private readonly edges = new Map<string, Map<string, number>>();
+  private readonly edges = new Map<string, Map<string, SchemaEdge>>();
   private readonly observations = new Map<string, Observation>();
   private readonly clock: () => number;
   private readonly assimilateThreshold: number;
@@ -231,19 +275,20 @@ export class SchemaGraphManager {
     this.edgeBucket(id);
 
     let linkedTo: { schemaId: string; weight: number } | undefined;
-    let linkedBy: { schemaId: string; score: number; terms: string[] } | undefined;
+    let linkedBy: { schemaId: string; score: number; terms: string[]; kind: EdgeKind; narrative: string } | undefined;
     if (best !== undefined) {
       const weight = Math.max(best.similarity, 0.01);
-      this.connect(id, best.schemaId, weight);
-      linkedTo = { schemaId: best.schemaId, weight };
-      // A-MEM 风格：记录「为什么连上它」——共享词 + 相似度
       const target = this.schemas.get(best.schemaId);
+      const edgeKind = target === undefined ? 'support' : classifyEdge(schema, target);
+      const narrative = target === undefined ? '' : narrativeFor(edgeKind, schema, target);
+      this.connect(id, best.schemaId, weight, edgeKind, narrative);
+      linkedTo = { schemaId: best.schemaId, weight };
       if (target !== undefined) {
         const terms = [...obs.tokens.keys()]
           .filter((term) => target.centroid.has(term))
           .slice(0, 3);
         this.linkMeta.set(this.linkKey(id, best.schemaId), { score: best.similarity, terms });
-        linkedBy = { schemaId: best.schemaId, score: Number(best.similarity.toFixed(3)), terms };
+        linkedBy = { schemaId: best.schemaId, score: Number(best.similarity.toFixed(3)), terms, kind: edgeKind, narrative };
       }
     }
 
@@ -270,21 +315,24 @@ export class SchemaGraphManager {
     return a < b ? `${a}|${b}` : `${b}|${a}`;
   }
 
-  /** 无向加权连边。 */
-  connect(a: string, b: string, weight: number): void {
+  /** 无向加权连边，带类型与叙事说明。 */
+  connect(a: string, b: string, weight: number, kind: EdgeKind = 'support', narrative = ''): void {
     if (a === b) return;
     const ab = this.edgeBucket(a);
     const ba = this.edgeBucket(b);
-    ab.set(b, Math.max(ab.get(b) ?? 0, weight));
-    ba.set(a, Math.max(ba.get(a) ?? 0, weight));
+    const existing = ab.get(b);
+    if (existing !== undefined && existing.weight >= weight) return;
+    const createdAt = this.clock();
+    ab.set(b, { from: a, to: b, kind, weight, narrative, createdAt });
+    ba.set(a, { from: b, to: a, kind, weight, narrative, createdAt });
   }
 
-  neighbors(id: string, minWeight = 0): Array<{ schemaId: string; weight: number }> {
+  neighbors(id: string, minWeight = 0): Array<{ schemaId: string; weight: number; kind: EdgeKind; narrative: string }> {
     const bucket = this.edges.get(id);
     if (bucket === undefined) return [];
-    return [...bucket]
-      .filter(([, weight]) => weight >= minWeight)
-      .map(([schemaId, weight]) => ({ schemaId, weight }))
+    return [...bucket.values()]
+      .filter((edge) => edge.weight >= minWeight)
+      .map((edge) => ({ schemaId: edge.to, weight: edge.weight, kind: edge.kind, narrative: edge.narrative }))
       .sort((a, b) => b.weight - a.weight);
   }
 
@@ -520,7 +568,7 @@ export class SchemaGraphManager {
     const outSum = new Map<string, number>();
     for (const node of nodes) {
       let sum = 0;
-      for (const [, weight] of this.edges.get(node) ?? []) sum += weight;
+      for (const edge of this.edges.get(node)?.values() ?? []) sum += edge.weight;
       outSum.set(node, sum);
     }
 
@@ -536,8 +584,8 @@ export class SchemaGraphManager {
         if (current === 0) continue;
         const sum = outSum.get(node) ?? 0;
         if (sum === 0) continue;
-        for (const [neighbor, weight] of this.edges.get(node) ?? []) {
-          next.set(neighbor, (next.get(neighbor) ?? 0) + alpha * current * (weight / sum));
+        for (const edge of this.edges.get(node)?.values() ?? []) {
+          next.set(edge.to, (next.get(edge.to) ?? 0) + alpha * current * (edge.weight / sum));
         }
       }
       for (const node of nodes) {
@@ -625,8 +673,8 @@ export class SchemaGraphManager {
     schema.updatedAt = obs.at;
   }
 
-  private edgeBucket(id: string): Map<string, number> {
-    const bucket = this.edges.get(id) ?? new Map<string, number>();
+  private edgeBucket(id: string): Map<string, SchemaEdge> {
+    const bucket = this.edges.get(id) ?? new Map<string, SchemaEdge>();
     this.edges.set(id, bucket);
     return bucket;
   }
