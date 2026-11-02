@@ -7,6 +7,7 @@
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { resolveInPackage } from './util.ts';
 
 export type LongTaskStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
 
@@ -60,7 +61,7 @@ export class LongHorizonTaskManager {
   private writeChain: Promise<void> = Promise.resolve();
 
   constructor(options: TaskManagerOptions = {}) {
-    this.filePath = resolve(options.filePath ?? 'tasks.json');
+    this.filePath = options.filePath === undefined ? resolveInPackage('tasks.json') : resolve(options.filePath);
     this.clock = options.now ?? (() => Date.now());
     this.heartbeatMs = options.heartbeatMs ?? 6 * 60 * 60 * 1000;
     this.readImpl = options.readFileImpl ?? readFile;

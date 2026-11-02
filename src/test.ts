@@ -11,6 +11,7 @@ import { resolve } from 'node:path';
 
 import { TemporalMemoryStore, contentHash, isCurrent, tokenize } from './memory.ts';
 import { SchemaGraphManager } from './graph.ts';
+import { resolveInPackage, packageRoot } from './util.ts';
 import {
   DialecticalReflectionEngine,
   MockDialecticalLLM,
@@ -312,6 +313,12 @@ async function main(): Promise<void> {
   });
 
   /* ---------------------------------------------------------------- */
+  await test('默认落盘路径在插件包内，不使用进程 cwd', () => {
+    const p = resolveInPackage('cognition-state.json');
+    assert.ok(p.startsWith(packageRoot), '应位于插件包根目录下');
+    assert.ok(!p.includes('node_modules'), '不应落到依赖目录');
+  });
+
   section('[6] 辩证反思：三次串行调用');
 
   await test('矛盾解析支持中英文冒号', () => {

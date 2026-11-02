@@ -8,6 +8,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { readFileSync, renameSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { resolveInPackage } from './util.ts';
 
 export interface JsonStoreOptions<T> {
   filePath?: string;
@@ -27,7 +28,7 @@ export class JsonStateStore<T> {
   private closed = false;
 
   constructor(options: JsonStoreOptions<T>) {
-    this.filePath = resolve(options.filePath ?? 'cognition-state.json');
+    this.filePath = options.filePath === undefined ? resolveInPackage('cognition-state.json') : resolve(options.filePath);
     this.debounceMs = Math.max(0, options.debounceMs ?? 300);
     this.serialize = options.serialize;
     this.restore = options.restore;

@@ -1,4 +1,14 @@
 /**
+ * 插件包根目录（lib/ 或 src/ 的上一级）。
+ *
+ * 默认落盘路径必须基于这里，而不是进程 cwd：
+ * 进程 cwd 是 DSH 的工作目录，多个 profile 会互相覆盖，
+ * 换一台机器更是直接读到空库。
+ */
+export declare const packageRoot: string;
+/** 把相对文件名解析到插件包根目录下。 */
+export declare function resolveInPackage(name: string): string;
+/**
  * src/util.ts — 无状态的纯工具函数
  *
  * 从 index.ts 抽出来的原因：这些函数不碰任何插件状态，
