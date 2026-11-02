@@ -37,6 +37,8 @@ export interface CognitionConfig {
     overlapThreshold?: number;
     communityThreshold?: number;
     maxClusterSize?: number;
+    /** 是否把跨会话摘要注入系统提示。默认 true；false 时只能靠 cognition_context 手动取。 */
+    injectMemory?: boolean;
     /** 多久没更新就算需要催办（小时）。 */
     heartbeatHours?: number;
     /** 后台巡视间隔（小时）。 */

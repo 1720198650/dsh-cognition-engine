@@ -10,6 +10,8 @@
         overlapThreshold: 0.42
         communityThreshold: 0.3
         maxClusterSize: 8
+        # 是否把跨会话摘要注入系统提示；填 false 则只在调用 cognition_context 时给你
+        # injectMemory: true
         # 落盘位置：留空则用插件目录下的默认文件名（跨机器/跨平台可用）
         # tasksFile: ./tasks.json
         # 记忆落盘位置

@@ -108,6 +108,8 @@ export interface CognitionConfig {
   overlapThreshold?: number;
   communityThreshold?: number;
   maxClusterSize?: number;
+  /** 是否把跨会话摘要注入系统提示。默认 true；false 时只能靠 cognition_context 手动取。 */
+  injectMemory?: boolean;
   /** 多久没更新就算需要催办（小时）。 */
   heartbeatHours?: number;
   /** 后台巡视间隔（小时）。 */
@@ -159,6 +161,7 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     overlapThreshold: numberOr(config.overlapThreshold, 0.42),
     communityThreshold: numberOr(config.communityThreshold, 0.3),
     maxClusterSize: Math.max(1, Math.round(numberOr(config.maxClusterSize, 8))),
+    injectMemory: config.injectMemory !== false,
     heartbeatHours: Math.max(0.01, numberOr(config.heartbeatHours, 6)),
     patrolIntervalHours: Math.max(0.01, numberOr(config.patrolIntervalHours, 3)),
     idleThresholdMinutes: Math.max(0.1, numberOr(config.idleThresholdMinutes, 5)),
@@ -477,7 +480,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
    * 每次装配都会调用 text()，内容永远是最新的；没有记忆时返回空串——不占 token。
    */
   const systemPrompt = ctx.get?.('systemPrompt') as SystemPromptHost | undefined;
-  if (systemPrompt !== undefined && typeof systemPrompt.section === 'function') {
+  if (config.injectMemory && systemPrompt !== undefined && typeof systemPrompt.section === 'function') {
     try {
       disposers.push(
         systemPrompt.section({
