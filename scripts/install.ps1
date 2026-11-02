@@ -40,7 +40,15 @@ if (Test-Path (Join-Path $Dest ".git")) {
 Write-Host "[2/4] Installing dependencies"
 Push-Location $Dest
 try {
-    npm install --no-audit --no-fund
+    # 网络抖动会让首次安装失败，重试三次再放弃
+    $installed = $false
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        npm install --no-audit --no-fund
+        if ($LASTEXITCODE -eq 0) { $installed = $true; break }
+        Write-Host "  install failed (attempt $attempt/3), retrying in 3s..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 3
+    }
+    if (-not $installed) { throw "npm install failed after 3 attempts" }
 } finally {
     Pop-Location
 }
