@@ -19,6 +19,7 @@ import { SchemaGraphManager, expandBySchema } from './graph.ts';
 import { JsonStateStore } from './persist.ts';
 import { buildDetail, buildCoreDigest } from './views.ts';
 import { DialecticalReflectionEngine, MockDialecticalLLM, ReflectionWorker } from './reflection.ts';
+import { asRecord, assertObjectSchema, messageOf, optionalString, pick, requireString, textOutput } from './util.ts';
 import { ProactiveGate } from './proactive.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
 import type { LongTaskStatus } from './task_manager.ts';
@@ -66,6 +67,17 @@ interface ModelSelectionLike {
 
 interface DefaultModelHost {
   currentSelection?(): ModelSelectionLike;
+}
+
+/** 宿主 systemPrompt 服务的最小可用面（只用到 section）。 */
+interface PromptSectionLike {
+  name: string;
+  order: number;
+  text: string | ((context: unknown) => string);
+}
+
+interface SystemPromptHost {
+  section(section: PromptSectionLike): () => void;
 }
 
 /** 落盘的整体状态。 */
@@ -176,36 +188,6 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
   };
 }
 
-function asRecord(args: unknown): Record<string, unknown> {
-  return typeof args === 'object' && args !== null ? (args as Record<string, unknown>) : {};
-}
-
-function requireString(args: Record<string, unknown>, key: string): string {
-  const value = args[key];
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`${key} 必须是非空字符串`);
-  }
-  return value;
-}
-
-function optionalString(args: Record<string, unknown>, key: string): string | undefined {
-  const value = args[key];
-  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
-}
-
-/** 统一把 unknown 异常转成一行文本。 */
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/** 工具返回统一走纯文本。 */
-const textOutput = {
-  schema: { type: 'string' as const },
-  render: (_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> => [
-    { type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) },
-  ],
-};
-
 /**
  * 反思回写记忆（Generative Agents 的闭环）：把 synthesis 存成一条可召回的记忆，
  * 并让结论也进图式网络，这样以后 expand 能把相关结论带出来。
@@ -226,33 +208,6 @@ export function persistReflection(
   });
   graph.ingest(result.synthesis);
   return fact;
-}
-
-/**
- * 注册期自检：`parameters` 必须是以 `type: 'object'` 为根的 JSON Schema。
- *
- * 宿主会把 parameters 原样透传给模型 API，不校验根形状；一旦写成裸属性表，
- * 每个请求都会被判为 `got 'type: null'` 而整轮失败，且报错不指向具体插件。
- * 这里提前抛错，把故障限制在插件加载阶段。
- */
-function assertObjectSchema(name: string, parameters: unknown): void {
-  if (parameters === undefined) return;
-  const root = parameters as { type?: unknown; properties?: unknown };
-  if (root.type !== 'object' || typeof root.properties !== 'object' || root.properties === null) {
-    throw new Error(
-      `cognition-engine: 工具 ${name} 的 parameters 必须是 { type: 'object', properties: {...}, required: [...] }，裸属性表会被模型 API 拒绝`,
-    );
-  }
-}
-
-/** 只取调用方真正给的字段，避免一长串 `...(x === undefined ? {} : { x })`。 */
-function pick(source: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const key of keys) {
-    const value = source[key];
-    if (value !== undefined) out[key] = value;
-  }
-  return out;
 }
 
 type IngestInputLike = Parameters<TemporalMemoryStore['ingest']>[0];
@@ -847,12 +802,44 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   }
 
   /**
+   * P0：把跨会话核心记忆挂进系统提示，只在真的有记忆时才产出文本。
+   *
+   * 每次装配都会调用 text()，内容永远是最新的；没有记忆时返回空串——不占 token。
+   */
+  const systemPrompt = ctx.get?.('systemPrompt') as SystemPromptHost | undefined;
+  if (systemPrompt !== undefined && typeof systemPrompt.section === 'function') {
+    try {
+      disposers.push(
+        systemPrompt.section({
+          name: 'cognition-engine-memory',
+          order: 900,
+          text: () => {
+            const digest = buildCoreDigest(memory);
+            if (digest.length === 0) return '';
+            return `${digest}\n（需要细节时调用 cognition_recall。）`;
+          },
+        }),
+      );
+    } catch (error) {
+      ctx.logger?.warn?.(`cognition-engine: 系统提示段注册失败: ${messageOf(error)}`);
+    }
+  }
+
+  /**
    * 后台巡视：每隔 patrolIntervalHours 检查 tasks.json，
    * 用 ReflectionWorker 在后台宏任务里复盘最久没动的任务，全程不阻塞主线程。
    */
   const patrol = async (): Promise<void> => {
     try {
       await tasksReady;
+
+      // P1 记忆生命周期：长期没被想起的记忆退出 strict 召回（不删数据）
+      const archived = memory.autoArchive({ idleDays: 180, maxActivation: 1 });
+      if (archived.length > 0) {
+        ctx.logger?.info?.(`cognition-engine: 已归档 ${archived.length} 条长期未访问的记忆`);
+        touch();
+      }
+
       const due = taskManager.check_due_tasks();
       const target = due[0];
       if (target === undefined) return;

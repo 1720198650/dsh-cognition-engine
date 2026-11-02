@@ -47,6 +47,8 @@ export interface TemporalFact {
     readonly sessionId: string | null;
     /** 强化量（每次 recall 命中或被显式 reinforce 时增加），不参与 hash。 */
     readonly activation: number;
+    /** 是否已归档：不进 strict 召回，但历史与联想仍可查。 */
+    readonly archived: boolean;
     readonly lastAccessedAt: number;
 }
 /** 兼容旧命名：外部文档里把这条记录叫 MemoryNode。 */
@@ -152,6 +154,8 @@ export interface MemoryStats {
     superseded: number;
     subjects: number;
     conflicts: number;
+    /** 已归档的记忆条数。 */
+    archived: number;
 }
 export interface MemoryOptions {
     now?: () => number;
@@ -169,7 +173,7 @@ export declare function isValidAt(fact: TemporalFact, validTime: number): boolea
 export declare function isRecordedAt(fact: TemporalFact, recordedTime: number): boolean;
 /** 是否「此刻的当前真值」：未被取代 + 已知 + 当前有效。 */
 export declare function isCurrent(fact: TemporalFact, now: number): boolean;
-/** 英文按词、中文按二元组切分，返回词频表。 */
+/** 英文按词、中文按二元组切分，返回词频表（纯虚词 bigram 不产出）。 */
 export declare function tokenize(text: string): Map<string, number>;
 /** 余弦相似度。 */
 export declare function cosine(a: Map<string, number>, b: Map<string, number>): number;
@@ -242,6 +246,17 @@ export declare class TemporalMemoryStore {
      */
     conflicts(): Conflict[];
     stats(): MemoryStats;
+    /** 归档 / 取消归档一条记忆（不删数据，只影响 strict 召回）。 */
+    setArchived(id: string, archived: boolean): boolean;
+    /**
+     * 自动归档：长期没被访问、且从未被强化的记忆标记为 archived。
+     * 不做合并、不删数据——只是让它们退出 strict 召回。
+     */
+    autoArchive(options?: {
+        idleDays?: number;
+        maxActivation?: number;
+        now?: number;
+    }): string[];
     /** 导出为纯 JSON（可自行落盘到 .json 文件，仍然不依赖数据库）。 */
     serialize(): TemporalFact[];
     /** 从 serialize() 的结果恢复；缺失字段按默认值补齐。 */

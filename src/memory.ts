@@ -50,6 +50,8 @@ export interface TemporalFact {
   readonly sessionId: string | null;
   /** 强化量（每次 recall 命中或被显式 reinforce 时增加），不参与 hash。 */
   readonly activation: number;
+  /** 是否已归档：不进 strict 召回，但历史与联想仍可查。 */
+  readonly archived: boolean;
   readonly lastAccessedAt: number;
 }
 
@@ -163,6 +165,8 @@ export interface MemoryStats {
   superseded: number;
   subjects: number;
   conflicts: number;
+  /** 已归档的记忆条数。 */
+  archived: number;
 }
 
 export interface MemoryOptions {
@@ -209,7 +213,17 @@ export function isCurrent(fact: TemporalFact, now: number): boolean {
 const CJK = /[\u4e00-\u9fff]+/g;
 const LATIN = /[a-z0-9_]+/g;
 
-/** 英文按词、中文按二元组切分，返回词频表。 */
+/**
+ * 中文虚词集合。
+ *
+ * 只用于过滤「纯虚词 bigram」——两个字都在集合里才丢弃（如「的是」「了的」），
+ * 这样「在华东」这类混着实词的组合仍然保留。零依赖，内联四十余字即可。
+ */
+const CJK_STOPWORDS = new Set(
+  '的了是在和与或就都也很还又再而且因所以如果把这被给让从到对于为之其者呢吧吗啊呀哦嗯那这些么什怎样'.split(''),
+);
+
+/** 英文按词、中文按二元组切分，返回词频表（纯虚词 bigram 不产出）。 */
 export function tokenize(text: string): Map<string, number> {
   const counts = new Map<string, number>();
   const lower = text.toLowerCase();
@@ -218,11 +232,14 @@ export function tokenize(text: string): Map<string, number> {
   }
   for (const run of lower.match(CJK) ?? []) {
     if (run.length === 1) {
+      if (CJK_STOPWORDS.has(run)) continue;
       counts.set(run, (counts.get(run) ?? 0) + 1);
       continue;
     }
     for (let i = 0; i < run.length - 1; i += 1) {
       const gram = run.slice(i, i + 2);
+      // 两个字都是虚词才算噪声；混着实词的一律保留
+      if (CJK_STOPWORDS.has(gram[0] ?? '') && CJK_STOPWORDS.has(gram[1] ?? '')) continue;
       counts.set(gram, (counts.get(gram) ?? 0) + 1);
     }
   }
@@ -346,6 +363,7 @@ export class TemporalMemoryStore {
       workspaceId: input.workspaceId ?? null,
       sessionId: input.sessionId ?? null,
       activation: 0,
+      archived: false,
       lastAccessedAt: this.clock(),
     });
 
@@ -616,9 +634,11 @@ export class TemporalMemoryStore {
     const now = this.clock();
     let current = 0;
     let superseded = 0;
+    let archived = 0;
     for (const fact of this.facts.values()) {
       if (fact.supersededAt !== null) superseded += 1;
-      if (isCurrent(fact, now)) current += 1;
+      if (fact.archived === true) archived += 1;
+      if (isCurrent(fact, now) && fact.archived !== true) current += 1;
     }
     return {
       total: this.facts.size,
@@ -626,7 +646,36 @@ export class TemporalMemoryStore {
       superseded,
       subjects: this.bySubject.size,
       conflicts: this.conflicts().length,
+      archived,
     };
+  }
+
+  /** 归档 / 取消归档一条记忆（不删数据，只影响 strict 召回）。 */
+  setArchived(id: string, archived: boolean): boolean {
+    const fact = this.facts.get(id);
+    if (fact === undefined) return false;
+    this.facts.set(id, Object.freeze({ ...fact, archived }));
+    return true;
+  }
+
+  /**
+   * 自动归档：长期没被访问、且从未被强化的记忆标记为 archived。
+   * 不做合并、不删数据——只是让它们退出 strict 召回。
+   */
+  autoArchive(options: { idleDays?: number; maxActivation?: number; now?: number } = {}): string[] {
+    const now = options.now ?? this.clock();
+    const idleMs = (options.idleDays ?? 180) * 86_400_000;
+    const maxActivation = options.maxActivation ?? 1;
+    const archivedIds: string[] = [];
+    for (const fact of this.facts.values()) {
+      if (fact.archived === true) continue;
+      if (fact.supersededAt !== null) continue;
+      if (fact.activation > maxActivation) continue;
+      if (now - fact.lastAccessedAt < idleMs) continue;
+      this.facts.set(fact.id, Object.freeze({ ...fact, archived: true }));
+      archivedIds.push(fact.id);
+    }
+    return archivedIds;
   }
 
   /** 导出为纯 JSON（可自行落盘到 .json 文件，仍然不依赖数据库）。 */
@@ -643,6 +692,7 @@ export class TemporalMemoryStore {
         scope: raw.scope ?? 'global',
         workspaceId: raw.workspaceId ?? null,
         sessionId: raw.sessionId ?? null,
+        archived: raw.archived ?? false,
       });
       this.facts.set(fact.id, fact);
       this.tokens.set(fact.id, tokenize(`${fact.subject} ${fact.content}`));
@@ -672,6 +722,8 @@ export class TemporalMemoryStore {
   ): boolean {
     switch (mode) {
       case 'strict':
+        // 已归档的记忆不再算「当前真值」，但仍可被 historical / associative 查到
+        if (fact.archived === true) return false;
         return isCurrent(fact, now);
       case 'historical':
         return isValidAt(fact, options.validTime ?? now);

@@ -437,6 +437,38 @@ function checkCompatibility(): PackCheck[] {
   }
   checks.push({ name: '落盘文件损坏时仍能启动', ok: !threwCorrupt });
 
+  // 5) systemPrompt.section 抛错（例如与其他插件的段名冲突）：不能拖垮加载
+  let threwPrompt = false;
+  let promptAttempts = 0;
+  try {
+    const dispose = apply(
+      {
+        get: (key: string) => {
+          if (key === 'tools') return { register: () => () => {} };
+          if (key === 'systemPrompt') {
+            return {
+              section: () => {
+                promptAttempts += 1;
+                throw new Error('duplicate section name');
+              },
+            };
+          }
+          return undefined;
+        },
+        logger: {},
+      } as never,
+      { tasksFile: tasks, stateFile: state },
+    );
+    if (typeof dispose === 'function') dispose();
+  } catch {
+    threwPrompt = true;
+  }
+  checks.push({
+    name: '系统提示段注册失败时不拖垮插件',
+    ok: !threwPrompt && promptAttempts === 1,
+    detail: `尝试注册 ${promptAttempts} 次`,
+  });
+
   return checks;
 }
 
