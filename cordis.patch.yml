@@ -2,7 +2,7 @@
 # 行 id 全局唯一；config 会原样传给 src/index.ts 的 apply(ctx, config)。
 - insert:
     - id: cognition-engine
-      name: '@local/cognition-engine'
+      name: 'dsh-cognition-engine'
       config:
         decayHalfLifeHours: 168
         strictThreshold: 0.12

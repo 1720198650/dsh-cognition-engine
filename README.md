@@ -54,7 +54,7 @@ dsh plugin --profile desktop add /path/to/cognition-engine
 
 安装后重启一次 DSH。页面输入框下方会出现状态条。
 
-> npm 包名当前是 `@local/cognition-engine`，发布前请改成你自己的作用域或 `dsh-cognition-engine`，并同步修改 `cordis.patch.yml` 里的 `name`。
+> 包名：`dsh-cognition-engine`（无作用域，便于 git+https 与手机端安装）。旧版曾用 `dsh-cognition-engine`，并同步修改 `cordis.patch.yml` 里的 `name`。
 
 ---
 
@@ -79,7 +79,7 @@ dsh plugin --profile desktop add /path/to/cognition-engine
 ```yaml
 - insert:
     - id: cognition-engine
-      name: '@local/cognition-engine'
+      name: 'dsh-cognition-engine'
       config:
         decayHalfLifeHours: 168        # 记忆衰减半衰期
         assimilateThreshold: 0.55      # 同化阈值
@@ -147,7 +147,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\uninstall-cleanup.
 然后移除插件本体：
 
 ```text
-plugin_manager remove_bundle target=@local/cognition-engine
+plugin_manager remove_bundle target=dsh-cognition-engine
 ```
 
 最后在页面控制台执行 `localStorage.removeItem("cognition-token")`，刷新页面。

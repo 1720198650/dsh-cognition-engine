@@ -6,7 +6,7 @@
  * 设置页可以清空数据、开关真模型、上锁并填口令。全部走 HTTP，不进模型上下文。
  */
 window.__ModuleLoader__.load({
-  id: '@local/cognition-engine',
+  id: 'dsh-cognition-engine',
   factory(require) {
     const React = require('react');
     const h = React.createElement;

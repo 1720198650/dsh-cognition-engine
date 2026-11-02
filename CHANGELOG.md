@@ -1,5 +1,44 @@
 # 更新报告
 
+## v0.4.0（2026-11-02）— 包名去作用域，支持手机端安装
+
+### 破坏性变更
+
+包名从 `@local/cognition-engine` 改为 **`dsh-cognition-engine`**（无作用域）。
+
+原因：dshGo 安卓本机模式的插件安装方式是把目录拷到 `/root/.dsh/dsh-go/plugins/`，
+带作用域的包名（`@local/xxx`）会让加载器在 `node_modules/@local/xxx` 下找，
+路径层级对不上。官方示例用的都是无作用域的名字。
+
+**升级方式**：旧名需要先卸载再重装。
+
+```
+plugin_manager remove_bundle target=@local/cognition-engine
+plugin_manager install_bundle  target=link:<插件目录>
+```
+
+同步修改的位置：`package.json` 的 `name`、`cordis.patch.yml` 的 `name`、
+`client.js` 的模块 id、README 中的全部引用。
+
+### 手机端可用性确认
+
+| 要求 | 状态 |
+|---|---|
+| Node 22 运行时 | ✅ dshGo 本机模式自带 |
+| 零原生依赖 | ✅ 运行时依赖为空 |
+| 路径可移植 | ✅ 基于包根目录（v0.3.6 修复） |
+| `engines.dsh` 范围 | ✅ `>=0.2.1-rc.2 <0.3.0-0` |
+| 包内文件齐全 | ✅ lib / client.js / patch / icon / locale |
+
+### 验证
+
+```
+编译      ✓
+单元测试   35 / 35
+评测      19 / 19 + 打包 5 / 5 + 兼容性 5 / 5
+实机      卸载旧名 → 安装新名 → 7 个工具正常
+```
+
 ## v0.3.7（2026-11-02）— 摘要过滤与注入开关
 
 ### 过滤
