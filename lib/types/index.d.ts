@@ -16,6 +16,10 @@ import { SchemaGraphManager } from './graph.ts';
 interface ToolHost {
     register(definition: unknown): () => void;
 }
+/** 落盘的整体状态。 */
+/** 反思引擎模式：关闭 / 本地占位 / 真实模型。 */
+export type ReflectionMode = 'off' | 'local' | 'real';
+export declare function normalizeReflectionMode(value: unknown): ReflectionMode;
 interface PluginLogger {
     info?(message: string): void;
     warn?(message: string): void;
@@ -57,7 +61,8 @@ export interface CognitionConfig {
     llmProvider?: string;
     llmModel?: string;
     /** 启动时是否直接启用真模型。 */
-    useRealModel?: boolean;
+    /** 反思引擎初始模式，默认 off（不开启，避免默认产出误导性输出）。 */
+    reflectionMode?: string;
 }
 export declare const name = "cognition-engine";
 /** 需要 tools 服务才能注册工具。 */

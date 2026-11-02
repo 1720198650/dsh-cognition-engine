@@ -168,7 +168,12 @@ No markdown, no commentary outside the JSON.` + '\n\n用与 QUERY 相同的语�
   antithesis: `OUTPUT FORMAT (JSON ONLY):
 Return ONLY a JSON object:
 {"phase":"antithesis","antithesis":"...","contradictions":[{"description":"...","evidence":"..."}]}
-No markdown, no commentary outside the JSON.` + '\n\n用与 QUERY 相同的语言回答。',
+
+REQUIREMENTS:
+- "contradictions" MUST contain at least 2 entries. An empty array is a failed answer.
+- Each entry needs a concrete "description" and a supporting "evidence".
+- Do not put the critique only in "antithesis" and leave "contradictions" empty.
+- No markdown, no commentary outside the JSON.` + '\n\n用与 QUERY 相同的语言回答。',
   synthesis: `OUTPUT FORMAT (JSON ONLY):
 Return ONLY a JSON object:
 {"phase":"synthesis","synthesis":"...","research_proposals":[{"proposal":"...","testable_prediction":"..."}]}
@@ -202,10 +207,70 @@ export function tryParseJson(text: string): Record<string, unknown> | null {
 export function unwrapField(text: string, field: string): string {
   const parsed = tryParseJson(text);
   const value = parsed?.[field];
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : text.trim();
+  if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+
+  // JSON 被截断（超出 maxTokens）时解析会失败，此时用正则把字段抢救出来，
+  // 否则调用方拿到的是一整段 {"phase":"synthesis",...} 原文。
+  const rescued = rescueField(text, field);
+  if (rescued !== undefined) return rescued;
+
+  return text.trim();
+}
+
+/** 从残缺 JSON 里尽量取出一个字符串字段（允许未闭合）。 */
+function rescueField(text: string, field: string): string | undefined {
+  const marker = '"' + field + '"';
+  const at = text.indexOf(marker);
+  if (at < 0) return undefined;
+  const colon = text.indexOf(':', at + marker.length);
+  if (colon < 0) return undefined;
+  const quote = text.indexOf('"', colon + 1);
+  if (quote < 0) return undefined;
+
+  let out = '';
+  for (let i = quote + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '\\') {
+      const next = text[i + 1];
+      if (next === 'n') out += '\n';
+      else if (next === 't') out += '\t';
+      else if (next !== undefined) out += next;
+      i += 1;
+      continue;
+    }
+    if (ch === '"') break;
+    out += ch;
+  }
+  const trimmed = out.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 /** 解析 antithesis：优先 JSON 的 contradictions 数组，回退到文本格式。 */
+/**
+ * 从 markdown / 编号列表里抽矛盾条目。
+ *
+ * 模型经常把批判写成「1. xxx」「- xxx」列表而不是 CONTRADICTION:/EVIDENCE: 对，
+ * 只认后者会让 contradictions 恒为空数组——反方阶段等于白跑。
+ */
+export function extractListContradictions(text: string): Contradiction[] {
+  const lines = text.split(/\r?\n/);
+  const out: Contradiction[] = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    const match = line.match(/^(?:\d+[.、)]|[-*•])\s+(.{8,})$/);
+    if (match === null) continue;
+    const body = (match[1] ?? '').trim();
+    if (body.length === 0) continue;
+    // 拆成「问题 / 理由」：优先按「：」或「——」分
+    const split = body.split(/[：:]|——/);
+    const description = (split[0] ?? '').trim();
+    const evidence = split.slice(1).join('：').trim() || body;
+    if (description.length >= 4) out.push({ description, evidence });
+  }
+  return out;
+}
+
 export function parseAntithesis(text: string): { text: string; contradictions: Contradiction[] } {
   const parsed = tryParseJson(text);
   const list = parsed?.['contradictions'];
@@ -227,7 +292,20 @@ export function parseAntithesis(text: string): { text: string; contradictions: C
       };
     }
   }
-  return { text: text.trim(), contradictions: extractContradictions(text) };
+  // 模型把内容都写进 antithesis 字段、contradictions 留空时，
+  // 原来的回退会拿整段 JSON 原文去找 "CONTRADICTION:" 文本，必然找不到。
+  // 这里先取出正文，再从正文里抽矛盾。
+  const body = parsed?.['antithesis'];
+  const bodyText = typeof body === 'string' && body.trim().length > 0 ? body.trim() : text.trim();
+  const fromBody = extractContradictions(bodyText);
+  if (fromBody.length > 0) return { text: bodyText, contradictions: fromBody };
+  const fromList = extractListContradictions(bodyText);
+  if (fromList.length > 0) return { text: bodyText, contradictions: fromList };
+  if (bodyText !== text.trim()) {
+    const fromRaw = extractContradictions(text);
+    if (fromRaw.length > 0) return { text: bodyText, contradictions: fromRaw };
+  }
+  return { text: bodyText, contradictions: [] };
 }
 
 /* ------------------------------------------------------------------ */

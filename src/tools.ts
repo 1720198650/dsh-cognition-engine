@@ -15,7 +15,7 @@ import type { DialecticalReflectionEngine } from './reflection.ts';
 import type { LongTaskStatus } from './task_manager.ts';
 import { ProactiveGate } from './proactive.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
-import { asRecord, optionalString, pick, requireString, textOutput } from './util.ts';
+import { asRecord, optionalString, pick, requireString, textOutput, parseMoment } from './util.ts';
 
 /** 工具定义用到的全部外部依赖。 */
 export interface ToolDeps {
@@ -28,13 +28,17 @@ export interface ToolDeps {
   persistReflection: (result: { query: string; synthesis: string }) => { id: string; subject: string };
   tasksReady: Promise<unknown>;
   config: { heartbeatHours: number; patrolIntervalHours: number };
+  /** 读取当前反思引擎模式（off / local / real）。 */
+  currentReflectionMode?: () => string;
+  /** 读取当前反思引擎模式（off / local / real）。 */
+  reflectionMode?: () => string;
 }
 
 type IngestInputLike = Parameters<TemporalMemoryStore['ingest']>[0];
 type RecallOptionsLike = Parameters<TemporalMemoryStore['recall']>[1];
 
 export function createTools(deps: ToolDeps) {
-  const { memory, graph, taskManager, proactive, reflection, touch, tasksReady, config } = deps;
+  const { memory, graph, taskManager, proactive, reflection, touch, tasksReady, config, currentReflectionMode } = deps;
   const remember = {
     name: 'cognition_remember',
     description:
@@ -123,8 +127,16 @@ export function createTools(deps: ToolDeps) {
           enum: ['strict', 'historical', 'belief', 'associative'],
           description: '口径，默认 strict。',
         },
-        validTime: { type: 'number', description: 'historical 的时刻，毫秒。' },
-        recordedTime: { type: 'number', description: 'belief 的时刻，毫秒。' },
+        validTime: {
+          type: ['number', 'string'],
+          description:
+            'historical 的时刻。可给人话："3天前" / "昨天" / "2026-11-01" / "2小时前"；也可给毫秒。不给则取当前时刻。',
+        },
+        recordedTime: {
+          type: ['number', 'string'],
+          description:
+            'belief 的时刻（那时我已知什么）。格式同 validTime。',
+        },
         limit: { type: 'number', description: '条数，默认 5。' },
         subject: { type: 'string', description: '限定主题。' },
         tags: { type: 'array', items: { type: 'string' }, description: '标签（全含）。' },
@@ -149,7 +161,9 @@ export function createTools(deps: ToolDeps) {
       const agentId = (exec as { agent?: { id?: string } } | undefined)?.agent?.id;
       const options = {
         mode: rawMode as RecallMode,
-        ...pick(input, ['validTime', 'recordedTime', 'limit', 'subject', 'tags', 'inlineChars', 'scope']),
+        ...pick(input, ['limit', 'subject', 'tags', 'inlineChars', 'scope']),
+        ...(parseMoment(input.validTime) === undefined ? {} : { validTime: parseMoment(input.validTime) }),
+        ...(parseMoment(input.recordedTime) === undefined ? {} : { recordedTime: parseMoment(input.recordedTime) }),
         ...(agentId === undefined ? {} : { sessionId: agentId }),
       } as RecallOptionsLike;
 
@@ -225,6 +239,9 @@ export function createTools(deps: ToolDeps) {
       // 只回真正有用的四块：transcript 会把三段再抄一遍，phases 恒为固定顺序，durationMs 对模型无用。
       return JSON.stringify({
         query: result.query,
+        ...(currentReflectionMode?.() === 'local'
+          ? { warning: '⚠️ 本地占位输出：未调用模型，内容为固定模板，不可作为判断依据' }
+          : {}),
         thesis: result.thesis,
         contradictions: result.contradictions,
         synthesis: result.synthesis,

@@ -31,6 +31,10 @@ export interface ToolDeps {
         heartbeatHours: number;
         patrolIntervalHours: number;
     };
+    /** 读取当前反思引擎模式（off / local / real）。 */
+    currentReflectionMode?: () => string;
+    /** 读取当前反思引擎模式（off / local / real）。 */
+    reflectionMode?: () => string;
 }
 export declare function createTools(deps: ToolDeps): readonly [{
     name: string;
@@ -112,11 +116,11 @@ export declare function createTools(deps: ToolDeps): readonly [{
                 description: string;
             };
             validTime: {
-                type: string;
+                type: string[];
                 description: string;
             };
             recordedTime: {
-                type: string;
+                type: string[];
                 description: string;
             };
             limit: {

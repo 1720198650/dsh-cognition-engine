@@ -81,10 +81,22 @@ interface SystemPromptHost {
 }
 
 /** 落盘的整体状态。 */
+/** 反思引擎模式：关闭 / 本地占位 / 真实模型。 */
+export type ReflectionMode = 'off' | 'local' | 'real';
+
+export function normalizeReflectionMode(value: unknown): ReflectionMode {
+  if (value === 'local' || value === 'real' || value === 'off') return value;
+  // 任何无法识别的值都退回关闭——默认产出模板内容比不产出更糟。
+  return 'off';
+}
+
 interface PersistedState {
   version: number;
   facts: TemporalFact[];
   /** 反思引擎是否使用真实模型（重启后保留）。 */
+  /** 反思引擎模式（重启后保留）：off / local / real。 */
+  reflectionMode?: string;
+  /** 旧字段，仅用于迁移。 */
   realModel?: boolean;
   /** 记忆准入规则（重启后保留）。 */
   rules?: Record<string, boolean>;
@@ -132,7 +144,8 @@ export interface CognitionConfig {
   llmProvider?: string;
   llmModel?: string;
   /** 启动时是否直接启用真模型。 */
-  useRealModel?: boolean;
+  /** 反思引擎初始模式，默认 off（不开启，避免默认产出误导性输出）。 */
+  reflectionMode?: string;
 }
 
 type ResolvedConfig = Required<
@@ -209,7 +222,7 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
       typeof config.llmModel === 'string' && config.llmModel.trim().length > 0
         ? config.llmModel
         : undefined,
-    useRealModel: config.useRealModel === true,
+    reflectionMode: normalizeReflectionMode(config.reflectionMode),
   };
 }
 
@@ -250,16 +263,18 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     communityThreshold: config.communityThreshold,
     maxClusterSize: config.maxClusterSize,
   });
-  /** 从存档恢复出来的开关（在 useRealModel 声明前捕获）。 */
-  let restoredRealModel = false;
+  /** 从存档恢复出来的模式（在 reflectionMode 声明前捕获）。 */
+  let restoredReflectionMode: ReflectionMode | undefined;
 
   // —— 落盘：记忆 ——
   const stateStore = new JsonStateStore<PersistedState>({
     ...(config.stateFile === undefined ? {} : { filePath: config.stateFile }),
-    serialize: () => ({ version: 1, facts: memory.serialize(), realModel: useRealModel, rules: { ...memory.getRules() } as Record<string, boolean> }),
+    serialize: () => ({ version: 1, facts: memory.serialize(), reflectionMode, rules: { ...memory.getRules() } as Record<string, boolean> }),
     restore: (data) => {
       if (Array.isArray(data.facts)) memory.restore(data.facts);
-      if (data.realModel === true) restoredRealModel = true;
+      if (typeof data.reflectionMode === 'string') restoredReflectionMode = normalizeReflectionMode(data.reflectionMode);
+      // 兼容旧存档：realModel: true 等价于 real
+      else if (data.realModel === true) restoredReflectionMode = 'real';
       if (data.rules !== undefined) memory.setRules(data.rules as never);
     },
   });
@@ -275,7 +290,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
   // —— 真模型开关 ——
   const mockLLM = new MockDialecticalLLM();
-  let useRealModel = restoredRealModel || config.useRealModel;
+  let reflectionMode: ReflectionMode = restoredReflectionMode ?? normalizeReflectionMode(config.reflectionMode);
   /** 上锁口令；null 表示未上锁。 */
   let lockToken: string | null = resolveLockToken(config);
   /** 用户是否显式配置了口令（决定 /detail 是否要鉴权）。 */
@@ -314,7 +329,13 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   };
 
   const reflection = new DialecticalReflectionEngine((prompt, phase) =>
-    useRealModel ? callRealModel(prompt) : Promise.resolve(mockLLM.call(prompt, phase)),
+    reflectionMode === 'real'
+      ? callRealModel(prompt)
+      : reflectionMode === 'local'
+        // 不在中间产物上加警示：它会作为下一阶段的输入，会被模型当成正文引用。
+        // 警示统一在工具层按模式补。
+        ? Promise.resolve(mockLLM.call(prompt, phase))
+        : Promise.reject(new Error('反思引擎未开启：请在设置页开启，或直接回答而不调用 cognition_reflect')),
   );
   const worker = new ReflectionWorker(reflection, 1);
   const proactive = new ProactiveGate({
@@ -358,7 +379,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       model: (() => {
         const resolved = resolveModel();
         return {
-          enabled: useRealModel,
+          enabled: reflectionMode !== 'off',
+      mode: reflectionMode,
           provider: resolved.provider,
           model: resolved.model,
           available: resolved.provider !== '' && resolved.model !== '',
@@ -463,10 +485,10 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     route(
       '/cognition-engine/model',
       (url) => {
-        useRealModel = flag(url, 'enabled');
+        reflectionMode = normalizeReflectionMode(url.searchParams.get('mode'));
         void stateStore.flush();
         const { provider, model } = resolveModel();
-        return { enabled: useRealModel, provider, model, available: provider !== '' && model !== '' };
+        return { enabled: reflectionMode !== 'off', mode: reflectionMode, provider, model, available: provider !== '' && model !== '' };
       },
       { method: 'POST', requireAuth: true },
     );

@@ -57,6 +57,12 @@ window.__ModuleLoader__.load({
         exportData: '导出',
         importData: '导入',
         realModel: '反思引擎',
+        engineOff: '已关闭',
+        engineLocal: '本地引擎',
+        engineReal: '真实模型',
+        engineOffHint: '默认关闭：反思引擎会产生额外 token 消耗，需要时再开。',
+        engineLocalHint: '本地引擎不调用模型，输出是固定模板，仅供参考。',
+        engineRealHint: '真实模型会调用你当前配置的 AI 做三段式反思，消耗 token。',
         realMode: '真实模型',
         localMode: '本地模拟',
         realModelHint: '默认本地模拟；切到真实模型会调用宿主配置的模型服务。',
@@ -624,18 +630,40 @@ window.__ModuleLoader__.load({
                 'span',
                 {
                   style: {
-                    color: model.enabled ? '#58a6ff' : '#8b949e',
+                    color:
+                      state.model?.mode === 'real' ? '#58a6ff'
+                      : state.model?.mode === 'local' ? '#d29922'
+                      : '#f85149',
                     fontWeight: 600,
                   },
                 },
-                model.enabled ? dict.realMode : dict.localMode,
+                state.model?.mode === 'real' ? dict.engineReal
+                  : state.model?.mode === 'local' ? dict.engineLocal
+                  : dict.engineOff,
               ),
-              h('span', null, model.available ? `${model.provider}/${model.model}` : dict.unavailable),
-              button(
-                model.enabled ? `切换到${dict.localMode}` : `切换到${dict.realMode}`,
-                () => post(`/cognition-engine/model?enabled=${model.enabled ? 'false' : 'true'}`),
+              h(
+                'div',
+                { style: S.meta },
+                ['off', 'local', 'real'].map((mode) =>
+                  h(
+                    'button',
+                    {
+                      key: mode,
+                      type: 'button',
+                      style: state.model?.mode === mode ? { ...S.tab, ...S.tabActive } : S.tab,
+                      onClick: () => post('/cognition-engine/model?mode=' + mode).then(() => setTick((v) => v + 1)),
+                    },
+                    mode === 'off' ? dict.engineOff : mode === 'local' ? dict.engineLocal : dict.engineReal,
+                  ),
+                ),
               ),
-              h('div', { style: S.explain }, dict.realModelHint),
+              h('div', { style: S.explain },
+                state.model?.mode === 'real' ? dict.engineRealHint
+                  : state.model?.mode === 'local' ? dict.engineLocalHint
+                  : dict.engineOffHint),
+              state.model?.mode === 'real' && state.model?.available
+                ? h('span', null, state.model.provider + '/' + state.model.model)
+                : null,
             ),
             section(
               dict.lock,
@@ -660,7 +688,6 @@ window.__ModuleLoader__.load({
               }),
               h('div', { style: S.explain }, dict.lockHint),
             ),
-            notice ? h('div', { style: S.explain }, notice) : null,
           );
         } else if (detailError !== null) {
           // 口令未设置或错误：直接在面板里给输入框，避免「要口令才能开口令入口」的死锁
@@ -887,6 +914,22 @@ window.__ModuleLoader__.load({
             { style: S.list },
             { tasks: dict.tasksHint, memories: dict.memoriesHint, schemas: dict.schemasHint }[tab]
               ? h('div', { style: S.explain }, { tasks: dict.tasksHint, memories: dict.memoriesHint, schemas: dict.schemasHint }[tab])
+              : null,
+            notice
+              ? h(
+                  'div',
+                  {
+                    style: {
+                      ...S.explain,
+                      padding: '8px 12px',
+                      borderRadius: 8,
+                      background: notice.startsWith('✗') ? 'rgba(248,81,73,0.12)' : 'rgba(63,185,80,0.12)',
+                      color: notice.startsWith('✗') ? '#f85149' : '#3fb950',
+                      border: '1px solid ' + (notice.startsWith('✗') ? 'rgba(248,81,73,0.35)' : 'rgba(63,185,80,0.35)'),
+                    },
+                  },
+                  notice,
+                )
               : null,
             formFor(tab),
             body,

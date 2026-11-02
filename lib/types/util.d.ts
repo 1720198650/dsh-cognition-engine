@@ -43,3 +43,10 @@ export declare const textOutput: {
 export declare function assertObjectSchema(name: string, parameters: unknown): void;
 /** 只取调用方真正给的字段，避免一长串 `...(x === undefined ? {} : { x })`。 */
 export declare function pick(source: Record<string, unknown>, keys: readonly string[]): Record<string, unknown>;
+/**
+ * 把用户/模型给的时间表达解析成毫秒时间戳。
+ *
+ * 支持毫秒数、ISO 日期时间，以及「3天前 / 昨天 / 2小时前 / 上周 / 2026-11-01」这类人话。
+ * 解析不出来返回 undefined，交给调用方用默认值，避免静默算错。
+ */
+export declare function parseMoment(value: unknown, now?: number): number | undefined;
