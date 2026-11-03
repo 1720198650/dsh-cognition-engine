@@ -204,63 +204,6 @@
       }
     },
     {
-      "id": "graph.assimilation",
-      "group": "图式",
-      "checker": "graph.ingest",
-      "params": {
-        "texts": [
-          "用户偏好深色主题的界面",
-          "用户偏好深色主题的编辑器界面"
-        ]
-      },
-      "expect": {
-        "modes": [
-          "accommodation",
-          "assimilation"
-        ],
-        "sameSchema": [
-          true
-        ]
-      }
-    },
-    {
-      "id": "graph.accommodation",
-      "group": "图式",
-      "checker": "graph.ingest",
-      "params": {
-        "texts": [
-          "用户偏好深色主题的界面",
-          "数据库连接池需要设置超时"
-        ]
-      },
-      "expect": {
-        "modes": [
-          "accommodation",
-          "accommodation"
-        ],
-        "sameSchema": [
-          false
-        ],
-        "edges": 0
-      }
-    },
-    {
-      "id": "graph.polarity",
-      "group": "图式",
-      "checker": "graph.polarity",
-      "params": {
-        "texts": [
-          "用户偏好深色主题的界面",
-          "用户偏好深色主题的编辑器界面",
-          "用户并不偏好深色主题"
-        ]
-      },
-      "expect": {
-        "mode": "accommodation",
-        "conflictWithFirst": true
-      }
-    },
-    {
       "id": "reflection.sequence",
       "group": "反思",
       "checker": "reflection.sequence",
@@ -320,23 +263,6 @@
         "observe": "SILENT",
         "judge": "SILENT",
         "draftUndefined": true
-      }
-    },
-    {
-      "id": "recall.expand",
-      "group": "召回",
-      "checker": "recall.expand",
-      "params": {
-        "texts": [
-          "部署区域：华东机房",
-          "部署区域：华南机房",
-          "代码风格：禁止外部依赖"
-        ],
-        "seed": "部署区域：华东机房"
-      },
-      "expect": {
-        "related": 1,
-        "contains": "部署区域：华南机房"
       }
     },
     {

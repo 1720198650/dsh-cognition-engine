@@ -7,14 +7,15 @@
  * 所有工具都是纯函数式定义，状态全部来自 deps，不持有任何自己的状态。
  */
 import { TemporalMemoryStore } from './memory.ts';
-import { SchemaGraphManager } from './graph.ts';
+import type { TopicStore } from './topics.ts';
 import type { DialecticalReflectionEngine } from './reflection.ts';
 import { ProactiveGate } from './proactive.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
 /** 工具定义用到的全部外部依赖。 */
 export interface ToolDeps {
     memory: TemporalMemoryStore;
-    graph: SchemaGraphManager;
+    /** 主题注册表：用于按主题分组展示矛盾。 */
+    topics: TopicStore;
     taskManager: LongHorizonTaskManager;
     proactive: ProactiveGate;
     reflection: DialecticalReflectionEngine;

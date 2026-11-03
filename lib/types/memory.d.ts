@@ -39,6 +39,13 @@ export interface TemporalFact {
     readonly tags: readonly string[];
     readonly source: string;
     readonly importance: number;
+    /**
+     * 归属主题（多对多）。空 = 未归类。
+     *
+     * 主题是人定的适用范围键，不是自动聚类的结果——
+     * 调研结论见 docs/topic-research.md。
+     */
+    readonly topicIds: readonly string[];
     /** 作用域，默认 global。 */
     readonly scope: MemoryScope;
     /** scope = workspace 时的归属工作区 id。 */
@@ -71,6 +78,8 @@ export interface IngestInput {
     content: string;
     subject?: string;
     tags?: readonly string[];
+    /** 归属主题 id（多对多）；不传 = 未归类。 */
+    topicIds?: readonly string[];
     source?: string;
     /** 写入通道；由入口代码决定，agent 不能自填。默认 agent_tool。 */
     origin?: WriteOrigin;
@@ -257,6 +266,13 @@ export declare class TemporalMemoryStore {
      * 最多放大 1 + MAX_STRENGTH_BOOST（=6）倍，避免高频记忆永不衰减。
      */
     decay(factOrId: TemporalFact | string, now?: number): number;
+    /**
+     * 设置一条记忆的归属主题。
+     *
+     * 主题是人定的适用范围键，所以这里只接受显式 id 列表；
+     * 传空数组表示移回「未归类」。
+     */
+    setTopics(id: string, topicIds: readonly string[]): TemporalFact;
     /** 显式强化：提升激活量并重置衰减计时。 */
     reinforce(id: string, amount?: number, now?: number): TemporalFact;
     /**
