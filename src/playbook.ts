@@ -120,7 +120,9 @@ export interface PlaybookStats {
 
 const MAX_SNAPSHOTS = 5;
 const CONTENT_MIN = 12;
-const CONTENT_MAX = 60;
+// 60 字对含 URL 的准则太紧（实测「npm 发布必须加 --registry」被误杀）。
+// 放宽到 80：仍然足够短，又能容纳一条带命令/URL 的准则。
+const CONTENT_MAX = 80;
 
 /**
  * 套话库：这些内容换成任何项目都成立，按 Dynamic Cheatsheet 的 DC-∅ 结论，

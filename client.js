@@ -93,6 +93,12 @@ window.__ModuleLoader__.load({
         playbookReject: '拒绝',
         playbookRetire: '停用',
         playbookRevive: '恢复',
+        playbookHint: '准则本 = 从记忆里蒸馏出的一页工作准则，常驻在每个会话的上下文里。它不存事实（那属于记忆），只存能改变下一步动作的约定、坑和当前状态。条目带 helpful/harmful 计数，长期没被用到的会自动退场。',
+        playbookAdd: '＋ 手动新增',
+        playbookAddTitle: '新增准则',
+        playbookContent: '内容（12–80 字，祈使句，写只有这个项目才知道的事）',
+        playbookSection: '分节',
+        playbookSave: '保存',
         playbookEmpty: '还没有准则。点「重新蒸馏」从记忆里提炼，或手动新增。',
         playbookNoModel: '需要先切到「真实模型」才能蒸馏',
         tasksHint: '任务：跨天要做的事。记录进度，长时间没更新会被提醒，但不会打断你正在做的事。',
@@ -534,6 +540,47 @@ window.__ModuleLoader__.load({
                 await post(`/cognition-engine/memory/create?content=${encodeURIComponent(c)}${s ? `&subject=${encodeURIComponent(s)}` : ''}`);
                 setTick((v) => v + 1);
               } }, '写入记忆'),
+              h('button', { type: 'button', style: S.tab, onClick: () => setFormOpen(null) }, '收起'),
+            );
+          }
+          if (key === 'playbook') {
+            if (formOpen !== 'playbook') {
+              return h('div', { style: S.meta },
+                h('button', { type: 'button', style: S.tab, onClick: () => setFormOpen('playbook') }, dict.playbookAdd),
+              );
+            }
+            return h(
+              'div',
+              { style: S.item },
+              h('div', { style: S.itemTitle }, dict.playbookAddTitle),
+              h('input', { id: 'pbContent', placeholder: dict.playbookContent, style: S.input }),
+              h(
+                'div',
+                { style: S.meta },
+                h('span', null, dict.playbookSection),
+                h(
+                  'select',
+                  { id: 'pbSection', style: S.input },
+                  ['约定', '坑', '状态'].map((name) => h('option', { key: name, value: name }, name)),
+                ),
+              ),
+              h('button', {
+                type: 'button',
+                style: S.tab,
+                onClick: async () => {
+                  const content = document.getElementById('pbContent').value.trim();
+                  const section = document.getElementById('pbSection').value;
+                  if (content.length === 0) return;
+                  await post(
+                    '/cognition-engine/playbook/add?content=' +
+                      encodeURIComponent(content) +
+                      '&section=' +
+                      encodeURIComponent(section),
+                  );
+                  setFormOpen(null);
+                  setTick((value) => value + 1);
+                },
+              }, dict.playbookSave),
               h('button', { type: 'button', style: S.tab, onClick: () => setFormOpen(null) }, '收起'),
             );
           }
@@ -1080,6 +1127,34 @@ window.__ModuleLoader__.load({
                     },
                   },
                   notice,
+                )
+              : null,
+            tab === 'playbook'
+              ? h('div', { style: S.explain }, dict.playbookHint)
+              : null,
+            tab === 'playbook'
+              ? h(
+                  'div',
+                  { style: S.meta },
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      style: S.tab,
+                      onClick: async () => {
+                        await post('/cognition-engine/playbook/distill?maxCandidates=5');
+                        setTick((value) => value + 1);
+                      },
+                    },
+                    dict.playbookDistill,
+                  ),
+                  playbookData === null
+                    ? null
+                    : h(
+                        'span',
+                        null,
+                        `active ${playbookData.stats.active} · pending ${playbookData.stats.pending} · ${playbookData.stats.chars} 字符 · 注入源 ${playbookData.stats.injectSource ?? '-'}`,
+                      ),
                 )
               : null,
             formFor(tab),
