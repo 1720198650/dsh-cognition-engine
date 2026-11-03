@@ -63,6 +63,13 @@ window.__ModuleLoader__.load({
         engineOff: '已关闭',
         engineLocal: '本地引擎',
         engineReal: '真实模型',
+        autoReflectLabel: '巡逻时自动复盘',
+        autoReflectOn: '开启（每次约 3100 tokens）',
+        autoReflectOff: '关闭（只记录提示，不烧 token）',
+        autoReflectHint: '巡视每 3 小时看一次逾期任务。开启后会自动跑一次三段式复盘（3 次模型调用，约 3100 tokens）；关闭后只把「已超期 N 小时」写进任务线索，不调用模型。手动调用 cognition_reflect 不受此开关影响。',
+        effortLabel: '推理档位',
+        effortAuto: '自动（最低档）',
+        effortHint: '反思与蒸馏只需要按格式输出结果，不需要长链推理。当前模型会先吐很长的推理过程，而推理 token 和正文共用同一个输出预算——档位越高越容易把正文挤没，也就越贵。留「自动」时会选模型声明的最低档。',
         engineOffHint: '默认关闭：反思引擎会产生额外 token 消耗，需要时再开。',
         engineLocalHint: '本地引擎不调用模型，输出是固定模板，仅供参考。',
         engineRealHint: '真实模型会调用你当前配置的 AI 做三段式反思，消耗 token。',
@@ -88,12 +95,51 @@ window.__ModuleLoader__.load({
         playbookExpired: '已过期',
         playbookExtend: '延长',
         playbookConflict: '疑似冲突',
+        playbookDelete: '删除',
+        topicsHint: '主题 = 人定的适用范围键。记忆回答「发生过什么」，准则回答「应该怎么做」，主题回答「适用于哪类任务」。它不自动聚类——自动发现的主题不稳定，业界可编辑的主题几乎都是人定的容器。',
+        topicAdd: '＋ 新建主题',
+        topicName: '名称（如：发布流程）',
+        topicDesc: '说明（这个主题管什么，用于匹配）',
+        topicAliases: '别名（逗号分隔，如：发版,release）',
+        topicSave: '保存',
+        topicArchive: '停用',
+        topicUnclassified: '未归类',
+        topicUnclassifiedHint: '还没挂主题的记忆与准则。挂上主题后，注入时会按当前任务分组呈现。',
+        topicEmpty: '还没有主题。点「新建主题」开始，或从记忆/准则上挂主题时自动提示。',
+        topicAssign: '挂主题',
+        subjectPick: '挂主题',
+        subjectPickSave: '保存',
+        subjectPickNone: '（还没有主题，先去主题页签新建）',
+        taskAdd: '＋ 待办',
+        taskPlaceholder: '这个主题下要做什么事？',
+        taskSave: '保存',
+        taskStart: '开始',
+        taskDone: '完成',
+        taskReopen: '重开',
+        taskDelete: '删除',
+        taskEmpty: '还没有待办',
+        taskPENDING: '待办',
+        taskIN_PROGRESS: '进行中',
+        taskCOMPLETED: '已完成',
+        topicAssignPrompt: '输入主题 id，逗号分隔（留空 = 移回未归类）。\n可用：',
+        topicNone: '未挂主题',
+        pbGuard: '自查',
+        pbEnforce: '拦截',
+        pbAudit: '审计',
+        pbRules: '规则',
+        pbTrigger: '触发条件（正则，匹配「工具名 + 参数 JSON」）',
+        pbRequired: '必须满足（正则，空 = 触发即违反）',
+        pbSaveRules: '保存规则',
+        pbViolations: '违反',
+        pbGuardHint: '自查：动手前要求模型先点名适用的准则',
+        pbEnforceHint: '拦截：工具调用前校验，违反则直接拒绝',
+        pbAuditHint: '审计：只记录违反，不拦截',
         playbookDistill: '重新蒸馏',
         playbookAccept: '接受',
         playbookReject: '拒绝',
         playbookRetire: '停用',
         playbookRevive: '恢复',
-        playbookHint: '准则本 = 从记忆里蒸馏出的一页工作准则，常驻在每个会话的上下文里。它不存事实（那属于记忆），只存能改变下一步动作的约定、坑和当前状态。条目带 helpful/harmful 计数，长期没被用到的会自动退场。',
+        playbookHint: '准则本 = 从记忆里蒸馏出的一页工作准则，常驻在每个会话的上下文里。它不存事实（那属于记忆），只存能改变下一步动作的约定、坑和当前状态。条目带 helpful/harmful 计数，长期没被用到的会自动退场。页签上的数字是「已生效条数」。',
         playbookAdd: '＋ 手动新增',
         playbookAddTitle: '新增准则',
         playbookContent: '内容（12–80 字，祈使句，写只有这个项目才知道的事）',
@@ -101,7 +147,7 @@ window.__ModuleLoader__.load({
         playbookSave: '保存',
         playbookEmpty: '还没有准则。点「重新蒸馏」从记忆里提炼，或手动新增。',
         playbookNoModel: '需要先切到「真实模型」才能蒸馏',
-        tasksHint: '任务：跨天要做的事。记录进度，长时间没更新会被提醒，但不会打断你正在做的事。',
+        tasksHint: '任务：让 AI 跨会话记住「要接着做、还没做完」的事。它是给你俩共用的进度台账——你交代的事、或多轮才做得完的活记在这里，重启后还在；太久没动会被提醒，但不会打断你。它记的是「事」，不是聊天记录。',
         memoriesHint: '记忆：AI 跨会话能记住的事实。你说过的决定、约定、偏好都会存在这里，新会话自动带上摘要。改过的旧版本不删除，按时间能查到当时是怎么说的。',
         schemasHint: '主题：系统自动把内容相近的记忆归成一组，再给组分层。记忆多了以后，点开一个主题能看到所有相关的事；回忆时也会顺着主题把关联记忆一起带出来。记忆少于 10 条时这一页通常是空的。',
         needToken: '需要访问口令：打开插件目录下的 cognition-token.txt，把内容粘贴到下面',
@@ -374,6 +420,12 @@ window.__ModuleLoader__.load({
         };
         const [detail, setDetail] = React.useState(null);
         const [playbookData, setPlaybookData] = React.useState(null);
+        const [pbFlagsFor, setPbFlagsFor] = React.useState(null);
+        const [topicsData, setTopicsData] = React.useState(null);
+        const [topicForm, setTopicForm] = React.useState(false);
+        const [taskFormFor, setTaskFormFor] = React.useState(null);
+        /** 当前展开「挂主题」面板的目标：{ targetType, id } */
+        const [topicPick, setTopicPick] = React.useState(null);
         const [detailError, setDetailError] = React.useState(null);
         const [tick, setTick] = React.useState(0);
         const [token, setToken] = React.useState(() => {
@@ -484,6 +536,135 @@ window.__ModuleLoader__.load({
             alive = false;
           };
         }, [open, tab, tick]);
+
+        // 主题页签单独取数
+        React.useEffect(() => {
+          // 记忆/准则页签的「挂主题」按钮也要用主题列表，所以面板一打开就拉
+          if (!open) return undefined;
+          let alive = true;
+          (async () => {
+            try {
+              const response = await call('/cognition-engine/topics', { cache: 'no-store' });
+              if (!response.ok) return;
+              const next = await response.json();
+              if (alive) setTopicsData(next);
+            } catch {
+              /* 拉不到保持旧数据 */
+            }
+          })();
+          return () => {
+            alive = false;
+          };
+        }, [open, tab, tick]);
+
+        const addTopic = async () => {
+          const name = document.getElementById('topicName').value.trim();
+          const description = document.getElementById('topicDesc').value.trim();
+          const aliases = document.getElementById('topicAliases').value.trim();
+          if (name.length === 0) return;
+          await post(
+            '/cognition-engine/topics/add?name=' +
+              encodeURIComponent(name) +
+              '&description=' +
+              encodeURIComponent(description) +
+              '&aliases=' +
+              encodeURIComponent(aliases),
+          );
+          setTopicForm(false);
+          setTick((value) => value + 1);
+        };
+
+        // 挂主题：给记忆/准则用。先做成 prompt 版——可用优先于好看。
+        // chip 显示主题名而不是裸 id（t_001 对用户没有意义）
+        const topicChips = (ids) => {
+          if (!ids || ids.length === 0) return null;
+          const all = (topicsData && topicsData.list) || [];
+          const names = ids.map((id) => {
+            const hit = all.find((topic) => topic.id === id);
+            return hit ? hit.name : id;
+          });
+          return h(
+            'span',
+            { style: { ...S.chip, color: 'var(--dsw-alias-label-secondary)' } },
+            names.join(' · '),
+          );
+        };
+
+        // 「挂主题」不再用 window.prompt（Web 环境里被拦截，点了没反应），
+        // 改成内联勾选面板。
+        const isPicking = (targetType, id) =>
+          topicPick !== null && topicPick.targetType === targetType && topicPick.id === id;
+
+        const topicAssignButton = (targetType, id) =>
+          h(
+            'button',
+            {
+              type: 'button',
+              style: isPicking(targetType, id) ? { ...S.tab, ...S.tabActive } : S.tab,
+              onClick: () => setTopicPick(isPicking(targetType, id) ? null : { targetType, id }),
+            },
+            dict.subjectPick,
+          );
+
+        /** 勾选面板：列出所有生效主题，勾上的就是归属。 */
+        const topicPicker = (targetType, id, current) => {
+          if (!isPicking(targetType, id)) return null;
+          const all = ((topicsData && topicsData.list) || []).filter((topic) => topic.status === 'active');
+          if (all.length === 0) return h('div', { style: S.explain }, dict.subjectPickNone);
+          const chosen = new Set(current || []);
+          const boxes = all.map((topic) =>
+            h(
+              'label',
+              {
+                key: topic.id,
+                style: { display: 'inline-flex', gap: 4, alignItems: 'center', marginRight: 10 },
+              },
+              h('input', {
+                type: 'checkbox',
+                id: 'pick-' + targetType + '-' + id + '-' + topic.id,
+                defaultChecked: chosen.has(topic.id),
+              }),
+              topic.name,
+            ),
+          );
+          return h(
+            'div',
+            { style: S.item },
+            h('div', { style: S.meta }, ...boxes),
+            h(
+              'button',
+              {
+                type: 'button',
+                style: S.tab,
+                onClick: async () => {
+                  const picked = all
+                    .filter((topic) => {
+                      const box = document.getElementById('pick-' + targetType + '-' + id + '-' + topic.id);
+                      return box !== null && box.checked;
+                    })
+                    .map((topic) => topic.id);
+                  await post(
+                    '/cognition-engine/topics/assign?targetType=' + targetType + '&id=' +
+                      encodeURIComponent(id) + '&topicIds=' + encodeURIComponent(picked.join(',')),
+                  );
+                  setTopicPick(null);
+                  setTick((v) => v + 1);
+                },
+              },
+              dict.subjectPickSave,
+            ),
+          );
+        };
+
+        // 三道约束开关：一次只改一个 flag，其它参数不动
+        const playbookFlag = async (id, name, value) => {
+          await post(
+            '/cognition-engine/playbook/act?action=flags&id=' +
+              encodeURIComponent(id) +
+              '&' + name + '=' + (value ? 'true' : 'false'),
+          );
+          setTick((value2) => value2 + 1);
+        };
 
         // 准则本操作：接受 / 拒绝 / 停用 / 恢复
         const playbookAct = async (id, action) => {
@@ -600,8 +781,9 @@ window.__ModuleLoader__.load({
         }
 
         const memoryCount = (state.memory || {}).total || 0;
-        const schemaCount = (state.graph || {}).schemas || 0;
+        const schemaCount = (state.topics || {}).total || (state.graph || {}).schemas || 0;
         const taskCount = (state.tasks || {}).pending || 0;
+        const playbookCount = (state.playbook || {}).active || 0;
         const samples = state.samples || 0;
 
         const row = h(
@@ -627,6 +809,8 @@ window.__ModuleLoader__.load({
           h('span', null, `${dict.schema} ${schemaCount}`),
           h('span', { style: S.sep }, '·'),
           h('span', null, `${dict.todo} ${taskCount}`),
+          h('span', { style: S.sep }, '·'),
+          h('span', null, `${dict.playbookTab} ${playbookCount}`),
           samples > 0
             ? h(
                 'span',
@@ -641,9 +825,8 @@ window.__ModuleLoader__.load({
 
         const tabs = [
           // 「状态」页签已移除：三个数字与页签标签重复，没有信息量
-          ['tasks', `${dict.tasks} ${detail ? detail.tasks.length : ''}`.trim()],
           ['memories', `${dict.memories} ${detail ? detail.memories.length : ''}`.trim()],
-          ['schemas', `${dict.schemas} ${detail ? detail.schemas.length : ''}`.trim()],
+          ['schemas', `${dict.schemas} ${topicsData && topicsData.stats ? topicsData.stats.active : 0}`.trim()],
           ['playbook', `${dict.playbookTab}${detail && detail.playbook ? ' ' + detail.playbook.active : ''}`.trim()],
           ['settings', dict.settings],
         ];
@@ -782,6 +965,49 @@ window.__ModuleLoader__.load({
               state.model?.mode === 'real' && state.model?.available
                 ? h('span', null, state.model.provider + '/' + state.model.model)
                 : null,
+              h(
+                'div',
+                { style: S.meta },
+                h('span', null, dict.autoReflectLabel + '：'),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    style: S.tab,
+                    onClick: async () => {
+                      const next = !(state.model && state.model.autoReflect);
+                      await post('/cognition-engine/model?autoReflect=' + (next ? 'true' : 'false'));
+                      setTick((v) => v + 1);
+                    },
+                  },
+                  state.model && state.model.autoReflect ? dict.autoReflectOn : dict.autoReflectOff,
+                ),
+              ),
+              h('div', { style: S.explain }, dict.autoReflectHint),
+              h(
+                'div',
+                { style: S.meta },
+                h('span', null, dict.effortLabel + '：'),
+                ['', ...((state.model && state.model.efforts) || [])].map((effort) =>
+                  h(
+                    'button',
+                    {
+                      key: effort === '' ? 'auto' : effort,
+                      type: 'button',
+                      style:
+                        ((state.model && state.model.effort) || '') === effort
+                          ? { ...S.tab, ...S.tabActive }
+                          : S.tab,
+                      onClick: async () => {
+                        await post('/cognition-engine/model?effort=' + encodeURIComponent(effort));
+                        setTick((v) => v + 1);
+                      },
+                    },
+                    effort === '' ? dict.effortAuto : effort,
+                  ),
+                ),
+              ),
+              h('div', { style: S.explain }, dict.effortHint),
             ),
             section(
               dict.lock,
@@ -847,48 +1073,7 @@ window.__ModuleLoader__.load({
             h('div', { style: S.item }, h('div', { style: S.itemTitle }, `${dict.schema} ${(detail.counts || {}).schemas || 0}`)),
             h('div', { style: S.item }, h('div', { style: S.itemTitle }, `${dict.tasks} ${(detail.counts || {}).tasks || 0}`)),
           );
-        } else if (tab === 'tasks') {
-          body = renderList(detail.tasks, (task) => {
-                  const color =
-                    task.status === 'COMPLETED'
-                      ? 'var(--dsw-alias-state-success-primary)'
-                      : task.status === 'IN_PROGRESS'
-                        ? 'var(--dsw-alias-brand-primary)'
-                        : 'var(--dsw-alias-label-secondary)';
-                  const overdue = task.status !== 'COMPLETED' && task.overdueMs > 6 * 3600 * 1000;
-                  return h(
-                    'div',
-                    { key: task.id, style: S.item },
-                    h('div', { style: S.itemTitle }, task.description),
-                    h(
-                      'div',
-                      { style: S.meta },
-                      h('span', { style: { ...S.chip, color } }, task.status),
-                      h('span', null, task.id),
-                      h('span', null, `${dict.updated} ${ago(task.overdueMs)}`),
-                      h('span', null, `${dict.clues} ${task.context.length}`),
-                      overdue
-                        ? h('span', { style: { color: 'var(--dsw-alias-state-warn-primary)' } }, dict.overdue)
-                        : null,
-                    ),
-                    h(
-                      'div',
-                      { style: S.meta },
-                      h('span', null, `#${task.order ?? '-'}${task.parallel ? ' · 并行' : ''}`),
-                      h('button', { type: 'button', style: S.tab, onClick: () => post(`/cognition-engine/task/meta?id=${task.id}&order=${(task.order ?? 0) - 1}`).then(() => setTick((v) => v + 1)) }, '↑'),
-                      h('button', { type: 'button', style: S.tab, onClick: () => post(`/cognition-engine/task/meta?id=${task.id}&order=${(task.order ?? 0) + 1}`).then(() => setTick((v) => v + 1)) }, '↓'),
-                      h('button', { type: 'button', style: S.tab, onClick: () => post(`/cognition-engine/task/meta?id=${task.id}&parallel=${!task.parallel}`).then(() => setTick((v) => v + 1)) }, task.parallel ? '取消并行' : '设为并行'),
-                      h('button', { type: 'button', style: { ...S.tab, color: '#f85149' }, onClick: async () => {
-                        if (!window.confirm('删除这个任务？')) return;
-                        await post('/cognition-engine/task/delete?id=' + task.id);
-                        setTick((v) => v + 1);
-                      } }, '删除'),
-                    ),
-                    task.context.length > 0
-                      ? h('div', { style: S.clue }, task.context[task.context.length - 1])
-                      : null,
-                  );
-                });
+        } else if (tab === 'memories') {
         } else if (tab === 'memories') {
           body = renderList(detail.memories, (item) => {
             if (editingId === item.id) {
@@ -945,8 +1130,11 @@ window.__ModuleLoader__.load({
                 h('span', null, item.subject),
                 h('span', null, new Date(item.recordedAt).toLocaleString()),
                 h('span', null, item.id),
+                topicChips(item.topicIds || []),
+                topicAssignButton('memory', item.id),
                 h('button', { type: 'button', style: S.tab, onClick: () => setEditingId(item.id) }, '编辑'),
               ),
+              topicPicker('memory', item.id, item.topicIds || []),
             );
           });
         } else if (tab === 'playbook') {
@@ -969,7 +1157,39 @@ window.__ModuleLoader__.load({
                   'div',
                   { style: S.meta },
                   h('span', { style: { ...S.chip, color: 'var(--dsw-alias-label-secondary)' } }, entry.section),
+                  ...[
+                    ['guard', dict.pbGuard, entry.guard, dict.pbGuardHint],
+                    ['enforce', dict.pbEnforce, entry.enforce, dict.pbEnforceHint],
+                    ['audit', dict.pbAudit, entry.audit, dict.pbAuditHint],
+                  ].map(([name, label, on, hint]) =>
+                    h(
+                      'button',
+                      {
+                        key: name,
+                        type: 'button',
+                        title: hint,
+                        style: on ? { ...S.tab, ...S.tabActive } : S.tab,
+                        onClick: () => playbookFlag(entry.id, name, !on),
+                      },
+                      (on ? '☑ ' : '☐ ') + label,
+                    ),
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      style: S.tab,
+                      onClick: () => setPbFlagsFor(pbFlagsFor === entry.id ? null : entry.id),
+                    },
+                    dict.pbRules,
+                  ),
+                  entry.violations > 0
+                    ? h('span', { style: { color: 'var(--dsw-alias-state-warn-primary)' } },
+                        dict.pbViolations + ' ' + entry.violations)
+                    : null,
                   h('span', null, entry.id),
+                  topicChips(entry.topicIds || []),
+                  topicAssignButton('rule', entry.id),
                   h('span', null, `helpful=${entry.helpful} harmful=${entry.harmful}`),
                   entry.validTo
                     ? h('span', null, '有效期至 ' + new Date(entry.validTo).toLocaleDateString())
@@ -989,6 +1209,21 @@ window.__ModuleLoader__.load({
                   entry.status === 'retired'
                     ? h('button', { type: 'button', style: S.tab, onClick: () => playbookAct(entry.id, 'revive') }, dict.playbookRevive)
                     : null,
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      style: S.tab,
+                      onClick: async () => {
+                        if (!window.confirm('永久删除这条准则？删除后不再注入，快照里还能找回。')) return;
+                        await post(
+                          `/cognition-engine/playbook/act?id=${encodeURIComponent(entry.id)}&action=delete`,
+                        );
+                        setTick((value) => value + 1);
+                      },
+                    },
+                    dict.playbookDelete,
+                  ),
                   entry.status === 'active' && entry.expired === true
                     ? h(
                         'button',
@@ -1007,6 +1242,51 @@ window.__ModuleLoader__.load({
                       )
                     : null,
                 ),
+                pbFlagsFor === entry.id
+                  ? h(
+                      'div',
+                      { style: S.item },
+                      h(
+                        'div',
+                        { style: S.meta },
+                        h('span', null, dict.pbTrigger),
+                      ),
+                      h('input', {
+                        id: 'pbTrigger-' + entry.id,
+                        defaultValue: entry.trigger || '',
+                        placeholder: 'npm\\s+publish',
+                        style: S.input,
+                      }),
+                      h('div', { style: S.meta }, h('span', null, dict.pbRequired)),
+                      h('input', {
+                        id: 'pbRequired-' + entry.id,
+                        defaultValue: entry.required || '',
+                        placeholder: '--registry',
+                        style: S.input,
+                      }),
+                      h(
+                        'button',
+                        {
+                          type: 'button',
+                          style: S.tab,
+                          onClick: async () => {
+                            const trigger = document.getElementById('pbTrigger-' + entry.id).value;
+                            const required = document.getElementById('pbRequired-' + entry.id).value;
+                            await post(
+                              '/cognition-engine/playbook/act?action=flags&id=' +
+                                encodeURIComponent(entry.id) +
+                                '&trigger=' + encodeURIComponent(trigger) +
+                                '&required=' + encodeURIComponent(required),
+                            );
+                            setPbFlagsFor(null);
+                            setTick((value) => value + 1);
+                          },
+                        },
+                        dict.pbSaveRules,
+                      ),
+                    )
+                  : null,
+                topicPicker('rule', entry.id, entry.topicIds || []),
               );
 
             const sections = groups
@@ -1030,38 +1310,240 @@ window.__ModuleLoader__.load({
             );
           }
         } else {
-          body = renderList(detail.schemas, (item) => {
-            const open = expandedSchema === item.id;
+          const td = topicsData;
+          const topicList = (td && Array.isArray(td.list) ? td.list : []).filter(
+            (topic) => topic.status === 'active',
+          );
+          const unclassified = (td && td.unclassified) || { memories: 0, rules: 0 };
+          const card = (topic) => {
+            const memoryCount = topic.memoryCount || 0;
+            const ruleCount = topic.ruleCount || 0;
             return h(
               'div',
-              { key: item.id, style: S.item },
-              h('div', { style: S.itemTitle }, item.label),
+              { key: topic.id, style: S.item },
               h(
                 'div',
                 { style: S.meta },
-                h('span', null, '包含 ' + item.members + ' 条记忆'),
-                h('span', null, '相关主题 ' + item.neighbors),
-                h('span', null, item.polarity >= 0 ? '肯定倾向' : '否定倾向'),
-                h('button', { type: 'button', style: S.tab, onClick: () => setExpandedSchema(open ? null : item.id) }, open ? '收起' : '看看里面有什么'),
-                h('button', { type: 'button', style: { ...S.tab, color: '#f85149' }, onClick: async () => {
-                  if (!window.confirm('删除这个主题？成员记忆会被保留。')) return;
-                  await post('/cognition-engine/schema/delete?id=' + item.id);
-                  setTick((v) => v + 1);
-                } }, '删除'),
+                h('span', { style: S.itemTitle }, topic.name),
+                h('span', null, '记忆 ' + memoryCount + ' 条 · 准则 ' + ruleCount + ' 条'),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    style: S.tab,
+                    onClick: async () => {
+                      if (!window.confirm('停用主题「' + topic.name + '」？已经挂上去的记忆和准则都还在，只是不再出现在这个分类里。')) return;
+                      await post('/cognition-engine/topics/archive?id=' + encodeURIComponent(topic.id));
+                      setTick((v) => v + 1);
+                    },
+                  },
+                  dict.topicArchive,
+                ),
               ),
-              open
+              topic.description ? h('div', { style: S.explain }, topic.description) : null,
+              topic.aliases.length > 0
+                ? h('div', { style: S.explain }, '也叫：' + topic.aliases.join('、'))
+                : null,
+              // 任务不再是独立台账：主题下直接增删改任务
+              h(
+                'div',
+                { style: S.meta },
+                h('span', null, '待办 ' + (topic.tasks || []).length + ' 项'),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    style: S.tab,
+                    onClick: () => setTaskFormFor(taskFormFor === topic.id ? null : topic.id),
+                  },
+                  dict.taskAdd,
+                ),
+              ),
+              taskFormFor === topic.id
                 ? h(
                     'div',
-                    { style: S.list },
-                    (item.memberTexts || []).length === 0
-                      ? h('div', { style: S.explain }, '这个主题下还没有记忆')
-                      : (item.memberTexts || []).map((text, index) =>
-                          h('div', { key: index, style: S.clue }, '· ' + text),
-                        ),
+                    { style: S.meta },
+                    h('input', {
+                      id: 'nt-' + topic.id,
+                      placeholder: dict.taskPlaceholder,
+                      style: S.input,
+                      onKeyDown: (event) => {
+                        if (event.key === 'Enter') document.getElementById('save-task-' + topic.id).click();
+                      },
+                    }),
+                    h(
+                      'button',
+                      {
+                        id: 'save-task-' + topic.id,
+                        type: 'button',
+                        style: S.tab,
+                        onClick: async () => {
+                          const input = document.getElementById('nt-' + topic.id);
+                          const desc = input && input.value ? input.value.trim() : '';
+                          if (desc.length === 0) return;
+                          await post(
+                            '/cognition-engine/task/create?description=' +
+                              encodeURIComponent(desc) +
+                              '&topicIds=' +
+                              encodeURIComponent(topic.id),
+                          );
+                          setTaskFormFor(null);
+                          setTick((v) => v + 1);
+                        },
+                      },
+                      dict.taskSave,
+                    ),
                   )
                 : null,
+              (topic.tasks || []).length === 0
+                ? null
+                : h(
+                    'div',
+                    { style: S.list },
+                    (topic.tasks || []).map((task) =>
+                      h(
+                        'div',
+                        { key: task.id, style: S.clue },
+                        h(
+                          'div',
+                          { style: S.meta },
+                          h(
+                            'span',
+                            {
+                              style: {
+                                ...S.chip,
+                                color:
+                                  task.status === 'COMPLETED'
+                                    ? 'var(--dsw-alias-state-success-primary)'
+                                    : task.status === 'IN_PROGRESS'
+                                      ? 'var(--dsw-alias-brand-primary)'
+                                      : 'var(--dsw-alias-label-secondary)',
+                              },
+                            },
+                            dict['task' + task.status] || task.status,
+                          ),
+                          h('span', null, task.description),
+                        ),
+                        h(
+                          'div',
+                          { style: S.meta },
+                          task.status === 'PENDING'
+                            ? h(
+                                'button',
+                                {
+                                  type: 'button',
+                                  style: S.tab,
+                                  onClick: async () => {
+                                    await post(
+                                      '/cognition-engine/task/status?id=' +
+                                        encodeURIComponent(task.id) +
+                                        '&status=IN_PROGRESS',
+                                    );
+                                    setTick((v) => v + 1);
+                                  },
+                                },
+                                dict.taskStart,
+                              )
+                            : null,
+                          task.status !== 'COMPLETED'
+                            ? h(
+                                'button',
+                                {
+                                  type: 'button',
+                                  style: S.tab,
+                                  onClick: async () => {
+                                    await post(
+                                      '/cognition-engine/task/status?id=' +
+                                        encodeURIComponent(task.id) +
+                                        '&status=COMPLETED',
+                                    );
+                                    setTick((v) => v + 1);
+                                  },
+                                },
+                                dict.taskDone,
+                              )
+                            : h(
+                                'button',
+                                {
+                                  type: 'button',
+                                  style: S.tab,
+                                  onClick: async () => {
+                                    await post(
+                                      '/cognition-engine/task/status?id=' +
+                                        encodeURIComponent(task.id) +
+                                        '&status=PENDING',
+                                    );
+                                    setTick((v) => v + 1);
+                                  },
+                                },
+                                dict.taskReopen,
+                              ),
+                          h(
+                            'button',
+                            {
+                              type: 'button',
+                              style: { ...S.tab, color: '#f85149' },
+                              onClick: async () => {
+                                if (!window.confirm('删除待办「' + task.description + '」？')) return;
+                                await post(
+                                  '/cognition-engine/task/delete?id=' + encodeURIComponent(task.id),
+                                );
+                                setTick((v) => v + 1);
+                              },
+                            },
+                            dict.taskDelete,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
             );
-          });
+          };
+
+          body = h(
+            'div',
+            null,
+            h('div', { style: S.explain }, dict.topicsHint),
+            h(
+              'div',
+              { style: S.meta },
+              h(
+                'button',
+                { type: 'button', style: S.tab, onClick: () => setTopicForm(!topicForm) },
+                dict.topicAdd,
+              ),
+              h('span', null, '共 ' + topicList.length + ' 个主题'),
+            ),
+            topicForm
+              ? h(
+                  'div',
+                  { style: S.item },
+                  h('input', { id: 'topicName', placeholder: dict.topicName, style: S.input }),
+                  h('input', { id: 'topicDesc', placeholder: dict.topicDesc, style: S.input }),
+                  h('input', { id: 'topicAliases', placeholder: dict.topicAliases, style: S.input }),
+                  h(
+                    'button',
+                    { type: 'button', style: S.tab, onClick: addTopic },
+                    dict.topicSave,
+                  ),
+                )
+              : null,
+            topicList.length === 0
+              ? h('div', { style: S.explain }, dict.topicEmpty)
+              : h('div', null, ...topicList.map(card)),
+            h(
+              'div',
+              { style: S.item },
+              h('div', { style: S.itemTitle }, dict.topicUnclassified),
+              h('div', { style: S.explain }, dict.topicUnclassifiedHint),
+              h(
+                'div',
+                { style: S.meta },
+                h('span', null, '记忆 ' + unclassified.memories),
+                h('span', null, '准则 ' + unclassified.rules),
+              ),
+            ),
+          );
         }
 
         const panel = h(
@@ -1110,9 +1592,6 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: S.list },
-            { tasks: dict.tasksHint, memories: dict.memoriesHint, schemas: dict.schemasHint }[tab]
-              ? h('div', { style: S.explain }, { tasks: dict.tasksHint, memories: dict.memoriesHint, schemas: dict.schemasHint }[tab])
-              : null,
             notice
               ? h(
                   'div',
@@ -1180,31 +1659,7 @@ window.__ModuleLoader__.load({
           ctx.slots.inject('conversation.input.dock', () =>
             ctx.slots.register({ name: 'conversation.input.dock', id: 'cognition-engine', order: 5 }, Wide),
           );
-          try {
-            const Panel = (props) => h(Dock, { ...props, defaultOpen: true, variant: 'panel' });
-            const Icon = (props) =>
-              h(
-                'span',
-                {
-                  style: {
-                    fontSize: Math.round((props && props.size ? props.size : 18) * 0.7),
-                    lineHeight: 1,
-                  },
-                  'aria-hidden': 'true',
-                },
-                '◈',
-              );
-            ctx.slots.inject('sidebar.panellist', () =>
-              ctx.slots.register({ name: 'sidebar.panellist', id: 'cognition-engine', order: 30, label: () => '认知引擎' }, Icon),
-            );
-            ctx.slots.inject('main', () =>
-              ctx.slots.register({ name: 'main', key: 'cognition-engine' }, Panel),
-            );
-          } catch (error) {
-            if (ctx.logger && typeof ctx.logger.warn === 'function') {
-              ctx.logger.warn('cognition-engine: 侧边栏槽位注册失败，已降级为仅状态条');
-            }
-          }
+          // 侧边栏图标 + 整页面板已移除：侧边栏 UI 使用频率低，只保留输入框上方的浮层。
         } catch (error) {
           // 槽位被占用或宿主不支持：静默跳过，工具与记忆功能不受影响
           if (ctx.logger && typeof ctx.logger.warn === 'function') {

@@ -45,16 +45,16 @@ function muted(text: string, limit = 400): CardNode {
   return { type: 'text', text: clampText(text, limit), tone: 'muted' };
 }
 
-/** cognition_state：记忆 / 图式 / 待办 三个指标 + 跨会话摘要。 */
+/** cognition_state：记忆 / 主题 / 待办 三个指标 + 跨会话摘要。 */
 function stateCard(data: Record<string, unknown>): CardNode | null {
   const memory = data.memory as Record<string, unknown> | undefined;
-  const graph = data.graph as Record<string, unknown> | undefined;
+  const topics = data.topics as Record<string, unknown> | undefined;
   const tasks = data.tasks as Record<string, unknown> | undefined;
-  if (memory === undefined || graph === undefined) return null;
+  if (memory === undefined || topics === undefined) return null;
   const children: CardNode[] = [
     metric('记忆', memory.total),
     metric('当前有效', memory.current),
-    metric('图式', graph.schemas),
+    metric('主题', topics.total),
     metric('待办', tasks?.pending),
   ];
   const digest = data.digest;
@@ -77,7 +77,7 @@ function recallCard(data: Record<string, unknown>): CardNode | null {
     });
   }
   if (Array.isArray(data.related) && data.related.length > 0) {
-    children.push(muted(`另有 ${data.related.length} 条图式关联`));
+    children.push(muted(`另有 ${data.related.length} 条同主题记忆`));
   }
   return { type: 'stack', title: '记忆召回', children };
 }

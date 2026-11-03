@@ -39,6 +39,31 @@ export interface PlaybookEntry {
     history: PlaybookHistoryEntry[];
     /** 与哪条准则疑似冲突（入库时检测，人工裁决）。 */
     conflictWith?: string;
+    /** 自查：渲染进「开工前自查」清单，要求模型动手前先点名适用项。 */
+    guard: boolean;
+    /** 拦截：工具调用前校验，违反则直接拒绝执行。需要 trigger + required。 */
+    enforce: boolean;
+    /** 审计：命中但未拦截时记一次违反，写进审计日志与计数。 */
+    audit: boolean;
+    /**
+     * 拦截/审计的触发条件（正则）。工具名 + 参数 JSON 匹配它才认为「这条准则适用」。
+     * 例：`npm\s+publish`。留空则这条的拦截/审计不生效——否则每条准则都会命中所有调用。
+     */
+    trigger: string;
+    /**
+     * 适用时「必须满足」的条件（正则）。触发匹配了但它没匹配 → 违反。
+     * 例：`--registry`。
+     */
+    required: string;
+    /**
+     * 归属主题（多对多）。空 = 未归类。
+     * 用于「按任务只注入相关准则」——这是主题层对准则本最直接的收益。
+     */
+    topicIds: string[];
+    /** 累计违反次数。 */
+    violations: number;
+    /** 最近一次违反时间；从未违反为 null。 */
+    lastViolationAt: number | null;
 }
 export interface PlaybookFile {
     version: number;
@@ -91,6 +116,12 @@ export interface PlaybookStats {
     chars: number;
     /** 带冲突标记的条数。 */
     conflicted: number;
+    /** 累计违反次数。 */
+    violationsTotal: number;
+    /** 勾了自查 / 拦截 / 审计的生效条数。 */
+    guarded: number;
+    enforced: number;
+    audited: number;
     helpfulTotal: number;
     harmfulTotal: number;
 }
@@ -146,6 +177,13 @@ export declare class PlaybookStore {
     }): MergeOutcome;
     accept(id: string): boolean;
     reject(id: string): boolean;
+    /**
+     * 永久删除一条准则（任意状态）。
+     *
+     * 和 retire 的区别：停用是「不再注入但留着记录」，删除是「当它没存在过」。
+     * 删除前 flush() 会先留快照，所以还能从 .snapshots/ 找回来。
+     */
+    remove(id: string): boolean;
     retire(id: string, reason?: string): boolean;
     revive(id: string): boolean;
     /** 编辑条目：旧内容进 history，不原地丢弃。 */
@@ -153,14 +191,75 @@ export declare class PlaybookStore {
     /** 记录一次使用反馈（ACE 的双向计数）。 */
     mark(id: string, kind: 'helpful' | 'harmful', amount?: number): boolean;
     /**
+     * 设置某条准则的三道约束开关。
+     *
+     * 默认全关：准则本身就是给模型的提醒，强制是例外而非常态。
+     */
+    setFlags(id: string, flags: {
+        guard?: boolean;
+        enforce?: boolean;
+        audit?: boolean;
+        trigger?: string;
+        required?: string;
+    }): boolean;
+    /** 设置归属主题（多对多，空数组 = 未归类）。 */
+    setTopics(id: string, topicIds: string[]): boolean;
+    /** 记一次违反。 */
+    recordViolation(id: string, now?: number): boolean;
+    /**
+     * 校验一次工具调用。
+     *
+     * 规则：`trigger` 匹配「工具名 + 参数 JSON」→ 这条准则适用；
+     * 适用时 `required` 必须也匹配，否则算违反。
+     * 只有 `trigger` 非空的条目参与判定——否则每条准则都会命中所有调用。
+     *
+     * 纯函数，不写盘：调用方决定是拒绝（enforce）还是只记录（audit）。
+     */
+    checkToolCall(text: string): {
+        blocked: PlaybookEntry[];
+        violated: PlaybookEntry[];
+    };
+    /**
+     * 自查清单：勾了「自查」的条目会渲染到注入文本最前面。
+     *
+     * 内容很少（通常一两条），目的是让模型在动手前显式确认，而不是把长清单塞进上下文。
+     */
+    renderSelfCheck(now?: number): string;
+    /**
      * 渲染成注入文本。
      *
      * 格式照 ACE：`[ctxt-00001] helpful=2 harmful=0 :: 正文`——
      * 模型可以点名引用，我们才能回写计数。
      */
-    render(now?: number): string;
-    /** 把渲染结果包成可注入的段落；空准则本返回空串，由调用方回退 digest。 */
-    renderSection(now?: number): string;
+    /**
+     * 渲染成注入文本。
+     *
+     * 分组优先级：**有主题就按主题分组**，没主题退回按 section（约定/坑/状态）。
+     *
+     * 为什么按主题：调研发现业界主流是「主题路由 + 主题摘要注入」。
+     * 按主题分组后，模型能先判断当前任务属于哪个主题，只采用相关准则——
+     * 而不是 12 条准则不分场合全塞进来。
+     *
+     * @param topicName 把 topicId 解析成显示名的回调；不传则按 section 分组。
+     */
+    render(now?: number, budget?: number, topicName?: (id: string) => string | undefined): string;
+    /**
+     * 同 render，但额外返回被预算挤掉的条数。
+     *
+     * 低分条目（helpful−harmful×2 靠后）在预算紧张时会被静默丢弃——
+     * 调用方据此在注入文本里补一句「另有 N 条省略」，避免用户以为准则丢了。
+     */
+    renderDetailed(now?: number, budget?: number, topicName?: (id: string) => string | undefined): {
+        text: string;
+        omitted: number;
+    };
+    /**
+     * 把渲染结果包成可注入的段落；空准则本返回空串，由调用方回退 digest。
+     *
+     * **maxChars 是整段的总预算**，不是正文预算——自查块、标题、尾注都要先扣掉，
+     * 否则总长度会超（实测过 619 > 600）。正文按剩余额度渲染。
+     */
+    renderSection(now?: number, topicName?: (id: string) => string | undefined): string;
     private entryRef;
     private nextId;
     private markActive;

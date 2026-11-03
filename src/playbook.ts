@@ -53,6 +53,34 @@ export interface PlaybookEntry {
   history: PlaybookHistoryEntry[];
   /** 与哪条准则疑似冲突（入库时检测，人工裁决）。 */
   conflictWith?: string;
+
+  /* —— 三道约束开关（默认全关：准则本来只是提醒）—— */
+
+  /** 自查：渲染进「开工前自查」清单，要求模型动手前先点名适用项。 */
+  guard: boolean;
+  /** 拦截：工具调用前校验，违反则直接拒绝执行。需要 trigger + required。 */
+  enforce: boolean;
+  /** 审计：命中但未拦截时记一次违反，写进审计日志与计数。 */
+  audit: boolean;
+  /**
+   * 拦截/审计的触发条件（正则）。工具名 + 参数 JSON 匹配它才认为「这条准则适用」。
+   * 例：`npm\s+publish`。留空则这条的拦截/审计不生效——否则每条准则都会命中所有调用。
+   */
+  trigger: string;
+  /**
+   * 适用时「必须满足」的条件（正则）。触发匹配了但它没匹配 → 违反。
+   * 例：`--registry`。
+   */
+  required: string;
+  /**
+   * 归属主题（多对多）。空 = 未归类。
+   * 用于「按任务只注入相关准则」——这是主题层对准则本最直接的收益。
+   */
+  topicIds: string[];
+  /** 累计违反次数。 */
+  violations: number;
+  /** 最近一次违反时间；从未违反为 null。 */
+  lastViolationAt: number | null;
 }
 
 export interface PlaybookFile {
@@ -110,6 +138,12 @@ export interface PlaybookStats {
   chars: number;
   /** 带冲突标记的条数。 */
   conflicted: number;
+  /** 累计违反次数。 */
+  violationsTotal: number;
+  /** 勾了自查 / 拦截 / 审计的生效条数。 */
+  guarded: number;
+  enforced: number;
+  audited: number;
   helpfulTotal: number;
   harmfulTotal: number;
 }
@@ -161,6 +195,15 @@ function hasNegation(text: string): boolean {
   // 单字「不」也要算：准则里最常见的否定就是「不跳步」「不要用 X」。
   // 这里只是打冲突标记供人工看，误报的代价远小于漏报。
   return /(不|没|无|非|未|别|never|not|don't|do not|avoid)/i.test(text);
+}
+
+/** 非法正则不能抛错：用户填错一个括号不该让整个插件崩掉。 */
+function safeRegex(pattern: string): RegExp | null {
+  try {
+    return new RegExp(pattern, 'i');
+  } catch {
+    return null;
+  }
 }
 
 function isCliche(text: string): boolean {
@@ -249,6 +292,18 @@ export class PlaybookStore {
         updatedAt: Number(entry.updatedAt ?? 0),
         note: String(entry.note ?? ''),
         history: Array.isArray(entry.history) ? entry.history : [],
+        // 老文件没有这些字段，一律按「全关」恢复，保持向后兼容
+        guard: entry.guard === true,
+        enforce: entry.enforce === true,
+        audit: entry.audit === true,
+        trigger: typeof entry.trigger === 'string' ? entry.trigger : '',
+        topicIds: Array.isArray(entry.topicIds) ? entry.topicIds.map(String).filter((t) => t.length > 0) : [],
+        required: typeof entry.required === 'string' ? entry.required : '',
+        violations: Number(entry.violations ?? 0),
+        lastViolationAt:
+          entry.lastViolationAt === null || entry.lastViolationAt === undefined
+            ? null
+            : Number(entry.lastViolationAt),
       })),
     };
     // 从已有 id 里续上序号，避免重启后 id 冲突
@@ -323,6 +378,10 @@ export class PlaybookStore {
       expired: this.expired(now).length,
       conflicted: this.data.entries.filter((entry) => entry.status !== 'retired' && entry.conflictWith !== undefined).length,
       chars: this.render(now).length,
+      violationsTotal: this.data.entries.reduce((sum, entry) => sum + entry.violations, 0),
+      guarded: active.filter((entry) => entry.guard).length,
+      enforced: active.filter((entry) => entry.enforce).length,
+      audited: active.filter((entry) => entry.audit).length,
       helpfulTotal: active.reduce((sum, entry) => sum + entry.helpful, 0),
       harmfulTotal: active.reduce((sum, entry) => sum + entry.harmful, 0),
     };
@@ -394,6 +453,15 @@ export class PlaybookStore {
       note: conflictWith === undefined ? '' : `与 ${conflictWith} 疑似冲突，待人工裁决`,
       history: [],
       ...(conflictWith === undefined ? {} : { conflictWith }),
+      // 新条目默认只是一句提醒，三道约束都要人工勾选才生效
+      guard: false,
+      enforce: false,
+      audit: false,
+      trigger: '',
+      required: '',
+      topicIds: [],
+      violations: 0,
+      lastViolationAt: null,
     };
     this.data.entries.push(entry);
     return { accepted: true, entry: { ...entry } };
@@ -460,6 +528,19 @@ export class PlaybookStore {
     return true;
   }
 
+  /**
+   * 永久删除一条准则（任意状态）。
+   *
+   * 和 retire 的区别：停用是「不再注入但留着记录」，删除是「当它没存在过」。
+   * 删除前 flush() 会先留快照，所以还能从 .snapshots/ 找回来。
+   */
+  remove(id: string): boolean {
+    const index = this.data.entries.findIndex((entry) => entry.id === id);
+    if (index < 0) return false;
+    this.data.entries.splice(index, 1);
+    return true;
+  }
+
   retire(id: string, reason = ''): boolean {
     return this.markRetired(id, reason);
   }
@@ -503,6 +584,85 @@ export class PlaybookStore {
     return true;
   }
 
+  /* ------------------------------ 三道约束 ------------------------------ */
+
+  /**
+   * 设置某条准则的三道约束开关。
+   *
+   * 默认全关：准则本身就是给模型的提醒，强制是例外而非常态。
+   */
+  setFlags(
+    id: string,
+    flags: { guard?: boolean; enforce?: boolean; audit?: boolean; trigger?: string; required?: string },
+  ): boolean {
+    const entry = this.entryRef(id);
+    if (entry === undefined) return false;
+    if (flags.guard !== undefined) entry.guard = flags.guard;
+    if (flags.enforce !== undefined) entry.enforce = flags.enforce;
+    if (flags.audit !== undefined) entry.audit = flags.audit;
+    if (flags.trigger !== undefined) entry.trigger = flags.trigger.slice(0, 200);
+    if (flags.required !== undefined) entry.required = flags.required.slice(0, 200);
+    entry.updatedAt = this.clock();
+    return true;
+  }
+
+  /** 设置归属主题（多对多，空数组 = 未归类）。 */
+  setTopics(id: string, topicIds: string[]): boolean {
+    const entry = this.entryRef(id);
+    if (entry === undefined) return false;
+    entry.topicIds = [...new Set(topicIds.filter((t) => t.length > 0))];
+    entry.updatedAt = this.clock();
+    return true;
+  }
+
+  /** 记一次违反。 */
+  recordViolation(id: string, now: number = this.clock()): boolean {
+    const entry = this.entryRef(id);
+    if (entry === undefined) return false;
+    entry.violations += 1;
+    entry.lastViolationAt = now;
+    return true;
+  }
+
+  /**
+   * 校验一次工具调用。
+   *
+   * 规则：`trigger` 匹配「工具名 + 参数 JSON」→ 这条准则适用；
+   * 适用时 `required` 必须也匹配，否则算违反。
+   * 只有 `trigger` 非空的条目参与判定——否则每条准则都会命中所有调用。
+   *
+   * 纯函数，不写盘：调用方决定是拒绝（enforce）还是只记录（audit）。
+   */
+  checkToolCall(text: string): { blocked: PlaybookEntry[]; violated: PlaybookEntry[] } {
+    const blocked: PlaybookEntry[] = [];
+    const violated: PlaybookEntry[] = [];
+    for (const entry of this.active()) {
+      if (entry.trigger.trim().length === 0) continue;
+      if (!entry.enforce && !entry.audit) continue;
+      const trigger = safeRegex(entry.trigger);
+      if (trigger === null || !trigger.test(text)) continue;
+      // required 留空表示「只要触发就算违反」（例如某类操作整体禁止）
+      const required = entry.required.trim().length === 0 ? null : safeRegex(entry.required);
+      const satisfied = required === null ? false : required.test(text);
+      if (satisfied) continue;
+      violated.push(entry);
+      if (entry.enforce) blocked.push(entry);
+    }
+    return { blocked, violated };
+  }
+
+  /**
+   * 自查清单：勾了「自查」的条目会渲染到注入文本最前面。
+   *
+   * 内容很少（通常一两条），目的是让模型在动手前显式确认，而不是把长清单塞进上下文。
+   */
+  renderSelfCheck(now: number = this.clock()): string {
+    const list = this.active(now).filter((entry) => entry.guard);
+    if (list.length === 0) return '';
+    const lines = list.map((entry) => `- [${entry.id}] ${entry.content}`).join('\n');
+    return `【开工前自查】动手前先确认本次适用哪几条，并在回复里点名；不适用就明说。\n${lines}`;
+  }
+
   /* ------------------------------ 渲染 ------------------------------ */
 
   /**
@@ -511,36 +671,66 @@ export class PlaybookStore {
    * 格式照 ACE：`[ctxt-00001] helpful=2 harmful=0 :: 正文`——
    * 模型可以点名引用，我们才能回写计数。
    */
-  render(now: number = this.clock()): string {
-    const active = this.active(now);
-    if (active.length === 0) return '';
+  /**
+   * 渲染成注入文本。
+   *
+   * 分组优先级：**有主题就按主题分组**，没主题退回按 section（约定/坑/状态）。
+   *
+   * 为什么按主题：调研发现业界主流是「主题路由 + 主题摘要注入」。
+   * 按主题分组后，模型能先判断当前任务属于哪个主题，只采用相关准则——
+   * 而不是 12 条准则不分场合全塞进来。
+   *
+   * @param topicName 把 topicId 解析成显示名的回调；不传则按 section 分组。
+   */
+  render(now: number = this.clock(), budget?: number, topicName?: (id: string) => string | undefined): string {
+    return this.renderDetailed(now, budget, topicName).text;
+  }
 
-    // 按 section 分组；组内按 helpful−harmful×2 降序
-    const groups = new Map<PlaybookSection, PlaybookEntry[]>();
-    for (const entry of active) {
-      const list = groups.get(entry.section) ?? [];
-      list.push(entry);
-      groups.set(entry.section, list);
-    }
+  /**
+   * 同 render，但额外返回被预算挤掉的条数。
+   *
+   * 低分条目（helpful−harmful×2 靠后）在预算紧张时会被静默丢弃——
+   * 调用方据此在注入文本里补一句「另有 N 条省略」，避免用户以为准则丢了。
+   */
+  renderDetailed(
+    now: number = this.clock(),
+    budget?: number,
+    topicName?: (id: string) => string | undefined,
+  ): { text: string; omitted: number } {
+    const maxChars = Math.max(120, Math.round(budget ?? this.maxChars));
+    const active = this.active(now);
+    if (active.length === 0) return { text: '', omitted: 0 };
 
     const score = (entry: PlaybookEntry): number => entry.helpful - entry.harmful * 2;
+    // 用主题分组：每个条目挂在它的第一个主题下；没有主题的进「未归类」
+    const groups = new Map<string, { title: string; list: PlaybookEntry[] }>();
+    for (const entry of active) {
+      const topicId = entry.topicIds[0];
+      const name = topicId === undefined ? undefined : topicName?.(topicId);
+      const key = name ?? (topicId === undefined ? '__inbox__' : topicId);
+      const title = name ?? (topicId === undefined ? '未归类' : topicId);
+      const group = groups.get(key) ?? { title, list: [] };
+      group.list.push(entry);
+      groups.set(key, group);
+    }
+
     const blocks: string[] = [];
     let used = 0;
     let total = 0;
 
-    for (const section of PLAYBOOK_SECTIONS) {
-      const list = (groups.get(section) ?? []).sort((a, b) => score(b) - score(a));
+    for (const group of groups.values()) {
+      const list = group.list.sort((a, b) => score(b) - score(a));
       if (list.length === 0) continue;
 
       const lines: string[] = [];
-      const header = `## ${section}`;
+      const header = `## ${group.title}`;
       let blockChars = header.length + 1;
       for (const entry of list) {
         if (lines.length >= this.maxPerSection) break;
         if (total >= this.maxEntries) break;
         const line = `- [${entry.id}] helpful=${entry.helpful} harmful=${entry.harmful} :: ${entry.content}`;
-        if (used + blockChars + line.length + 1 > this.maxChars) {
-          // 预算不够时，至少保证每个 section 有一条
+        if (used + blockChars + line.length + 1 > maxChars) {
+          // 预算不够时，至少保证每组有一条
           if (lines.length === 0) {
             const trimmed = line.length > 80 ? `${line.slice(0, 77)}…` : line;
             lines.push(trimmed);
@@ -554,19 +744,48 @@ export class PlaybookStore {
         total += 1;
       }
       if (lines.length === 0) continue;
-      if (used + blockChars > this.maxChars) break;
+      if (used + blockChars > maxChars) break;
       blocks.push(`${header}\n${lines.join('\n')}`);
       used += blockChars + 1;
     }
 
-    return blocks.join('\n\n');
+    // 按**实际渲染出来的行数**算省略，不能按 total——被整组丢弃的条目已计过 total，
+    // 那样会算成 omitted=0，用户看到「少了条目」却没有任何提示。
+    const emitted = blocks.reduce((sum, block) => sum + (block.match(/^- \[ctxt/gm)?.length ?? 0), 0);
+    return { text: blocks.join('\n\n'), omitted: Math.max(0, active.length - emitted) };
   }
 
-  /** 把渲染结果包成可注入的段落；空准则本返回空串，由调用方回退 digest。 */
-  renderSection(now: number = this.clock()): string {
-    const body = this.render(now);
-    if (body.length === 0) return '';
-    return `【工作准则】（由记忆蒸馏，累计 helpful/harmful）\n${body}\n（这些是长期约定；需要具体细节时调用 cognition_recall。）`;
+  /**
+   * 把渲染结果包成可注入的段落；空准则本返回空串，由调用方回退 digest。
+   *
+   * **maxChars 是整段的总预算**，不是正文预算——自查块、标题、尾注都要先扣掉，
+   * 否则总长度会超（实测过 619 > 600）。正文按剩余额度渲染。
+   */
+  renderSection(now: number = this.clock(), topicName?: (id: string) => string | undefined): string {
+    const selfCheck = this.renderSelfCheck(now);
+    const header = '【工作准则】（由记忆蒸馏，累计 helpful/harmful）';
+    const footer = '（这些是长期约定；需要具体细节时调用 cognition_recall。）';
+    const hasBody = this.active(now).length > 0;
+
+    // 固定开销：各段之间的分隔符 \n\n 也算进去
+    const overhead =
+      (selfCheck.length > 0 ? selfCheck.length + 2 : 0) +
+      (hasBody ? header.length + 2 + footer.length : 0);
+
+    // 给「另有 N 条省略」预留空间，否则提示自己会把总长顶出预算
+    const hintReserve = 32;
+    const detail = hasBody
+      ? this.renderDetailed(now, this.maxChars - overhead - hintReserve, topicName)
+      : { text: '', omitted: 0 };
+    const body = detail.text;
+    const omittedHint = detail.omitted > 0 ? `（另有 ${detail.omitted} 条准则因预算省略）` : '';
+    if (body.length === 0 && selfCheck.length === 0) return '';
+
+    const parts: string[] = [];
+    if (selfCheck.length > 0) parts.push(selfCheck);
+    if (body.length > 0) parts.push(`${header}\n${body}${omittedHint === '' ? '' : `\n${omittedHint}`}`);
+    parts.push(footer);
+    return parts.join('\n\n');
   }
 
   /* ------------------------------ 内部 ------------------------------ */

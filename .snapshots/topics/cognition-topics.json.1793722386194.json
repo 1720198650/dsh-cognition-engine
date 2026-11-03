@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "revision": 2,
+  "updatedAt": 1793722386124,
+  "topics": [
+    {
+      "id": "t_001",
+      "name": "发布流程",
+      "description": "版本发布、验收、npm 发布相关",
+      "aliases": [
+        "发版",
+        "release"
+      ],
+      "parentId": null,
+      "status": "active",
+      "createdBy": "user",
+      "createdAt": 1793722093033,
+      "updatedAt": 1793722093033
+    },
+    {
+      "id": "t_002",
+      "name": "插件架构",
+      "description": "这个记忆插件自身的架构、依赖、接口与发布方式",
+      "aliases": [
+        "插件",
+        "plugin",
+        "依赖"
+      ],
+      "parentId": null,
+      "status": "active",
+      "createdBy": "user",
+      "createdAt": 1793722386120,
+      "updatedAt": 1793722386120
+    }
+  ]
+}

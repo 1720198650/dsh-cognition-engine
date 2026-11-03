@@ -45,6 +45,13 @@ export interface TemporalFact {
   readonly tags: readonly string[];
   readonly source: string;
   readonly importance: number;
+  /**
+   * 归属主题（多对多）。空 = 未归类。
+   *
+   * 主题是人定的适用范围键，不是自动聚类的结果——
+   * 调研结论见 docs/topic-research.md。
+   */
+  readonly topicIds: readonly string[];
   /** 作用域，默认 global。 */
   readonly scope: MemoryScope;
   /** scope = workspace 时的归属工作区 id。 */
@@ -80,6 +87,8 @@ export interface IngestInput {
   content: string;
   subject?: string;
   tags?: readonly string[];
+  /** 归属主题 id（多对多）；不传 = 未归类。 */
+  topicIds?: readonly string[];
   source?: string;
   /** 写入通道；由入口代码决定，agent 不能自填。默认 agent_tool。 */
   origin?: WriteOrigin;
@@ -413,6 +422,7 @@ export class TemporalMemoryStore {
       supersededAt: null,
       supersededBy: null,
       tags: Object.freeze([...(input.tags ?? [])]),
+      topicIds: Object.freeze([...(input.topicIds ?? [])]),
       source: input.source ?? 'manual',
       importance: clamp01(input.importance ?? 0.5),
       scope: input.scope ?? 'global',
@@ -520,6 +530,23 @@ export class TemporalMemoryStore {
     const elapsed = Math.max(0, now - fact.lastAccessedAt);
     const boost = 1 + Math.min(Math.max(0, fact.activation), MAX_STRENGTH_BOOST);
     return Math.pow(0.5, elapsed / (this.halfLifeMs * boost));
+  }
+
+  /**
+   * 设置一条记忆的归属主题。
+   *
+   * 主题是人定的适用范围键，所以这里只接受显式 id 列表；
+   * 传空数组表示移回「未归类」。
+   */
+  setTopics(id: string, topicIds: readonly string[]): TemporalFact {
+    const fact = this.facts.get(id);
+    if (fact === undefined) throw new Error(`setTopics: 未知事实 ${id}`);
+    const next: TemporalFact = Object.freeze({
+      ...fact,
+      topicIds: Object.freeze([...new Set(topicIds.filter((t) => t.length > 0))]),
+    });
+    this.facts.set(id, next);
+    return next;
   }
 
   /** 显式强化：提升激活量并重置衰减计时。 */
@@ -888,6 +915,8 @@ export class TemporalMemoryStore {
       const fact: TemporalFact = Object.freeze({
         ...raw,
         tags: Object.freeze([...(raw.tags ?? [])]),
+        // 老状态文件没有 topicIds 字段，补空数组保持向后兼容
+        topicIds: Object.freeze([...(raw.topicIds ?? [])]),
         scope: raw.scope ?? 'global',
         workspaceId: raw.workspaceId ?? null,
         sessionId: raw.sessionId ?? null,

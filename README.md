@@ -1,19 +1,111 @@
 # dsh-cognition-engine
 
-> 给 DeepSeek Harness 装一层**可追溯的记忆**，并把记忆蒸馏成一页**会过期的工作准则**。
-> 前者解决「跨会话忘事」，后者解决「经验沉淀不下来」。
+> **让 AI 记得住，而且知道自己什么时候记错了。**
 
-一个纯 TypeScript、零运行时依赖的 DSH 插件。所有状态都存在内存 + 本地 JSON，不接数据库、不发外部请求（除非你主动打开真实模型）。
+关掉对话框，AI 就失忆了。你上周定的规矩、踩过的坑、说过的「别用那个接口」——下一次全部归零，还得重新交代一遍。
 
-> 本项目是 **DeepSeek V4.1-Flash（1017）许愿式编程** 的产物：需求由人提出，代码、测试、评测与文档由模型在会话中逐轮生成、验证并修正。
+这个插件给它装两样东西：
 
-**两个入口**：左侧栏的 `◈` 图标打开整页面板；输入框上方的横条展开为透明浮层。
+- 🧠 **记忆**——记住事实，并且分清「现在为真」和「曾经为真」
+- 📌 **准则本**——把记忆蒸馏成一页工作准则，**每轮对话都摆到它面前**，不靠它自己想起来
 
-```
-任务 2 · 记忆 9 · 主题 0 · 准则 6 · 设置
-```
+> 同类插件让 AI 记住经验。
+> **我们让 AI 知道经验什么时候该作废。**
 
 ---
+
+## 30 秒看懂
+
+你在三条不同的对话里说过这些话：
+
+| 什么时候 | 你说了什么 |
+|---|---|
+| 上周 | 发版前必须走完：卸载验证 → 兼容性 → 优化 → README → 安装验证 |
+| 前天 | npm 发布要加 `--registry`，本机默认走淘宝镜像 |
+| 昨天 | 这两周先用旧接口，别切新的 |
+
+**普通 Agent**：这三条躺在记忆库里，能不能想起来看运气。
+
+**这个插件**：
+
+1. 把前两条**蒸馏成准则**，每轮对话自动摆到 AI 面前——不靠它主动搜
+2. 第三条自动带上**有效期**——两周后过期，停止注入，不再污染判断
+3. 蒸馏时它自己发现矛盾：*「mem-9 说先跑测试就够，mem-7 要求五步全做」*
+
+```
+## 约定
+- [ctxt-00001] helpful=2 harmful=0 :: 发版前依次执行五步，不可跳步
+- [ctxt-00002] helpful=0 harmful=0 :: 纯文档改动只推 commit，不升版本号
+
+## 坑
+- [ctxt-00005] helpful=0 harmful=0 :: npm 发布必须显式加 --registry 绕开淘宝镜像
+```
+
+每条带 `helpful` / `harmful` 计数，没用上的自动退场，误导过人的优先淘汰。
+
+---
+
+## 还有什么
+
+- **双时态记忆**：同一个问题能有三个都正确的答案——现在怎样 / 十月时怎样 / 那时你以为怎样
+- **主题**：人定的适用范围键——记忆回答「发生过什么」，准则回答「该怎么做」，主题回答「适用于哪类任务」
+- **反思引擎**：强制 AI 先反驳自己，再给结论（三段式，可关，可换本地模板）
+- **待办挂在主题下**：没做完的活记在该主题里，重启还在，开场自动带出来
+- **写入可审计**：每次变更留一行日志，能查「这条是谁写的、从哪个通道进来的」
+- **零依赖**：纯 TypeScript，无数据库，默认零外部请求，全部状态就是本地几个 JSON
+
+**入口**：输入框上方的横条，点开是透明浮层，不挤压对话框。
+
+```
+认知引擎 · 记忆 9 · 主题 3 · 待办 0 · 准则 5
+```
+
+> 本项目是 **DeepSeek V4.1-Flash（1017）许愿式编程** 的产物：
+> 需求由人提出，代码、测试、评测与文档由模型在会话中逐轮生成、验证并修正。
+
+---
+
+## 安装
+
+需要 DeepSeek Harness，Node.js ≥ 22，Git。
+
+### 从 npm（推荐，最短路径）
+
+```sh
+dsh plugin --profile desktop add dsh-cognition-engine
+```
+
+已发布到 npm：[`dsh-cognition-engine`](https://www.npmjs.com/package/dsh-cognition-engine)。
+网页版把 `desktop` 换成 `web`。
+
+### 一条命令（Windows）
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/1720198650/dsh-cognition-engine/main/scripts/install.ps1 | iex"
+```
+
+自动完成：克隆到 `%USERPROFILE%\dsh-plugins\dsh-cognition-engine` → 装依赖 → 构建 → 注册到 `desktop` profile。
+
+### 一条命令（Android / dsh-go 本机引擎）
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/1720198650/dsh-cognition-engine/main/scripts/install-dshgo.sh | sh
+```
+
+### 手动安装
+
+```sh
+git clone https://github.com/1720198650/dsh-cognition-engine.git
+cd dsh-cognition-engine
+npm install && npm run build
+dsh plugin --profile desktop add .
+```
+
+安装后重启一次 DSH，输入框上方会出现一行状态条，点开即面板。
+
+> 默认不上锁，面板与接口不需要口令。
+> 想防同机其他程序读取记忆正文，在设置页开启「记忆读取锁」并自设口令——**不存在默认口令**，
+> 因为把口令写在数据文件旁边对同机进程毫无意义。
 
 ## 为什么做
 
@@ -25,7 +117,7 @@
 4. **决定是怎么来的**——只给结论，不给推理过程。
 5. **经验沉淀不下来**——这次想明白了，下次会话照样从零开始。
 
-前四条用**双时态记忆 + 图式网络 + 反思引擎**回答；第五条用**准则本**回答。
+前四条用**双时态记忆 + 主题 + 反思引擎**回答；第五条用**准则本**回答。
 
 ---
 
@@ -45,17 +137,25 @@
   中英文都覆盖（早期版本只认英文，等于这道闸门没装）。
 - **纠正记忆**：`kind: 'correction'` 会自动打标、提升重要度，并在跨会话摘要里置顶。
 
-### 主题：把相似的事归到一起
+### 主题：人定的适用范围键
 
-- **主题归类（图式）**：新记忆能并进已有主题就并进去，并不进去就新建主题并连上关系。
-  （代码与工具参数里仍叫 `schema`，界面上叫「主题」。）
-- **关系带类型**：两条记忆之间的关系会写明是「互相支持」还是「互相矛盾」，
-  并附一句话说明为什么把它们连起来。结构参照 memoryweb 的叙事边。
-- **不相干不硬连**：相似度低于阈值时各自独立成主题。此前只要"最相似"就无条件连边，
-  导致毫不相干的内容仅凭一两个共有词就被报成矛盾。
-- **矛盾可见**：`cognition_state` 返回 `tensions`（主题之间的矛盾边）与
-  `memoryConflicts`（同主题互斥的事实对）。
-- **顺藤摸瓜**：查一条记忆时，可把同一主题下的其他相关记忆一并带出来（`expand`）。
+**主题不是自动聚类，是人定的分类。** 这一点和绝大多数记忆插件相反，原因是调研结论：
+
+- 自动聚类在 10² 条记忆规模下**没有任何论文证据支持收益**
+- 独立复现（SubtleMemory）：结构化记忆最好 70.0%，而**原文直灌 85.4%**
+- 业界只有 Graphiti 做真社区，且是内部结构、不可编辑、重建会删旧社区
+- 可编辑的主题**几乎都是人定的容器**（Memobase slots / Letta blocks / Cognee NodeSets）
+
+所以本项目：
+
+- **主题由人定**，有名字、说明、别名；记忆和准则挂上去（多对多）
+- **注入按主题分组**——模型能先判断当前任务属于哪个主题，只采用相关准则
+- **待办挂在主题下**——不做独立的跨天台账
+- **矛盾可见**：`memoryConflicts`（同 subject 互斥事实）+ 按主题分组的 `topicTensions`
+- **顺藤摸瓜**：查一条记忆时，把同主题的其他记忆一并带出（`expand`）
+
+> 详细的删与留、为什么这么选，见 [docs/topic-research.md](docs/topic-research.md) 与
+> [docs/topic-research-oss.md](docs/topic-research-oss.md)。
 
 ### 准则本：让反思引擎有沉淀
 
@@ -66,15 +166,18 @@
   条目形如 `[ctxt-00001] helpful=2 harmful=0 :: 正文`，模型可点名引用，计数能回写。
 - **半自动蒸馏**：反思引擎从记忆里提炼候选，确定性代码做去重 / 长度 / 来源 / 套话 / 私有性校验，
   候选进待审队列，**人工确认后才生效**。
+- **超预算不静默丢**：注入超过 600 字符时显示「另有 N 条准则因预算省略」，低分条目被截掉时你能看见
 - **准则有有效期**：阶段性约定可设 `validTo`，过期自动停止注入并单独分组复核。
   **这是与同类插件最大的区别**：它们让 AI 记住经验，我们让 AI 知道经验什么时候该作废。
 - **准则冲突检测**：新准则与现有准则疑似矛盾时打 `conflictWith` 标记，不自动合并，交人工裁决。
   判定顺序是**先判冲突再判去重**——否定翻转的准则相似度高达 0.92，先去重会被误当成重复丢掉。
 
-### 任务
+### 待办：挂在主题下
 
-- **跨天任务台账**：任务存在本地文件里，重启还在；太久没更新的会被提醒，但不打断你正在做的事。
-- **顺序与并行**：可设排序号与前一项并行推进；没有硬性截止时间，只有超时提醒。
+- 任务不是独立的跨天台账，而是**主题下的进行中事项**
+- 状态：待办 / 进行中 / 已完成，可随时改、可删除
+- 太久没更新的会被提醒，但不打断你正在做的事
+- **开场自动带出**：`cognition_context` 返回 `ongoing`（按主题分组的未完成事项）
 
 ### 数据安全
 
@@ -85,19 +188,24 @@
 - **写入通道与来源分离**：`source` 是内容声称来自谁，`origin` 是实际写入通道，后者由代码钉死。
   Agent 工具通道无法冒充「用户陈述」。
 - **数据可导出导入**：整库记忆导出为 JSON，也能整体导入替换。
-- **三类对象都能删**：记忆软删除（可恢复）、任务直接删除、主题只删聚类且**成员记忆保留**。
+- **三类对象都能删**：记忆软删除（可恢复）、待办直接删除、主题停用（已挂的记忆与准则都保留）。
 - **记忆读取锁**：给读取记忆正文的接口加访问口令。
 
 ### 界面与安装
 
-- **面板页签**：任务 / 记忆 / 主题 / 准则 / 设置（详见下方「页面」）。
+- **浮层面板**：输入框上方横条展开，四个页签——记忆 / 主题 / 准则 / 设置。
+- **推理档位可选**：设置页可指定反思/蒸馏用哪一档推理（自动最低 / off / low / high / max）。
+  当前模型会先吐很长的推理过程，而**推理 token 与正文共用同一个输出预算**——
+  档位越高越贵，也越容易把正文挤没。默认「自动」= 选模型声明的最低档。
+- **巡逻复盘开关**：巡视每 3 小时看一次逾期任务。默认**不调模型**，只写一条「已超期 N 小时」的提示；
+  想让它自动跑三段式复盘再打开（每次 3 次模型调用）。
 - **一键安装**：Windows 与 dsh-go 各有一条命令；npm 已发布。
 - **持久化**：记忆写入 `cognition-state.json`，重启自动恢复。
 
 ---
 
 
-### 准则本是干什么的
+## 准则本是干什么的
 
 记忆是**材料**，准则是**结论**。
 
@@ -130,58 +238,18 @@ mem-16 「npm 发布时本机 registry 指向淘宝镜像，必须显式加 --re
 2. **能发现自相矛盾**——蒸馏时模型会发现「mem-9 说先跑测试就够，mem-7 要求五步全做」
 3. **会过期**——「这两周先用旧接口」这类阶段性约定到期自动停止注入，不会一直误导
 
-### 怎么用
+## 怎么用
 
 设置页之外，面板新增了「准则」页签：
 
 - **重新蒸馏**：让反思引擎读记忆，产出候选（需要切到「真实模型」）
 - **手动新增**：自己写一条（12–80 字，祈使句）
 - **待审 / 已过期 / 已生效 / 已停用** 四组，逐条接受或拒绝
+  - 停用 = 不再注入但保留记录；**删除** = 彻底移除（任意状态可删，快照里仍可找回）
 - 每条显示 `helpful` / `harmful` 计数，`harmful` 攒到 3 次自动退场
 
 **候选不会自动生效**——这是刻意的：ACE 的实测表明坏条目比没有条目更差
 （每轮注入有害反思时准确率 66.7%，反而低于不做任何处理的 70.7%）。
-
-## 安装
-
-需要 DeepSeek Harness，Node.js ≥ 22，Git。
-
-### 一条命令（Windows）
-
-```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/1720198650/dsh-cognition-engine/main/scripts/install.ps1 | iex"
-```
-
-自动完成：克隆到 `%USERPROFILE%\dsh-plugins\dsh-cognition-engine` → 装依赖 → 构建 → 注册到 `desktop` profile。
-
-### 一条命令（Android / dsh-go 本机引擎）
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/1720198650/dsh-cognition-engine/main/scripts/install-dshgo.sh | sh
-```
-
-### 从 npm（推荐，最短路径）
-
-```sh
-dsh plugin --profile desktop add dsh-cognition-engine
-```
-
-已发布到 npm：[`dsh-cognition-engine`](https://www.npmjs.com/package/dsh-cognition-engine)。
-网页版把 `desktop` 换成 `web`。
-
-### 手动安装
-
-```sh
-git clone https://github.com/1720198650/dsh-cognition-engine.git
-cd dsh-cognition-engine
-npm install && npm run build
-dsh plugin --profile desktop add .
-```
-
-安装后重启一次 DSH，左侧栏会出现 `◈` 图标。
-
-> 首次启动会生成 `cognition-token.txt`。默认不需要口令即可查看面板；
-> 只有在设置页手动开启「记忆读取锁」后才需要。
 
 ## 七个工具
 
@@ -189,7 +257,7 @@ dsh plugin --profile desktop add .
 |---|---|
 | `cognition_context` | **新会话先调它**：读取跨会话核心记忆（≤400 字摘要） |
 | `cognition_remember` | 写入记忆；`supersedes` 取代旧事实，`source` 标记来源并决定权威等级，`scope` 选 global / workspace / session，`kind: correction` 记纠正 |
-| `cognition_recall` | 按 `strict` / `historical` / `belief` 召回；`render` 走 Inline&Spill，`expand` 按图式扩展，`scope` 过滤作用域 |
+| `cognition_recall` | 按 `strict` / `historical` / `belief` 召回；`render` 走 Inline&Spill，`expand` 按主题扩展，`scope` 过滤作用域 |
 | `cognition_forget` | 删除记忆：按 id、按来源（如 `test`、`reflection`）、按主题 |
 | `cognition_reflect` | 三段式反思；`draft` 审草稿，`save` 把结论存成记忆；
   `action: playbook` 改为**准则蒸馏**——从记忆提炼候选准则进待审队列（需真实模型） |
@@ -226,7 +294,7 @@ dsh plugin --profile desktop add .
 
 ## 页面
 
-面板有两个入口：**左侧栏 `◈` 图标**（整页）与**输入框上方横条**（浮层）。五个页签：
+浮层四个页签：
 
 - **任务**：任务描述、状态、线索、顺序号、并行标记、超时标记；顶部「新建任务」可设时间段
 - **记忆**：正文、来源徽章、当前/已取代、标签、录入时间；可编辑、可删除
@@ -291,21 +359,23 @@ plugin_manager remove_bundle target=dsh-cognition-engine
 | 模块 | 职责 | 设计来源 |
 |---|---|---|
 | `memory.ts` | 双时态存储、三种召回、冲突检测、Inline&Spill | [LongMemory](https://github.com/CaviraOSS/LongMemory) |
-| `graph.ts` | 图式网络、同化/顺应、重叠聚类、图式扩展 | [CAM](https://github.com/rui9812/CAM)（NeurIPS 2025） |
+| `topics.ts` | 主题注册表：人定的适用范围键、别名匹配、归档 | [Memobase](https://docs.memobase.io/features/profile/profile) / [Letta](https://docs.letta.com/v1-sdk/memory/memory-blocks) |
 | `playbook.ts` | 准则本：条目化存储、确定性合并、渲染与预算、过期与冲突 |
 | `distill.ts` | 准则蒸馏的提示词与解析（Reflector 五字段 + 候选） |
 | `audit.ts` | 追加式审计日志（JSONL，按大小轮转） |
 | `reflection.ts` | 三段式反思、Worker 队列 | [Hegelion](https://github.com/Hmbown/Hegelion) |
 | `proactive.ts` | 默认不做的发言闸门 | [dsh-superagent-prototype](https://github.com/deepseek-ai/dsh-superagent-prototype) |
-| `task_manager.ts` | 长程任务台账、原子落盘 | 自研 |
+| `task_manager.ts` | 主题下的待办：增删改状态、原子落盘 | 自研 |
 | `persist.ts` | 记忆快照存储 | 自研 |
 | `views.ts` | 页面只读视图 | 自研 |
 | `tools.ts` | 七个工具的参数表与执行体（状态全部来自依赖注入） | — |
 | `util.ts` | 无状态纯函数：参数收敛、schema 自检、异常转文本 | — |
 | `index.ts` | 插件装配：建实例、注册工具、HTTP 路由、巡视、生命周期 | — |
-| `client.js` | 输入框下方的状态条与面板 | — |
+| `client.js` | 输入框上方的浮层与状态条（四个页签） | — |
 
-反思闭环参考了 [Generative Agents](https://arxiv.org/abs/2304.03442) 的「记忆 → 反思 → 回写记忆」；图式扩展参考了 [GraphRAG](https://github.com/microsoft/graphrag) 的社区扩展思路。
+反思闭环参考了 [Generative Agents](https://arxiv.org/abs/2304.03442) 的「记忆 → 反思 → 回写记忆」。
+主题层从 [CAM](https://arxiv.org/abs/2510.05520) 借鉴了同化/顺应概念，但**实现已移除**——
+CAM 是为长文档阅读理解设计的，不适用于跨会话个人记忆（理由见 docs/topic-research.md）。
 
 ---
 
@@ -322,10 +392,16 @@ npm run eval       # 20 条评测 + token 预算门禁
 
 ### 质量门禁
 
-- 单元测试 33 / 33
-- 评测用例 20 / 20，判分器自检、打包自检 5 项
-- 工具 schema 固定开销 **1086 tokens**（预算 1400）
+- 单元测试 **64 / 64**
+- 评测用例 **16 / 16**，判分器自检、打包自检 5 项、兼容性 5 项
+- 工具 schema 固定开销 **1352 tokens**（预算 1400）
 - 单次调用输出上限 344 tokens（预算 600）
+
+发版前按六步走，不可跳步：**① 卸载验证 ② 兼容性检查 ③ 代码优化
+④ README 覆盖检查 ⑤ 在真实入口点一遍 ⑥ 发布**。
+
+第 ⑤ 步是硬性要求——**测试全绿不等于功能能用**。0.9.0 就因为准则本的按钮没做、
+只写了接口，测试全过后发出去，40 分钟后被迫补发 0.9.1。详细清单见 [PUBLISH.md](PUBLISH.md)。
 
 ---
 
@@ -457,17 +533,17 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 
 本项目的机制设计来自以下开源工作。**只借鉴思想，未复制任何代码**——所有实现均为重新编写。
 
-### 记忆与图式
+### 记忆与主题
 
 | 项目 | 借了什么 |
 |---|---|
 | [LongMemory](https://github.com/CaviraOSS/LongMemory) | 双时态模型：`validFrom/validTo` 与 `recordedAt/supersededAt` 两条时间轴；半开区间判定；闭合区间不改变内容指纹与 id |
-| [CAM: A Constructivist View of Agentic Memory](https://github.com/rui9812/CAM)（NeurIPS 2025） | 增量重叠聚类、同化 / 顺应、超图摘要、簇大小上限 |
+| [CAM: A Constructivist View of Agentic Memory](https://arxiv.org/abs/2510.05520)（NeurIPS 2025） | 借鉴同化/顺应概念。**实现已移除**：CAM 面向长文档阅读理解，实测不适合跨会话个人记忆（见 docs/topic-research.md） |
 | [A-MEM: Agentic Memory](https://arxiv.org/abs/2502.12110)（NeurIPS 2025） | 卡片盒式动态链接：新笔记写入时分析历史笔记并建立语义连接。本项目的 `linkedBy` 记录「为什么连上它」（共享词 + 相似度）即源于此 |
 | [MemGPT / Letta](https://github.com/letta-ai/letta) | 记忆分层与分页（对照参考） |
-| [GraphRAG](https://github.com/microsoft/graphrag) | 社区摘要参与检索；本项目的「图式扩展召回」是其最小实现 |
-| [RAPTOR](https://arxiv.org/abs/2401.18059) | 递归聚类 + 逐层摘要的树状检索。本项目改为**抽取式**摘要——父图式取与质心最接近的成员原文，避免每层调用 LLM |
-| [HippoRAG: Neurobiologically Inspired Long-Term Memory for LLMs](https://arxiv.org/abs/2405.14831)（NeurIPS 2024） | Personalized PageRank 在知识图上传播相关度。本项目 `associative` 召回用它在图式网络上重排，让「隔一层但相关」的记忆浮上来 |
+| [GraphRAG](https://github.com/microsoft/graphrag) | 社区摘要参与检索。**本项目已移除**：社区检索伤害细节型 QA（见 docs/topic-research.md） |
+| [RAPTOR](https://arxiv.org/abs/2401.18059) | 递归聚类 + 逐层摘要的树状检索。**本项目已移除**：10² 条记忆规模下无需压缩 |
+| [HippoRAG: Neurobiologically Inspired Long-Term Memory for LLMs](https://arxiv.org/abs/2405.14831)（NeurIPS 2024） | PPR 在知识图上传播相关度。**本项目已移除**：作者自认在基础事实记忆上不如标准 RAG |
 
 ### 论文引用
 
@@ -477,7 +553,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 - **RAPTOR** — Sarthi et al. *RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval.* [arXiv:2401.18059](https://arxiv.org/abs/2401.18059)
 - **A-MEM** — Xu et al. *A-MEM: Agentic Memory for LLM Agents.* NeurIPS 2025. [arXiv:2502.12110](https://arxiv.org/abs/2502.12110)
 
-图式网络的建构主义框架另见 CAM（NeurIPS 2025），辩证反思的 Prompt 编排另见 Hegelion，见下方各节。
+建构主义记忆框架另见 CAM（NeurIPS 2025，本项目仅借鉴概念未保留实现），辩证反思的 Prompt 编排另见 Hegelion，见下方各节。
 
 ### 信念修正与图结构
 
