@@ -32,6 +32,24 @@ export const TRUST_RANK: Readonly<Record<TrustLevel, number>> = Object.freeze({
 });
 
 /** 把现有的 source 字段映射成权威等级（零新增参数）。 */
+/** 写入通道。由代码决定，调用方（尤其是 agent）无法自填。 */
+export type WriteOrigin = 'agent_tool' | 'ui' | 'import' | 'reflection' | 'unknown';
+
+/**
+ * 结合「内容声称的来源」与「实际写入通道」得出可信度。
+ *
+ * source 是调用方自己填的字符串，agent 完全可以写 source: 'user' 冒充用户陈述。
+ * 所以 agent 工具通道一律封顶到 observed——它至多证明「这条内容被提交过」，
+ * 不能证明「用户说过」。
+ */
+export function trustOf(source: string, origin: WriteOrigin): TrustLevel {
+  // 导入的整批内容一律按外部未验证处理：文件里写 source: 'user' 不代表用户说过。
+  if (origin === 'import') return 'untrusted_external';
+  const claimed = trustFromSource(source);
+  if (origin === 'agent_tool' && TRUST_RANK[claimed] > TRUST_RANK.observed) return 'observed';
+  return claimed;
+}
+
 export function trustFromSource(source: string): TrustLevel {
   switch (source) {
     case 'user':
@@ -112,6 +130,8 @@ export interface ExistingFact {
   subject: string;
   content: string;
   source: string;
+  /** 该条事实的写入通道。 */
+  origin?: WriteOrigin;
 }
 
 /** 用户可开关的四条规则。 */
@@ -134,6 +154,8 @@ export const DEFAULT_RULES: AdmissionRules = Object.freeze({
 });
 
 export interface AdmissionInput {
+  /** 写入通道，决定 source 能被信到什么程度。默认 agent_tool（最保守）。 */
+  origin?: WriteOrigin;
   text: string;
   subject: string;
   source: string;
@@ -147,7 +169,7 @@ export interface AdmissionInput {
  * 顺序与 memoripy 一致：噪声 → 敏感 → 注入 → 权威冲突。
  */
 export function evaluateAdmission(input: AdmissionInput, rules: AdmissionRules = DEFAULT_RULES): AdmissionDecision {
-  const trust = trustFromSource(input.source);
+  const trust = trustOf(input.source, input.origin ?? 'agent_tool');
   const text = input.text.trim();
 
   if (rules.transient && TRANSIENT_PATTERNS.some((pattern) => pattern.test(text))) {
@@ -170,7 +192,7 @@ export function evaluateAdmission(input: AdmissionInput, rules: AdmissionRules =
     if (normalize(fact.subject) !== subjectKey) continue;
     // 同一个说法重复写入不算冲突（交给 hash 去重）
     if (normalize(fact.content) === valueKey) continue;
-    if (TRUST_RANK[trustFromSource(fact.source)] > incomingRank) {
+    if (TRUST_RANK[trustOf(fact.source, fact.origin ?? 'unknown')] > incomingRank) {
       return { action: 'reject', reasons: ['lower_authority_conflict'], trust, conflictWith: fact.id };
     }
   }

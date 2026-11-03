@@ -16,6 +16,16 @@
 export type TrustLevel = 'quarantined' | 'untrusted_external' | 'derived' | 'observed' | 'user_stated' | 'authoritative';
 export declare const TRUST_RANK: Readonly<Record<TrustLevel, number>>;
 /** 把现有的 source 字段映射成权威等级（零新增参数）。 */
+/** 写入通道。由代码决定，调用方（尤其是 agent）无法自填。 */
+export type WriteOrigin = 'agent_tool' | 'ui' | 'import' | 'reflection' | 'unknown';
+/**
+ * 结合「内容声称的来源」与「实际写入通道」得出可信度。
+ *
+ * source 是调用方自己填的字符串，agent 完全可以写 source: 'user' 冒充用户陈述。
+ * 所以 agent 工具通道一律封顶到 observed——它至多证明「这条内容被提交过」，
+ * 不能证明「用户说过」。
+ */
+export declare function trustOf(source: string, origin: WriteOrigin): TrustLevel;
 export declare function trustFromSource(source: string): TrustLevel;
 export type AdmissionAction = 'accept' | 'reject';
 export type AdmissionReason = 'transient' | 'sensitive_data' | 'instruction_injection' | 'lower_authority_conflict' | 'duplicate' | 'accepted';
@@ -31,6 +41,8 @@ export interface ExistingFact {
     subject: string;
     content: string;
     source: string;
+    /** 该条事实的写入通道。 */
+    origin?: WriteOrigin;
 }
 /** 用户可开关的四条规则。 */
 export interface AdmissionRules {
@@ -45,6 +57,8 @@ export interface AdmissionRules {
 }
 export declare const DEFAULT_RULES: AdmissionRules;
 export interface AdmissionInput {
+    /** 写入通道，决定 source 能被信到什么程度。默认 agent_tool（最保守）。 */
+    origin?: WriteOrigin;
     text: string;
     subject: string;
     source: string;

@@ -54,6 +54,9 @@ window.__ModuleLoader__.load({
         ruleInjection: '拦截「忽略之前的指令」',
         ruleAuthority: '低权威不得覆盖高权威',
         consolidate: '合并同类记忆',
+        backupTitle: '备份与审计',
+        restoreLatest: '恢复最近快照',
+        viewAudit: '查看最近审计',
         exportData: '导出',
         importData: '导入',
         realModel: '反思引擎',
@@ -576,6 +579,32 @@ window.__ModuleLoader__.load({
           body = h(
             'div',
             null,
+            section(
+              dict.backupTitle,
+              button(dict.restoreLatest, async () => {
+                try {
+                  const res = await fetch('/cognition-engine/snapshots', { cache: 'no-store' });
+                  const data = await res.json();
+                  const items = Array.isArray(data.items) ? data.items : [];
+                  if (items.length === 0) { setNotice('还没有快照可恢复'); return; }
+                  await post('/cognition-engine/snapshot/restore?name=' + encodeURIComponent(items[0].name));
+                  setNotice('已恢复到最近一份快照');
+                } catch (error) {
+                  setNotice('✗ 恢复失败：' + (error instanceof Error ? error.message : String(error)));
+                }
+              }),
+              button(dict.viewAudit, async () => {
+                try {
+                  const res = await fetch('/cognition-engine/audit?limit=5', { cache: 'no-store' });
+                  const data = await res.json();
+                  const items = Array.isArray(data.items) ? data.items : [];
+                  if (items.length === 0) { setNotice('暂无审计记录'); return; }
+                  setNotice(items.map((e) => [e.op, e.subject || e.id || '', e.origin || ''].filter(Boolean).join(' ')).join(' ｜ '));
+                } catch (error) {
+                  setNotice('✗ 读取审计失败：' + (error instanceof Error ? error.message : String(error)));
+                }
+              }),
+            ),
             section(
               dict.rulesTitle,
               ...[

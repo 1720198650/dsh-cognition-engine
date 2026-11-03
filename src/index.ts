@@ -24,6 +24,7 @@ import { assertObjectSchema, messageOf } from './util.ts';
 import { createTools } from './tools.ts';
 import { ProactiveGate } from './proactive.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
+import { AuditLog } from './audit.ts';
 
 /* ------------------------------------------------------------------ */
 /* 宿主最小接口（不引入任何运行时依赖）                                 */
@@ -256,7 +257,11 @@ export function persistReflection(
 export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | undefined {
   const config = normalizeConfig(rawConfig);
 
-  const memory = new TemporalMemoryStore({ halfLifeMs: config.decayHalfLifeHours * HOUR_MS });
+  const audit = new AuditLog();
+  const memory = new TemporalMemoryStore({
+    halfLifeMs: config.decayHalfLifeHours * HOUR_MS,
+    onEvent: (event) => audit.append(event),
+  });
   const graph = new SchemaGraphManager({
     assimilateThreshold: config.assimilateThreshold,
     overlapThreshold: config.overlapThreshold,
@@ -388,6 +393,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       })(),
       locked: lockToken !== null,
       storageFile: basename(stateStore.path),
+      storageWarning: stateStore.warning,
       rules: memory.getRules(),
       updatedAt: Date.now(),
     };
@@ -614,7 +620,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         const content = (url.searchParams.get('content') ?? '').trim();
         if (content.length === 0) throw new Error('content 不能为空');
         const subject = url.searchParams.get('subject') ?? undefined;
-        const fact = memory.ingest({ content, subject, source: 'user' });
+        const fact = memory.ingest({ content, subject, source: 'user', origin: 'ui' });
         graph.ingest(content);
         void stateStore.flush();
         return { id: fact.id, subject: fact.subject };
@@ -639,6 +645,41 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       { method: 'POST', requireAuth: explicitLock },
     );
 
+    // 审计日志（最近 N 条）
+    route(
+      '/cognition-engine/audit',
+      async (url) => {
+        const raw = url.searchParams.get('limit');
+        const limit = raw === null ? 20 : Number(raw);
+        const lines = await audit.tail(Number.isFinite(limit) ? limit : 20);
+        return {
+          path: audit.path,
+          count: lines.length,
+          items: lines.map((line) => {
+            try {
+              return JSON.parse(line) as Record<string, unknown>;
+            } catch {
+              return { raw: line };
+            }
+          }),
+        };
+      },
+    );
+
+    // 快照列表与回滚
+    route('/cognition-engine/snapshots', async () => ({ items: await stateStore.listSnapshots() }));
+    route(
+      '/cognition-engine/snapshot/restore',
+      async (url) => {
+        const name = url.searchParams.get('name') ?? '';
+        const ok = await stateStore.restoreSnapshot(name);
+        if (!ok) throw new Error('快照不存在或名称非法');
+        stateStore.clearWarning();
+        return { restored: name };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
     // 导出：整库记忆（JSON）
     route('/cognition-engine/export', () => ({
       version: 1,
@@ -655,7 +696,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         const parsed = JSON.parse(raw) as { facts?: unknown };
         if (!Array.isArray(parsed.facts)) throw new Error('payload.facts 必须是数组');
         for (const fact of memory.all()) memory.remove(fact.id);
-        memory.restore(parsed.facts as never);
+        // 导入的条目统一标成 import 通道，避免外部内容冒充用户陈述
+        const imported = (parsed.facts as Array<Record<string, unknown>>).map((fact) => ({
+          ...fact,
+          origin: 'import',
+        }));
+        memory.restore(imported as never);
         graph.reset();
         for (const fact of memory.all()) graph.ingest(fact.content);
         void stateStore.flush();

@@ -19,7 +19,7 @@
  *
  * 存储：纯 TypeScript + Map，无任何外部数据库。
  */
-import type { AdmissionRules } from './admission.ts';
+import type { AdmissionRules, WriteOrigin } from './admission.ts';
 export type RecallMode = 'strict' | 'historical' | 'belief' | 'associative';
 /** 记忆作用域：全局共享 / 工作区共享 / 会话私有。 */
 export type MemoryScope = 'global' | 'workspace' | 'session';
@@ -55,6 +55,8 @@ export interface TemporalFact {
     readonly mergedInto?: string;
     /** 软删除时间：任何召回口径都不再返回，但数据保留可恢复。 */
     readonly deletedAt?: number;
+    /** 写入通道：agent_tool / ui / import / reflection。 */
+    readonly origin?: WriteOrigin;
     readonly lastAccessedAt: number;
 }
 /** 兼容旧命名：外部文档里把这条记录叫 MemoryNode。 */
@@ -70,6 +72,8 @@ export interface IngestInput {
     subject?: string;
     tags?: readonly string[];
     source?: string;
+    /** 写入通道；由入口代码决定，agent 不能自填。默认 agent_tool。 */
+    origin?: WriteOrigin;
     importance?: number;
     /** 作用域，默认 global。 */
     scope?: MemoryScope;
@@ -168,6 +172,16 @@ export interface MemoryOptions {
     /** 衰减半衰期，默认 7 天。 */
     halfLifeMs?: number;
     idPrefix?: string;
+    /** 审计回调：每次变更触发一次，失败不影响主流程。 */
+    onEvent?: (event: {
+        op: string;
+        id?: string;
+        subject?: string;
+        hash?: string;
+        source?: string;
+        origin?: string;
+        detail?: string;
+    }) => void;
 }
 /** importance ≥ 此值视为「核心记忆」（对应需求里的 CORE 级）。 */
 export declare const CORE_IMPORTANCE = 0.8;
@@ -197,8 +211,11 @@ export declare class TemporalMemoryStore {
     private readonly clock;
     private readonly halfLifeMs;
     private readonly idPrefix;
+    private readonly onEvent;
     private seq;
     constructor(options?: MemoryOptions);
+    /** 安全触发审计回调。 */
+    private emit;
     /** 当前时钟。 */
     now(): number;
     get size(): number;

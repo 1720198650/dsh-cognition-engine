@@ -84,6 +84,8 @@ export function createTools(deps: ToolDeps) {
       const fact = memory.ingest({
         content: text,
         source: optionalString(input, 'source') ?? 'agent',
+      // 工具通道由代码钉死，调用方无法伪造
+      origin: 'agent_tool',
         ...pick(input, ['subject', 'validFrom', 'supersedes']),
         ...(mergedTags.length > 0 ? { tags: mergedTags } : {}),
         importance: isCorrection ? Math.max(0.85, rawImportance ?? 0) : rawImportance,
