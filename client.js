@@ -81,6 +81,20 @@ window.__ModuleLoader__.load({
         token: '访问口令',
         applyToken: '保存口令',
         cleared: '已清空',
+        playbookTab: '准则',
+        playbookPending: '待审',
+        playbookActive: '已生效',
+        playbookRetired: '已停用',
+        playbookExpired: '已过期',
+        playbookExtend: '延长',
+        playbookConflict: '疑似冲突',
+        playbookDistill: '重新蒸馏',
+        playbookAccept: '接受',
+        playbookReject: '拒绝',
+        playbookRetire: '停用',
+        playbookRevive: '恢复',
+        playbookEmpty: '还没有准则。点「重新蒸馏」从记忆里提炼，或手动新增。',
+        playbookNoModel: '需要先切到「真实模型」才能蒸馏',
         tasksHint: '任务：跨天要做的事。记录进度，长时间没更新会被提醒，但不会打断你正在做的事。',
         memoriesHint: '记忆：AI 跨会话能记住的事实。你说过的决定、约定、偏好都会存在这里，新会话自动带上摘要。改过的旧版本不删除，按时间能查到当时是怎么说的。',
         schemasHint: '主题：系统自动把内容相近的记忆归成一组，再给组分层。记忆多了以后，点开一个主题能看到所有相关的事；回忆时也会顺着主题把关联记忆一起带出来。记忆少于 10 条时这一页通常是空的。',
@@ -353,6 +367,7 @@ window.__ModuleLoader__.load({
           );
         };
         const [detail, setDetail] = React.useState(null);
+        const [playbookData, setPlaybookData] = React.useState(null);
         const [detailError, setDetailError] = React.useState(null);
         const [tick, setTick] = React.useState(0);
         const [token, setToken] = React.useState(() => {
@@ -443,6 +458,32 @@ window.__ModuleLoader__.load({
             alive = false;
           };
         }, [open, tick, token]);
+
+
+        // 准则本单独取数：它和 /detail 是两条接口，只在打开该页签时拉。
+        React.useEffect(() => {
+          if (!open || tab !== 'playbook') return undefined;
+          let alive = true;
+          (async () => {
+            try {
+              const response = await call('/cognition-engine/playbook', { cache: 'no-store' });
+              if (!response.ok) return;
+              const next = await response.json();
+              if (alive) setPlaybookData(next);
+            } catch {
+              /* 拉不到就保持上一次的数据 */
+            }
+          })();
+          return () => {
+            alive = false;
+          };
+        }, [open, tab, tick]);
+
+        // 准则本操作：接受 / 拒绝 / 停用 / 恢复
+        const playbookAct = async (id, action) => {
+          await post(`/cognition-engine/playbook/act?id=${encodeURIComponent(id)}&action=${action}`);
+          setTick((value) => value + 1);
+        };
 
         // 新建表单：任务（含时间段）与记忆（内容 + 主题）
         const formFor = (key) => {
@@ -556,6 +597,7 @@ window.__ModuleLoader__.load({
           ['tasks', `${dict.tasks} ${detail ? detail.tasks.length : ''}`.trim()],
           ['memories', `${dict.memories} ${detail ? detail.memories.length : ''}`.trim()],
           ['schemas', `${dict.schemas} ${detail ? detail.schemas.length : ''}`.trim()],
+          ['playbook', `${dict.playbookTab}${detail && detail.playbook ? ' ' + detail.playbook.active : ''}`.trim()],
           ['settings', dict.settings],
         ];
 
@@ -860,6 +902,86 @@ window.__ModuleLoader__.load({
               ),
             );
           });
+        } else if (tab === 'playbook') {
+          const pb = playbookData;
+          if (pb === null) {
+            body = h('div', { style: S.explain }, '加载中…');
+          } else {
+            const groups = [
+              ['pending', dict.playbookPending],
+              ['expired', dict.playbookExpired],
+              ['active', dict.playbookActive],
+              ['retired', dict.playbookRetired],
+            ];
+            const item = (entry) =>
+              h(
+                'div',
+                { key: entry.id, style: S.item },
+                h('div', { style: S.itemTitle }, entry.content),
+                h(
+                  'div',
+                  { style: S.meta },
+                  h('span', { style: { ...S.chip, color: 'var(--dsw-alias-label-secondary)' } }, entry.section),
+                  h('span', null, entry.id),
+                  h('span', null, `helpful=${entry.helpful} harmful=${entry.harmful}`),
+                  entry.validTo
+                    ? h('span', null, '有效期至 ' + new Date(entry.validTo).toLocaleDateString())
+                    : null,
+                  entry.conflictWith
+                    ? h('span', { style: { color: 'var(--dsw-alias-state-warn-primary)' } }, `${dict.playbookConflict} ${entry.conflictWith}`)
+                    : null,
+                  entry.status === 'pending'
+                    ? h('button', { type: 'button', style: S.tab, onClick: () => playbookAct(entry.id, 'accept') }, dict.playbookAccept)
+                    : null,
+                  entry.status === 'pending'
+                    ? h('button', { type: 'button', style: S.tab, onClick: () => playbookAct(entry.id, 'reject') }, dict.playbookReject)
+                    : null,
+                  entry.status === 'active'
+                    ? h('button', { type: 'button', style: S.tab, onClick: () => playbookAct(entry.id, 'retire') }, dict.playbookRetire)
+                    : null,
+                  entry.status === 'retired'
+                    ? h('button', { type: 'button', style: S.tab, onClick: () => playbookAct(entry.id, 'revive') }, dict.playbookRevive)
+                    : null,
+                  entry.status === 'active' && entry.expired === true
+                    ? h(
+                        'button',
+                        {
+                          type: 'button',
+                          style: S.tab,
+                          onClick: async () => {
+                            const until = Date.now() + 30 * 24 * 3600 * 1000;
+                            await post(
+                              `/cognition-engine/playbook/act?id=${encodeURIComponent(entry.id)}&action=extend&validTo=${until}`,
+                            );
+                            setTick((value) => value + 1);
+                          },
+                        },
+                        `${dict.playbookExtend} 30 天`,
+                      )
+                    : null,
+                ),
+              );
+
+            const sections = groups
+              .map(([status, label]) => {
+                const list = (pb.entries || []).filter((entry) => entry.status === status);
+                if (list.length === 0) return null;
+                return h(
+                  'div',
+                  { key: status },
+                  h('div', { style: S.explain }, `${label} ${list.length}`),
+                  ...list.map(item),
+                );
+              })
+              .filter(Boolean);
+
+            body = h(
+              'div',
+              null,
+              sections.length === 0 ? h('div', { style: S.explain }, dict.playbookEmpty) : null,
+              ...sections,
+            );
+          }
         } else {
           body = renderList(detail.schemas, (item) => {
             const open = expandedSchema === item.id;

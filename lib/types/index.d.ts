@@ -43,6 +43,10 @@ export interface CognitionConfig {
     maxClusterSize?: number;
     /** 是否把跨会话摘要注入系统提示。默认 true；false 时只能靠 cognition_context 手动取。 */
     injectMemory?: boolean;
+    /** 准则本注入预算（字符），默认 600。 */
+    playbookChars?: number;
+    /** 准则本条目上限，默认 12。 */
+    playbookMaxEntries?: number;
     /** 多久没更新就算需要催办（小时）。 */
     heartbeatHours?: number;
     /** 后台巡视间隔（小时）。 */

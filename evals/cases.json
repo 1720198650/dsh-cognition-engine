@@ -378,6 +378,26 @@
         "count": 1,
         "clues": 1
       }
+    },
+    {
+      "id": "playbook.gate",
+      "group": "准则本",
+      "checker": "playbook.gate",
+      "params": {
+        "cliches": [
+          "认真检查代码质量，注意边界情况",
+          "遵循最佳实践，确保质量"
+        ],
+        "entries": [
+          "发版前必须跑完整测试再打包发布",
+          "改 JS 一律用 Node 脚本不要用 PowerShell"
+        ]
+      },
+      "expect": {
+        "maxChars": 600,
+        "hasId": true,
+        "hasCounts": true
+      }
     }
   ]
 }

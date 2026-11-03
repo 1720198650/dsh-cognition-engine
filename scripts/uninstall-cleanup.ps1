@@ -17,6 +17,8 @@ $dataFiles = @(
     'cognition-state.json.lock',
     'cognition-audit.jsonl',
     'cognition-audit.jsonl.1',
+    'cognition-playbook.json',
+    'cognition-playbook.json.tmp',
     'tasks.json',
     'tasks.json.tmp',
     'tasks.json.lock',

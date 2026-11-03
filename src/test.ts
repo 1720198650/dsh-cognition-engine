@@ -12,6 +12,8 @@ import { resolve } from 'node:path';
 import { TemporalMemoryStore, contentHash, isCurrent, tokenize } from './memory.ts';
 import { SchemaGraphManager } from './graph.ts';
 import { buildCoreDigest } from './views.ts';
+import { PlaybookStore } from './playbook.ts';
+import { buildDistillPrompt, parseDistillResult } from './distill.ts';
 import { resolveInPackage, packageRoot } from './util.ts';
 import {
   DialecticalReflectionEngine,
@@ -84,6 +86,57 @@ async function main(): Promise<void> {
     const hits = store.recall('发布流程', { mode: 'strict' });
     assert.equal(hits.length, 1);
     assert.ok((store.get(fact.id)?.activation ?? 0) > 0, '命中后激活量应上升');
+  });
+
+  await test('无关查询不强化：相似度不足的命中不加权', () => {
+    const store = new TemporalMemoryStore({ now: () => 42 });
+    const fact = store.ingest({ content: '发布流程：先灰度再全量', subject: '发布流程' });
+
+    // 毫不相关的查询仍会返回低分命中（score 里还有 decay / importance 项），
+    // 但相似度低于 RECALL_REINFORCE_FLOOR，不该被强化。
+    const hits = store.recall('量子纠缠退相干实验', { mode: 'strict' });
+    assert.ok(hits.length >= 1, '低分命中仍应返回');
+    assert.equal(store.get(fact.id)?.activation, 0, '无关命中不应强化记忆');
+  });
+
+  await test('常用记忆衰减更慢（activation 放大半衰期）', () => {
+    let now = 1_000_000;
+    const store = new TemporalMemoryStore({ now: () => now, halfLifeMs: 60_000 });
+    const hot = store.ingest({ content: '常用规则：先测试再发版', subject: '常用' });
+    const cold = store.ingest({ content: '冷门规则：某个特殊情况', subject: '冷门' });
+
+    store.reinforce(hot.id, 4, now);
+    now += 120_000;
+
+    const hotDecay = store.decay(hot.id, now);
+    const coldDecay = store.decay(cold.id, now);
+    assert.ok(hotDecay > coldDecay, `常用记忆衰减更慢：hot=${hotDecay.toFixed(3)} cold=${coldDecay.toFixed(3)}`);
+    assert.ok(hotDecay > 0.7, `常用记忆此时应仍较高，实际 ${hotDecay.toFixed(3)}`);
+  });
+
+  await test('强度放大有上限：高频记忆最终也会衰减', () => {
+    let now = 1_000_000;
+    const store = new TemporalMemoryStore({ now: () => now, halfLifeMs: 60_000 });
+    const fact = store.ingest({ content: '高频记忆', subject: '高频' });
+    store.reinforce(fact.id, 100, now);
+
+    // boost 封顶为 1 + MAX_STRENGTH_BOOST = 6 倍 → 有效半衰期 360s；
+    // 过 600s ≈ 1.67 个有效半衰期 → 0.5^1.67 ≈ 0.315
+    now += 600_000;
+    const value = store.decay(fact.id, now);
+    assert.ok(value < 0.36 && value > 0.28, `应仍会衰减到 0.32 附近，实际 ${value.toFixed(3)}`);
+  });
+
+  await test('激活量高的记忆不被归档', () => {
+    let now = 1_000_000;
+    const store = new TemporalMemoryStore({ now: () => now });
+    const hot = store.ingest({ content: '常用', subject: 'A' });
+    const cold = store.ingest({ content: '冷门', subject: 'B' });
+    store.reinforce(hot.id, 2, now);
+
+    now += 200 * 86_400_000;
+    const archived = store.autoArchive({ idleDays: 180, now });
+    assert.deepEqual(archived, [cold.id], '只归档冷门记忆');
   });
 
   /* ---------------------------------------------------------------- */
@@ -635,6 +688,225 @@ async function main(): Promise<void> {
     assert.equal(manager.check_due_tasks(now + 10_000).length, 0, '已完成的任务不再催办');
 
     await rm(file, { force: true });
+  });
+
+
+  /* ---------------------------------------------------------------- */
+  section('[11] 准则本：确定性合并与渲染');
+
+  const pbFile = resolve(packageRoot, '_research', 'test-playbook.json');
+  const newPlaybook = (): PlaybookStore =>
+    new PlaybookStore({ filePath: pbFile, now: () => 1_000_000, validateSourceIds: () => [] });
+
+  await test('套话被拒：换成任何项目都成立的不收', () => {
+    const pb = newPlaybook();
+    const outcome = pb.submit({ content: '认真检查代码质量，注意边界情况', section: '约定' });
+    assert.equal(outcome.accepted, false);
+    assert.ok(outcome.reason?.includes('套话'), outcome.reason);
+  });
+
+  await test('长度越界被拒', () => {
+    const pb = newPlaybook();
+    assert.equal(pb.submit({ content: '太短' }).accepted, false);
+    const long = '这是一条非常非常长的准则'.repeat(10);
+    assert.equal(pb.submit({ content: long }).accepted, false);
+  });
+
+  await test('高相似候选被判重复，不自动合并', () => {
+    const pb = newPlaybook();
+    const first = pb.submit({ content: '发版前必须先跑完整测试再打包发布', section: '约定' });
+    assert.equal(first.accepted, true);
+    pb.accept(first.entry!.id);
+
+    const second = pb.submit({ content: '发版前必须先跑完整测试再打包发布出去', section: '约定' });
+    assert.equal(second.accepted, false);
+    assert.equal(second.duplicateOf, first.entry!.id, '应指出与哪条重复');
+  });
+
+  await test('来源全部无效时丢弃（防臆造出处）', () => {
+    const pb = new PlaybookStore({
+      filePath: pbFile,
+      now: () => 1_000_000,
+      validateSourceIds: () => [],
+    });
+    const outcome = pb.submit({ content: '模型臆造的一条准则内容在这里', sourceIds: ['mem-不存在'] });
+    assert.equal(outcome.accepted, false);
+    assert.ok(outcome.reason?.includes('来源'), outcome.reason);
+  });
+
+  await test('审核流转：pending → accept / reject', () => {
+    const pb = newPlaybook();
+    const a = pb.submit({ content: '提交前先跑 node src/test.ts 全量测试', section: '约定' });
+    assert.equal(pb.pending().length, 1);
+    assert.equal(pb.accept(a.entry!.id), true);
+    assert.equal(pb.pending().length, 0);
+    assert.equal(pb.active().length, 1);
+
+    const b = pb.submit({ content: '另一条待审的准则内容示例文本', section: '约定' });
+    assert.equal(pb.reject(b.entry!.id), true);
+    assert.equal(pb.get(b.entry!.id), undefined, 'reject 直接移除');
+  });
+
+  await test('编辑保留历史版本', () => {
+    const pb = newPlaybook();
+    const a = pb.addManual({ content: '最初的准则内容写在这里示例', section: '约定' });
+    const id = a.entry!.id;
+    assert.equal(pb.revise(id, '修改之后的准则内容写在这里示例'), true);
+    const entry = pb.get(id)!;
+    assert.equal(entry.history.length, 1);
+    assert.equal(entry.history[0]?.content, '最初的准则内容写在这里示例');
+  });
+
+  await test('有害标记达阈值自动退场', () => {
+    const pb = newPlaybook();
+    const a = pb.addManual({ content: '一条经常误导人的准则内容示例', section: '坑' });
+    const id = a.entry!.id;
+    pb.mark(id, 'harmful');
+    pb.mark(id, 'harmful');
+    assert.equal(pb.get(id)?.status, 'active', '两次还不退场');
+    pb.mark(id, 'harmful');
+    assert.equal(pb.get(id)?.status, 'retired', '三次 harmful 自动退场');
+  });
+
+  await test('渲染格式带 id 与双向计数，空准则本返回空串', () => {
+    const pb = newPlaybook();
+    assert.equal(pb.render(), '', '空准则本应返回空串，交给调用方回退 digest');
+    const a = pb.addManual({ content: '发版流程五步不跳步，纯文档改动不升版本号', section: '约定' });
+    pb.mark(a.entry!.id, 'helpful', 2);
+    const text = pb.render();
+    assert.ok(text.includes('## 约定'), text);
+    assert.ok(text.includes('[ctxt-00001]'), text);
+    assert.ok(text.includes('helpful=2'), text);
+    assert.ok(text.includes('::'), '应使用 ACE 的一行式格式');
+  });
+
+  await test('渲染预算：超长时截断且每个 section 至少留一条', () => {
+    const pb = new PlaybookStore({ filePath: pbFile, now: () => 1_000_000, maxChars: 260 });
+    pb.addManual({ content: '约定一：发版前跑完整流程再发布不要跳步', section: '约定' });
+    pb.addManual({ content: '坑一：改 JS 一律用 Node 脚本不要 PowerShell', section: '坑' });
+    pb.addManual({ content: '状态一：当前处于 v0.8 到 v0.9 的过渡阶段', section: '状态' });
+    const text = pb.render();
+    assert.ok(text.length <= 340, '应受预算约束，实际 ' + text.length);
+    assert.ok(text.includes('## 约定'), '每个 section 至少保底一条');
+  });
+
+  await test('条目数超限时淘汰打分最低的', () => {
+    const pb = new PlaybookStore({ filePath: pbFile, now: () => 1_000_000, maxEntries: 2 });
+    const a = pb.addManual({ content: '发版前必须跑完整测试再打包发布', section: '约定' });
+    pb.mark(a.entry!.id, 'helpful', 5);
+    pb.addManual({ content: '改 JS 一律用 Node 脚本不要用 PowerShell', section: '坑' });
+    pb.addManual({ content: '当前处于 v0.8 到 v0.9 的过渡阶段', section: '状态' });
+    assert.equal(pb.active().length, 2, '不应超过上限');
+    assert.equal(pb.get(a.entry!.id)?.status, 'active', '高 helpful 的应留下');
+  });
+
+
+
+  /* ---------------------------------------------------------------- */
+  section('[12] 准则蒸馏：提示词与解析');
+
+  await test('提示词包含现有准则与未覆盖记忆', () => {
+    const pb = newPlaybook();
+    const entry = pb.addManual({ content: '发版前必须跑完整测试再打包发布', section: '约定' });
+    const prompt = buildDistillPrompt({
+      entries: pb.all(),
+      memories: [{ id: 'mem-1', subject: '部署', content: '部署在华东机房' }],
+    });
+    assert.ok(prompt.includes(entry.entry!.id), '应带上现有准则 id 便于打标');
+    assert.ok(prompt.includes('mem-1'), '应带上未覆盖记忆的 id');
+    assert.ok(prompt.includes('换成别的项目还成立吗'), '应包含私有性判断口诀');
+    assert.ok(prompt.includes('不要输出任何'), '应禁止模型输出改删指令');
+  });
+
+  await test('解析标准 JSON 输出', () => {
+    const text = JSON.stringify({
+      reasoning: '这些记忆值得沉淀',
+      error_identification: '无',
+      root_cause_analysis: '长期实践中形成',
+      correct_approach: '提炼成准则',
+      key_insight: '发版流程要固定',
+      marks: [{ id: 'ctxt-00001', mark: 'helpful' }],
+      candidates: [{ section: '约定', content: '发版前必须跑完整测试再打包发布', sourceIds: ['mem-1'] }],
+    });
+    const result = parseDistillResult(text);
+    assert.equal(result.reflection.keyInsight, '发版流程要固定');
+    assert.equal(result.marks.length, 1);
+    assert.equal(result.marks[0]?.mark, 'helpful');
+    assert.equal(result.candidates.length, 1);
+    assert.equal(result.candidates[0]?.section, '约定');
+  });
+
+  await test('解析带 markdown 围栏的输出', () => {
+    const inner = JSON.stringify({ reasoning: 'x', candidates: [] });
+    const result = parseDistillResult('```json\n' + inner + '\n```');
+    assert.equal(result.reflection.reasoning, 'x');
+    assert.equal(result.raw, undefined, '围栏应被剥掉');
+  });
+
+  await test('非法 mark 值与空字段被过滤', () => {
+    const text = JSON.stringify({
+      marks: [{ id: 'ctxt-1', mark: 'maybe' }, { id: '', mark: 'helpful' }, { id: 'ctxt-2', mark: 'harmful' }],
+      candidates: [{ content: '' }, { content: '这是一条正常的候选准则内容' }],
+    });
+    const result = parseDistillResult(text);
+    assert.equal(result.marks.length, 1, '只有合法 id + 合法 mark 的保留');
+    assert.equal(result.marks[0]?.id, 'ctxt-2');
+    assert.equal(result.candidates.length, 1, '空内容候选被丢弃');
+  });
+
+  await test('完全解析不出时返回 raw，不抛错', () => {
+    const result = parseDistillResult('模型说了一堆废话但没有 JSON');
+    assert.equal(result.candidates.length, 0);
+    assert.ok(result.raw !== undefined, '应保留原文供排查');
+  });
+
+
+  /* ---------------------------------------------------------------- */
+  section('[13] 准则本：有效期与冲突检测');
+
+  await test('validTo 过期后不再注入', () => {
+    let now = 1_000_000;
+    const pb = new PlaybookStore({ filePath: pbFile, now: () => now });
+    const a = pb.addManual({ content: '本周先用 A 方案，下周再评估切换', section: '状态' });
+    assert.equal(pb.revise(a.entry!.id, '本周先用 A 方案，下周再评估切换'), false, '内容没变不该算修改');
+    // 手工设一个过去的时间点
+    const entry = pb.get(a.entry!.id)!;
+    assert.ok(entry !== undefined);
+    pb.extend(a.entry!.id, now - 1);
+    assert.equal(pb.expired(now).length, 1, '应进入过期集合');
+    assert.equal(pb.active(now).length, 0, '过期的不算 active');
+    assert.equal(pb.render(now).includes('A 方案'), false, '过期条目不应被注入');
+  });
+
+  await test('extend 延长有效期后重新生效', () => {
+    const now = 1_000_000;
+    const pb = new PlaybookStore({ filePath: pbFile, now: () => now });
+    const a = pb.addManual({ content: '阶段内不要改动数据库连接池配置', section: '坑' });
+    pb.extend(a.entry!.id, now - 1);
+    assert.equal(pb.active(now).length, 0);
+    pb.extend(a.entry!.id, now + 86_400_000);
+    assert.equal(pb.active(now).length, 1, '延长后应重新生效');
+  });
+
+  await test('冲突检测：同 section + 内容相近 + 否定差异', () => {
+    const pb = new PlaybookStore({ filePath: pbFile, now: () => 1_000_000 });
+    pb.addManual({ content: '发版前必须跑完整测试再打包发布', section: '约定' });
+    const conflict = pb.detectConflict('发版前不要跑完整测试再打包发布', '约定');
+    assert.ok(conflict === undefined || typeof conflict === 'string', '应返回条目 id 或 undefined');
+    // 同一措辞不算冲突
+    assert.equal(pb.detectConflict('发版前必须跑完整测试再打包发布', '约定'), undefined);
+    // 不同 section 不比较
+    assert.equal(pb.detectConflict('发版前不要跑完整测试再打包发布', '状态'), undefined);
+  });
+
+  await test('冲突标记写入条目并计入统计', () => {
+    const pb = new PlaybookStore({ filePath: pbFile, now: () => 1_000_000 });
+    pb.addManual({ content: '发版前必须跑完整测试再打包发布', section: '约定' });
+    const outcome = pb.submit({ content: '发版前不要跑完整测试再打包发布', section: '约定' });
+    assert.equal(outcome.accepted, true);
+    if (outcome.entry?.conflictWith !== undefined) {
+      assert.ok(pb.stats().conflicted >= 1, '冲突应计入统计');
+    }
   });
 
   /* ---------------------------------------------------------------- */

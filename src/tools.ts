@@ -30,6 +30,8 @@ export interface ToolDeps {
   config: { heartbeatHours: number; patrolIntervalHours: number };
   /** 读取当前反思引擎模式（off / local / real）。 */
   currentReflectionMode?: () => string;
+  /** 准则蒸馏：从记忆提炼候选并给现有准则打标。 */
+  distillPlaybook?: (options: { maxCandidates?: number }) => Promise<Record<string, unknown>>;
   /** 读取当前反思引擎模式（off / local / real）。 */
   reflectionMode?: () => string;
 }
@@ -38,7 +40,7 @@ type IngestInputLike = Parameters<TemporalMemoryStore['ingest']>[0];
 type RecallOptionsLike = Parameters<TemporalMemoryStore['recall']>[1];
 
 export function createTools(deps: ToolDeps) {
-  const { memory, graph, taskManager, proactive, reflection, touch, tasksReady, config, currentReflectionMode } = deps;
+  const { memory, graph, taskManager, proactive, reflection, touch, tasksReady, config, currentReflectionMode, distillPlaybook } = deps;
   const remember = {
     name: 'cognition_remember',
     description:
@@ -193,6 +195,10 @@ export function createTools(deps: ToolDeps) {
           ? expandBySchema(memory, graph, hits.map((hit) => hit.fact.content))
           : [];
 
+      // 召回会给命中项加激活量（"用进废退"的入口）。这些改动必须落盘，
+      // 否则重启后 activation 回到旧值，"越常用越牢"只在内存里成立一次。
+      if (hits.length > 0) touch();
+
       return JSON.stringify(
         {
           mode: rawMode,
@@ -216,13 +222,19 @@ export function createTools(deps: ToolDeps) {
   const reflect = {
     name: 'cognition_reflect',
     description:
-      '三段式辩证反思：THESIS → 对抗性 ANTITHESIS（CONTRADICTION/EVIDENCE 成对）→ SYNTHESIS，严格串行。给 draft 则跳过第一步；save 存结论。默认离线推理器，设置页可切真模型。',
+      '三段式辩证反思：THESIS → 对抗性 ANTITHESIS（CONTRADICTION/EVIDENCE 成对）→ SYNTHESIS，严格串行。给 draft 则跳过第一步；save 存结论。action=playbook 时改为「准则蒸馏」：从记忆提炼跨会话可复用的工作准则，候选进待审队列（需真实模型）。默认关闭，设置页开启。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       required: ['query'],
       properties: {
-        query: { type: 'string', description: '要反思的问题。' },
+        query: { type: 'string', description: '要反思的问题。action=playbook 时可写「蒸馏准则」之类。' },
+        action: {
+          type: 'string',
+          enum: ['reflect', 'playbook'],
+          description:
+            'playbook = 从记忆里提炼可复用的工作准则（需要真实模型，候选进待审）；默认 reflect = 三段式辩证反思。',
+        },
         draft: { type: 'string', description: '已有回答；给了就跳过第一步，直接批评并合成。' },
         save: { type: 'boolean', description: '把 synthesis 存成记忆（subject=结论:问题）。' },
       },
@@ -231,6 +243,15 @@ export function createTools(deps: ToolDeps) {
     async execute(args: unknown): Promise<string> {
       const input = asRecord(args);
       const query = requireString(input, 'query');
+
+      // 准则蒸馏：一条独立用途，不走三段式
+      if (optionalString(input, 'action') === 'playbook') {
+        if (distillPlaybook === undefined) throw new Error('准则蒸馏不可用：插件未初始化');
+        const result = await distillPlaybook({ maxCandidates: 5 });
+        touch();
+        return JSON.stringify(result);
+      }
+
       const draft = optionalString(input, 'draft');
       const result =
         draft === undefined

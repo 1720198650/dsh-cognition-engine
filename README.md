@@ -62,6 +62,13 @@
 - **准入规则可开关**：忽略寒暄 / 拦截密钥 / 拦截指令注入 / 低权威不得覆盖高权威，四条独立开关。
 - **任务支持顺序与并行**：可设排序号与前一项并行推进；没有硬性截止时间，只有超时提醒。
 - **数据可导出导入**：整库记忆导出为 JSON，也能整体导入替换。
+- **准则本（Playbook）**：把记忆蒸馏成一份常驻上下文的「工作准则」，注入预算 600 字符。
+  条目形如 `[ctxt-00001] helpful=2 harmful=0 :: 正文`，模型可点名引用，计数能回写。
+- **准则有有效期**：阶段性约定可设 `validTo`，过期自动停止注入并单独分组复核——
+  **这是与同类插件最大的区别**：它们让 AI 记住经验，我们让 AI 知道经验什么时候该作废。
+- **准则冲突检测**：新准则与现有准则疑似矛盾时打标记，不自动合并，交人工裁决。
+- **半自动蒸馏**：反思引擎从记忆里提炼候选，确定性代码做去重/长度/来源/套话/私有性校验，
+  候选进待审队列，人工确认后才生效。
 - **写入可审计**：每次变更追加一行 JSONL（操作、id、主题、内容指纹、来源、通道），
   按大小轮转，设置页可查看最近记录。
 - **自动快照与回滚**：每次覆盖前保留上一版（最多 5 份），设置页可「恢复最近快照」。
@@ -94,11 +101,14 @@ powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.c
 curl -fsSL https://raw.githubusercontent.com/1720198650/dsh-cognition-engine/main/scripts/install-dshgo.sh | sh
 ```
 
-### 从 npm（包发布后可用）
+### 从 npm（推荐，最短路径）
 
 ```sh
 dsh plugin --profile desktop add dsh-cognition-engine
 ```
+
+已发布到 npm：[`dsh-cognition-engine`](https://www.npmjs.com/package/dsh-cognition-engine)。
+网页版把 `desktop` 换成 `web`。
 
 ### 手动安装
 
@@ -162,7 +172,7 @@ dsh plugin --profile desktop add .
 - **待办**：任务描述、状态、线索、超时标记
 - **记忆**：正文、来源徽章、当前/已取代、标签
 - **图式**：成员数、邻接数、极性
-- **设置**：记忆准入规则开关、记忆归并与导入导出、三类删除、反思引擎三态（关闭 / 本地 / 真实）、记忆读取锁
+- **设置**：记忆准入规则开关、记忆归并与导入导出、三类删除、反思引擎三态（关闭 / 本地 / 真实）、准则本蒸馏与审核、记忆读取锁
 
 页面上所有数据走 HTTP，**不进入模型上下文，不消耗 token**。
 
@@ -343,6 +353,15 @@ npm run eval       # 20 条评测 + token 预算门禁
 | [memoryweb](https://github.com/corbym/memoryweb)（★14） | **叙事边** `Edge{from,to,relationship,narrative}`：边不只有权重，还要说明为什么存在 |
 | [Graphiti](https://github.com/getzep/graphiti)（★32k） | 时序边的建模方式（事实随时间为真/失效） |
 | [Kumiho](https://arxiv.org/abs/2603.17244)（arXiv:2603.17244） | **typed dependency edges** 的理论依据；AGM 信念修正与图原生记忆的对应关系 |
+
+### 准则与上下文工程
+
+| 项目 | 借了什么 |
+|---|---|
+| [ACE: Agentic Context Engineering](https://arxiv.org/abs/2510.04618)（ICLR 2026） | **一条式条目 + 双向计数**（`[ctxt-00001] helpful=2 harmful=0 :: …`）；**LLM 只产 ADD 候选，合并/去重/淘汰交给确定性代码**——这是增量比整篇重写高 13.4 个点的根因；反思 3–5 轮最优 |
+| [Dynamic Cheatsheet](https://arxiv.org/abs/2504.07952)（EACL 2026） | 分节 + 使用计数、长度预算写进提示词；**DC-∅ 对照**（同指令 + 空小抄）说明「换成任何项目都成立」的套话增益为零，据此加了私有性校验 |
+| [MemoryBank](https://arxiv.org/abs/2305.10250)（AAAI 2024） | 艾宾浩斯遗忘曲线 `R = e^(−t/S)`，被召回即增大强度 S；本项目的 `decay()` 按此让常用记忆衰减更慢 |
+| [Mem0](https://arxiv.org/abs/2504.19413) | ADD / UPDATE / DELETE / NOOP 四分类与「UPDATE 前必须比较信息量」；其 token −73%、延迟 −92% 的数据支撑了「蒸馏优于堆上下文」的判断 |
 
 ### 反思
 

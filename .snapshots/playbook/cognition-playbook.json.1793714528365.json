@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "revision": 1,
+  "updatedAt": 1793714528297,
+  "entries": [
+    {
+      "id": "ctxt-00001",
+      "section": "约定",
+      "content": "发版流程五步不跳步，纯文档改动不升版本号",
+      "helpful": 0,
+      "harmful": 0,
+      "sourceIds": [],
+      "validFrom": null,
+      "validTo": null,
+      "status": "active",
+      "createdAt": 1793714528297,
+      "updatedAt": 1793714528297,
+      "note": "",
+      "history": []
+    }
+  ]
+}
