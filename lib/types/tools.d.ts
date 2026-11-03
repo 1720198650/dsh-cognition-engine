@@ -33,6 +33,10 @@ export interface ToolDeps {
     };
     /** 读取当前反思引擎模式（off / local / real）。 */
     currentReflectionMode?: () => string;
+    /** 准则蒸馏：从记忆提炼候选并给现有准则打标。 */
+    distillPlaybook?: (options: {
+        maxCandidates?: number;
+    }) => Promise<Record<string, unknown>>;
     /** 读取当前反思引擎模式（off / local / real）。 */
     reflectionMode?: () => string;
 }
@@ -210,6 +214,11 @@ export declare function createTools(deps: ToolDeps): readonly [{
         properties: {
             query: {
                 type: string;
+                description: string;
+            };
+            action: {
+                type: string;
+                enum: string[];
                 description: string;
             };
             draft: {

@@ -180,6 +180,8 @@ export interface MemoryStats {
   conflicts: number;
   /** 已归档的记忆条数。 */
   archived: number;
+  /** 已软删除（可恢复）的条数。 */
+  deleted: number;
 }
 
 export interface MemoryOptions {
@@ -192,6 +194,15 @@ export interface MemoryOptions {
 }
 
 const DEFAULT_HALF_LIFE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** 强度放大的上限倍数（activation 每 1 点让半衰期翻倍，最多到此）。 */
+const MAX_STRENGTH_BOOST = 5;
+
+/** 召回强化：低于这个相似度的命中不加权，避免把噪声记忆越喂越重。 */
+export const RECALL_REINFORCE_FLOOR = 0.12;
+
+/** 单次召回命中给多少激活量。 */
+export const RECALL_ACTIVATION_GAIN = 0.1;
 
 /** importance ≥ 此值视为「核心记忆」（对应需求里的 CORE 级）。 */
 export const CORE_IMPORTANCE = 0.8;
@@ -496,12 +507,19 @@ export class TemporalMemoryStore {
     return { superseded, current };
   }
 
-  /** 记忆衰减：距上次访问越久，权重越低（指数半衰期）。 */
+  /**
+   * 衰减系数。
+   *
+   * 对齐 MemoryBank (AAAI 2024) 的 R = exp(-t/S)：强度 S 随召回增长，
+   * 于是常用的记忆衰减更慢。我们用半衰期当 S——activation 每 +1，半衰期翻倍，
+   * 最多放大 1 + MAX_STRENGTH_BOOST（=6）倍，避免高频记忆永不衰减。
+   */
   decay(factOrId: TemporalFact | string, now: number = this.clock()): number {
     const fact = typeof factOrId === 'string' ? this.facts.get(factOrId) : factOrId;
     if (fact === undefined) return 0;
     const elapsed = Math.max(0, now - fact.lastAccessedAt);
-    return Math.pow(0.5, elapsed / this.halfLifeMs);
+    const boost = 1 + Math.min(Math.max(0, fact.activation), MAX_STRENGTH_BOOST);
+    return Math.pow(0.5, elapsed / (this.halfLifeMs * boost));
   }
 
   /** 显式强化：提升激活量并重置衰减计时。 */
@@ -554,7 +572,10 @@ export class TemporalMemoryStore {
         0.6 * similarity +
         0.25 * decay +
         0.15 * fact.importance +
-        0.1 * Math.min(1, fact.activation);
+        // activation 用饱和曲线而不是硬截断在 1：
+        // 原来 Math.min(1, activation) 意味着召回 10 次后打分不再增长，
+        // 却同时让 autoArchive 永久豁免它，两个语义在 1.0 处撞车。
+        0.1 * (fact.activation / (1 + fact.activation));
       if (score < minScore) continue;
       hits.push({ fact, score, similarity, decay });
     }
@@ -563,12 +584,10 @@ export class TemporalMemoryStore {
     const top = hits.slice(0, limit);
 
     for (const hit of top) {
-      const bumped: TemporalFact = Object.freeze({
-        ...hit.fact,
-        activation: hit.fact.activation + 0.1,
-        lastAccessedAt: now,
-      });
-      this.facts.set(hit.fact.id, bumped);
+      // 只有真正相关（相似度过线）的命中才自我强化。
+      // 否则查一个完全无关的词，返回的低分命中也会被越喂越重。
+      if (hit.similarity < RECALL_REINFORCE_FLOOR) continue;
+      const bumped = this.reinforce(hit.fact.id, RECALL_ACTIVATION_GAIN, now);
       hit.fact = bumped;
     }
 
@@ -639,7 +658,7 @@ export class TemporalMemoryStore {
     const ids = this.bySubject.get(subject) ?? new Set<string>();
     return [...ids]
       .map((id) => this.facts.get(id))
-      .filter((fact): fact is TemporalFact => fact !== undefined)
+      .filter((fact): fact is TemporalFact => fact !== undefined && fact.deletedAt === undefined)
       .sort((a, b) => a.validFrom - b.validFrom);
   }
 
@@ -683,18 +702,27 @@ export class TemporalMemoryStore {
     let current = 0;
     let superseded = 0;
     let archived = 0;
+    let deleted = 0;
+    const liveSubjects = new Set<string>();
     for (const fact of this.facts.values()) {
+      // 软删除的条目对用户来说已经不存在，不能计入任何可见统计。
+      if (fact.deletedAt !== undefined) {
+        deleted += 1;
+        continue;
+      }
+      liveSubjects.add(fact.subject);
       if (fact.supersededAt !== null) superseded += 1;
       if (fact.archived === true) archived += 1;
       if (isCurrent(fact, now) && fact.archived !== true) current += 1;
     }
     return {
-      total: this.facts.size,
+      total: this.facts.size - deleted,
       current,
       superseded,
-      subjects: this.bySubject.size,
+      subjects: liveSubjects.size,
       conflicts: this.conflicts().length,
       archived,
+      deleted,
     };
   }
 

@@ -20,11 +20,13 @@ import { SchemaGraphManager } from './graph.ts';
 import { JsonStateStore } from './persist.ts';
 import { buildDetail, buildCoreDigest } from './views.ts';
 import { DialecticalReflectionEngine, MockDialecticalLLM, ReflectionWorker } from './reflection.ts';
-import { assertObjectSchema, messageOf } from './util.ts';
+import { assertObjectSchema, messageOf, parseMoment } from './util.ts';
 import { createTools } from './tools.ts';
 import { ProactiveGate } from './proactive.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
 import { AuditLog } from './audit.ts';
+import { PlaybookStore } from './playbook.ts';
+import { buildDistillPrompt, parseDistillResult } from './distill.ts';
 
 /* ------------------------------------------------------------------ */
 /* 宿主最小接口（不引入任何运行时依赖）                                 */
@@ -127,6 +129,10 @@ export interface CognitionConfig {
   maxClusterSize?: number;
   /** 是否把跨会话摘要注入系统提示。默认 true；false 时只能靠 cognition_context 手动取。 */
   injectMemory?: boolean;
+  /** 准则本注入预算（字符），默认 600。 */
+  playbookChars?: number;
+  /** 准则本条目上限，默认 12。 */
+  playbookMaxEntries?: number;
   /** 多久没更新就算需要催办（小时）。 */
   heartbeatHours?: number;
   /** 后台巡视间隔（小时）。 */
@@ -199,6 +205,8 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     communityThreshold: numberOr(config.communityThreshold, 0.3),
     maxClusterSize: Math.max(1, Math.round(numberOr(config.maxClusterSize, 8))),
     injectMemory: config.injectMemory !== false,
+    playbookChars: Math.max(200, Math.round(numberOr(config.playbookChars, 600))),
+    playbookMaxEntries: Math.max(1, Math.round(numberOr(config.playbookMaxEntries, 12))),
     heartbeatHours: Math.max(0.01, numberOr(config.heartbeatHours, 6)),
     patrolIntervalHours: Math.max(0.01, numberOr(config.patrolIntervalHours, 3)),
     idleThresholdMinutes: Math.max(0.1, numberOr(config.idleThresholdMinutes, 5)),
@@ -258,6 +266,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const config = normalizeConfig(rawConfig);
 
   const audit = new AuditLog();
+  const playbook = new PlaybookStore({
+    maxChars: config.playbookChars,
+    maxEntries: config.playbookMaxEntries,
+    // 来源校验：sourceIds 必须真实存在，防止模型臆造出处
+    validateSourceIds: (ids) => ids.filter((id) => memory.get(id) !== undefined),
+  });
   const memory = new TemporalMemoryStore({
     halfLifeMs: config.decayHalfLifeHours * HOUR_MS,
     onEvent: (event) => audit.append(event),
@@ -284,6 +298,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     },
   });
   try {
+    playbook.loadSync();
     if (stateStore.loadSync()) {
       ctx.logger?.info?.(`cognition-engine: 已从磁盘恢复 ${memory.size} 条记忆`);
     }
@@ -310,7 +325,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     return { provider: selection?.provider ?? '', model: selection?.model ?? '' };
   };
 
-  const callRealModel = async (prompt: string): Promise<string> => {
+  const callRealModel = async (prompt: string, maxTokens = 2000): Promise<string> => {
     const llm = ctx.get?.('llm') as LlmService | undefined;
     if (llm === undefined || typeof llm.stream !== 'function') throw new Error('llm 服务不可用');
     const { provider, model } = resolveModel();
@@ -318,19 +333,101 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       throw new Error('未找到可用模型：请在 cordis.patch.yml 设 llmProvider / llmModel');
     }
     let text = '';
+    // 诊断用：记录收到过哪些 chunk 类型，空内容时能说清是模型没吐字还是字段名对不上。
+    const seen = new Map<string, number>();
     for await (const chunk of llm.stream({
       provider,
       model,
-      maxTokens: 800,
+      // 800 不够：蒸馏输出是完整 JSON，反思 synthesis 也常超；
+      // 截断后 JSON 解析失败，解析器只能原样返回半截文本。
+      maxTokens,
       // 单段最多等 90 秒，避免模型卡住把整个反思流程挂死
       signal: AbortSignal.timeout(90_000),
       messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
     })) {
+      const type = String((chunk as { type?: unknown }).type ?? 'unknown');
+      seen.set(type, (seen.get(type) ?? 0) + 1);
       if (chunk.type === 'text-delta' && typeof chunk.text === 'string') text += chunk.text;
       if (chunk.type === 'finish' && chunk.reason?.kind === 'error') throw new Error('模型返回错误');
     }
-    if (text.trim().length === 0) throw new Error('模型返回空内容');
+    if (text.trim().length === 0) {
+      const shapes = [...seen.entries()].map(([type, count]) => `${type}×${count}`).join(', ');
+      throw new Error(`模型返回空内容（收到 chunk：${shapes.length > 0 ? shapes : '无'}）`);
+    }
     return text;
+  };
+
+  /**
+   * 准则蒸馏：从未被覆盖的记忆里提炼候选，并给现有准则打标记。
+   *
+   * 不直接改准则——候选进 pending，标记直接生效（标记可以随时改回来，风险低）。
+   */
+  const runDistill = async (options: { maxCandidates?: number } = {}): Promise<Record<string, unknown>> => {
+    if (reflectionMode === 'off') {
+      throw new Error('反思引擎未开启：准则蒸馏需要真实模型，请在设置页切到「真实模型」');
+    }
+    if (reflectionMode === 'local') {
+      throw new Error('本地占位引擎无法蒸馏准则：它只会输出固定模板，请切换到「真实模型」');
+    }
+
+    // 已被任何准则引用过的记忆不再重复喂给模型
+    const referenced = new Set(playbook.all().flatMap((entry) => entry.sourceIds));
+    const uncovered = memory
+      .all()
+      .filter((fact) => fact.deletedAt === undefined && fact.supersededAt === null && !fact.archived)
+      .filter((fact) => !referenced.has(fact.id))
+      .sort((a, b) => b.importance - a.importance || b.recordedAt - a.recordedAt)
+      .slice(0, 20)
+      .map((fact) => ({ id: fact.id, subject: fact.subject, content: fact.content }));
+
+    const prompt = buildDistillPrompt({
+      entries: playbook.all(),
+      memories: uncovered,
+      maxCandidates: options.maxCandidates ?? 5,
+    });
+
+    const raw = await callRealModel(prompt);
+    const parsed = parseDistillResult(raw);
+
+    // 标记直接生效：helpful/harmful 可以再改，风险低
+    let marked = 0;
+    for (const item of parsed.marks) {
+      if (playbook.mark(item.id, item.mark)) marked += 1;
+    }
+
+    // 候选进 pending，必须人工审核
+    const submitted: Array<Record<string, unknown>> = [];
+    for (const candidate of parsed.candidates) {
+      // 相对表达（"7d"）与 ISO 日期都由 parseMoment 归一成毫秒；解析不了就当长期有效。
+      const validTo = candidate.validUntil === undefined ? null : (parseMoment(candidate.validUntil) ?? null);
+      const outcome = playbook.submit({
+        section: candidate.section,
+        content: candidate.content,
+        sourceIds: candidate.sourceIds,
+        validTo,
+      });
+      submitted.push({
+        content: candidate.content,
+        section: candidate.section ?? '未分类',
+        accepted: outcome.accepted,
+        ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+        ...(outcome.entry === undefined ? {} : { id: outcome.entry.id }),
+        ...(validTo === null ? {} : { validTo }),
+        ...(outcome.entry?.conflictWith === undefined ? {} : { conflictWith: outcome.entry.conflictWith }),
+      });
+    }
+    await playbook.flush();
+
+    return {
+      reflection: parsed.reflection,
+      marked,
+      candidates: submitted,
+      uncoveredMemories: uncovered.length,
+      parseFailed: parsed.raw !== undefined,
+      // 解析失败时把模型原文前 600 字带出来，否则无法判断是格式问题还是内容问题。
+      ...(parsed.raw === undefined ? {} : { rawPreview: parsed.raw.slice(0, 600) }),
+      stats: playbook.stats(),
+    };
   };
 
   const reflection = new DialecticalReflectionEngine((prompt, phase) =>
@@ -393,6 +490,14 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       })(),
       locked: lockToken !== null,
       storageFile: basename(stateStore.path),
+      playbook: {
+        ...playbook.stats(),
+        /** 当前注入的是准则本、原始记忆摘要，还是都不注入。 */
+        injectSource: (() => {
+          if (playbook.renderSection().length > 0) return 'playbook';
+          return buildCoreDigest(memory).length > 0 ? 'digest' : 'none';
+        })(),
+      },
       storageWarning: stateStore.warning,
       rules: memory.getRules(),
       updatedAt: Date.now(),
@@ -645,6 +750,88 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       { method: 'POST', requireAuth: explicitLock },
     );
 
+    // —— 准则蒸馏 ——
+    route(
+      '/cognition-engine/playbook/distill',
+      async (url) => {
+        const raw = url.searchParams.get('maxCandidates');
+        const maxCandidates = raw === null ? 5 : Math.max(1, Math.min(10, Number(raw)));
+        return runDistill({ maxCandidates: Number.isFinite(maxCandidates) ? maxCandidates : 5 });
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // —— 准则本 ——
+    route('/cognition-engine/playbook', () => ({
+      stats: playbook.stats(),
+      // 带上计算出来的过期标记：页面不用自己算时间，也能正确分组到「已过期」
+      entries: playbook.all().map((entry) => ({
+        ...entry,
+        expired: entry.status === 'active' && playbook.isExpired(entry),
+      })),
+      rendered: playbook.render(),
+    }));
+
+    route(
+      '/cognition-engine/playbook/candidate',
+      async (url) => {
+        const rawValidTo = url.searchParams.get('validTo');
+        const outcome = playbook.submit({
+          content: url.searchParams.get('content') ?? '',
+          section: url.searchParams.get('section') ?? undefined,
+          sourceIds: (url.searchParams.get('sourceIds') ?? '')
+            .split(',')
+            .map((id) => id.trim())
+            .filter((id) => id.length > 0),
+          validTo: rawValidTo === null ? null : (parseMoment(rawValidTo) ?? null),
+        });
+        if (outcome.accepted) await playbook.flush();
+        return outcome;
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    route(
+      '/cognition-engine/playbook/add',
+      async (url) => {
+        const outcome = playbook.addManual({
+          content: url.searchParams.get('content') ?? '',
+          section: url.searchParams.get('section') ?? undefined,
+        });
+        if (outcome.accepted) await playbook.flush();
+        return outcome;
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    route(
+      '/cognition-engine/playbook/act',
+      async (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        const action = url.searchParams.get('action') ?? '';
+        let ok = false;
+        switch (action) {
+          case 'accept': ok = playbook.accept(id); break;
+          case 'reject': ok = playbook.reject(id); break;
+          case 'retire': ok = playbook.retire(id, '手动停用'); break;
+          case 'revive': ok = playbook.revive(id); break;
+          case 'revise': ok = playbook.revise(id, url.searchParams.get('content') ?? ''); break;
+          case 'extend': {
+            const raw = url.searchParams.get('validTo');
+            ok = playbook.extend(id, raw === null ? null : (parseMoment(raw) ?? null));
+            break;
+          }
+          case 'helpful': ok = playbook.mark(id, 'helpful'); break;
+          case 'harmful': ok = playbook.mark(id, 'harmful'); break;
+          default: throw new Error('action 只能是 accept/reject/retire/revive/revise/helpful/harmful');
+        }
+        if (!ok) throw new Error(`准则本操作失败：${action} ${id}`);
+        await playbook.flush();
+        return { id, action, ok };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
     // 审计日志（最近 N 条）
     route(
       '/cognition-engine/audit',
@@ -757,6 +944,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     persistReflection: (result) => persistReflection(memory, graph, result),
     tasksReady,
     config,
+    // 这两个之前漏传：导致「本地占位告警」从未出现、准则蒸馏不可用。
+    currentReflectionMode: () => reflectionMode,
+    distillPlaybook: runDistill,
   });
   const [remember, recall, forget, reflect, state, cognitionContext, manageLongTask] = toolList;
 

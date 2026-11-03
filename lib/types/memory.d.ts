@@ -166,6 +166,8 @@ export interface MemoryStats {
     conflicts: number;
     /** 已归档的记忆条数。 */
     archived: number;
+    /** 已软删除（可恢复）的条数。 */
+    deleted: number;
 }
 export interface MemoryOptions {
     now?: () => number;
@@ -183,6 +185,10 @@ export interface MemoryOptions {
         detail?: string;
     }) => void;
 }
+/** 召回强化：低于这个相似度的命中不加权，避免把噪声记忆越喂越重。 */
+export declare const RECALL_REINFORCE_FLOOR = 0.12;
+/** 单次召回命中给多少激活量。 */
+export declare const RECALL_ACTIVATION_GAIN = 0.1;
 /** importance ≥ 此值视为「核心记忆」（对应需求里的 CORE 级）。 */
 export declare const CORE_IMPORTANCE = 0.8;
 /** 超过这个年龄的核心记忆会触发「怀旧」。 */
@@ -243,7 +249,13 @@ export declare class TemporalMemoryStore {
         superseded: TemporalFact;
         current: TemporalFact;
     };
-    /** 记忆衰减：距上次访问越久，权重越低（指数半衰期）。 */
+    /**
+     * 衰减系数。
+     *
+     * 对齐 MemoryBank (AAAI 2024) 的 R = exp(-t/S)：强度 S 随召回增长，
+     * 于是常用的记忆衰减更慢。我们用半衰期当 S——activation 每 +1，半衰期翻倍，
+     * 最多放大 1 + MAX_STRENGTH_BOOST（=6）倍，避免高频记忆永不衰减。
+     */
     decay(factOrId: TemporalFact | string, now?: number): number;
     /** 显式强化：提升激活量并重置衰减计时。 */
     reinforce(id: string, amount?: number, now?: number): TemporalFact;
