@@ -13,8 +13,13 @@ $pluginRoot = Split-Path -Parent $PSScriptRoot
 $dataFiles = @(
     'cognition-state.json',
     'cognition-state.json.tmp',
+    'cognition-state.json.sha256',
+    'cognition-state.json.lock',
+    'cognition-audit.jsonl',
+    'cognition-audit.jsonl.1',
     'tasks.json',
     'tasks.json.tmp',
+    'tasks.json.lock',
     'inject-probe.log'
 )
 foreach ($name in $dataFiles) {
@@ -23,6 +28,13 @@ foreach ($name in $dataFiles) {
         Remove-Item $path -Force
         Write-Host "[removed] $path"
     }
+}
+
+# 1b) 自动快照目录
+$snapshotDir = Join-Path $pluginRoot '.snapshots'
+if (Test-Path $snapshotDir) {
+    Remove-Item $snapshotDir -Recurse -Force
+    Write-Host "[removed] $snapshotDir"
 }
 
 # 2) the AGENTS.md section that points at cognition_context

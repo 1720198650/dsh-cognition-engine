@@ -22,7 +22,7 @@
 
 /** 召回口径。 */
 import { DEFAULT_RULES, describeRejection, evaluateAdmission } from './admission.ts';
-import type { AdmissionRules } from './admission.ts';
+import type { AdmissionRules, WriteOrigin } from './admission.ts';
 
 export type RecallMode = 'strict' | 'historical' | 'belief' | 'associative';
 
@@ -61,6 +61,8 @@ export interface TemporalFact {
   readonly mergedInto?: string;
   /** 软删除时间：任何召回口径都不再返回，但数据保留可恢复。 */
   readonly deletedAt?: number;
+  /** 写入通道：agent_tool / ui / import / reflection。 */
+  readonly origin?: WriteOrigin;
   readonly lastAccessedAt: number;
 }
 
@@ -79,6 +81,8 @@ export interface IngestInput {
   subject?: string;
   tags?: readonly string[];
   source?: string;
+  /** 写入通道；由入口代码决定，agent 不能自填。默认 agent_tool。 */
+  origin?: WriteOrigin;
   importance?: number;
   /** 作用域，默认 global。 */
   scope?: MemoryScope;
@@ -183,6 +187,8 @@ export interface MemoryOptions {
   /** 衰减半衰期，默认 7 天。 */
   halfLifeMs?: number;
   idPrefix?: string;
+  /** 审计回调：每次变更触发一次，失败不影响主流程。 */
+  onEvent?: (event: { op: string; id?: string; subject?: string; hash?: string; source?: string; origin?: string; detail?: string }) => void;
 }
 
 const DEFAULT_HALF_LIFE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -312,12 +318,23 @@ export class TemporalMemoryStore {
   private readonly clock: () => number;
   private readonly halfLifeMs: number;
   private readonly idPrefix: string;
+  private readonly onEvent: MemoryOptions['onEvent'];
   private seq = 0;
 
   constructor(options: MemoryOptions = {}) {
     this.clock = options.now ?? (() => Date.now());
     this.halfLifeMs = options.halfLifeMs ?? DEFAULT_HALF_LIFE_MS;
     this.idPrefix = options.idPrefix ?? 'mem';
+    this.onEvent = options.onEvent;
+  }
+
+  /** 安全触发审计回调。 */
+  private emit(event: Parameters<NonNullable<MemoryOptions['onEvent']>>[0]): void {
+    try {
+      this.onEvent?.(event);
+    } catch {
+      // 审计失败不能影响写入
+    }
   }
 
   /** 当前时钟。 */
@@ -365,9 +382,10 @@ export class TemporalMemoryStore {
       text: content,
       subject,
       source: input.source ?? 'agent',
+      origin: input.origin ?? 'agent_tool',
       existing: [...this.facts.values()]
         .filter((fact) => fact.supersededAt === null && !fact.archived)
-        .map((fact) => ({ id: fact.id, subject: fact.subject, content: fact.content, source: fact.source })),
+        .map((fact) => ({ id: fact.id, subject: fact.subject, content: fact.content, source: fact.source, origin: fact.origin })),
     }, this.rules);
     if (decision.action === 'reject') {
       throw new Error(`记忆未准入：${describeRejection(decision)}`);
@@ -392,9 +410,11 @@ export class TemporalMemoryStore {
       activation: 0,
       archived: false,
       lastAccessedAt: this.clock(),
+      ...(input.origin === undefined ? {} : { origin: input.origin }),
     });
 
     this.facts.set(fact.id, fact);
+    this.emit({ op: 'remember', id: fact.id, subject: fact.subject, hash: fact.hash, source: fact.source, origin: fact.origin });
     this.tokens.set(fact.id, tokenize(`${fact.subject} ${fact.content}`));
     const bucket = this.bySubject.get(fact.subject) ?? new Set<string>();
     bucket.add(fact.id);
@@ -425,6 +445,7 @@ export class TemporalMemoryStore {
   remove(id: string): boolean {
     const fact = this.facts.get(id);
     if (fact === undefined) return false;
+    this.emit({ op: 'forget', id: fact.id, subject: fact.subject, hash: fact.hash });
     this.facts.delete(id);
     this.tokens.delete(id);
     const bucket = this.bySubject.get(fact.subject);
@@ -715,6 +736,7 @@ export class TemporalMemoryStore {
       oldBucket.delete(id);
       if (oldBucket.size === 0) this.bySubject.delete(fact.subject);
     }
+    this.emit({ op: 'update', id, subject, hash: next.hash, detail: '手动修正' });
     this.facts.set(id, next);
     this.tokens.set(id, tokenize(subject + ' ' + content));
     const bucket = this.bySubject.get(subject) ?? new Set<string>();
@@ -801,6 +823,7 @@ export class TemporalMemoryStore {
   softDelete(id: string): boolean {
     const fact = this.facts.get(id);
     if (fact === undefined) return false;
+    this.emit({ op: 'delete', id, subject: fact.subject });
     this.facts.set(id, Object.freeze({ ...fact, deletedAt: this.clock() }));
     return true;
   }
@@ -809,6 +832,7 @@ export class TemporalMemoryStore {
   restoreDeleted(id: string): boolean {
     const fact = this.facts.get(id);
     if (fact === undefined || fact.deletedAt === undefined) return false;
+    this.emit({ op: 'restore', id, subject: fact.subject });
     const { deletedAt: _drop, ...rest } = fact;
     this.facts.set(id, Object.freeze(rest as TemporalFact));
     return true;
