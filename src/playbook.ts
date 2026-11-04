@@ -16,7 +16,7 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/p
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { cosine, tokenize } from './memory.ts';
-import { resolveInPackage } from './util.ts';
+import { resolveDataFile } from './util.ts';
 
 /* ------------------------------------------------------------------ */
 /* 类型                                                                 */
@@ -26,6 +26,56 @@ export const PLAYBOOK_SECTIONS = ['约定', '坑', '状态', '未分类'] as con
 export type PlaybookSection = (typeof PLAYBOOK_SECTIONS)[number];
 
 export type PlaybookStatus = 'active' | 'pending' | 'retired' | 'expired';
+
+/** 来源等级：只升不降，agent 不能自封 human。 */
+export type PlaybookOrigin = 'human' | 'agent' | 'auto';
+
+/**
+ * 使用统计——为什么要把 helpful/harmful 拆开。
+ *
+ * 调研结论：用户说「不对」时，可能是**准则错**、**模型没用它**、或**理解错需求**。
+ * 混在一个 harmful 计数里，检索错误会被记到准则头上，
+ * 准则本会因此越用越保守，最后把对的条目也淘汰掉。
+ *
+ * 所以按「应用 / 应用且好 / 应用且差 / 该用没用 / 用户纠正」分开记，
+ * 每次变化都能追到原因。
+ */
+export interface UsageStats {
+  /** 被应用次数（模型点名引用）。 */
+  applied: number;
+  /** 应用且结果好。 */
+  appliedGood: number;
+  /** 应用且结果差（准则可能错）。 */
+  appliedBad: number;
+  /** 该用而没用（检索/触发条件问题，不是准则错）。 */
+  missed: number;
+  /** 用户明确纠正。 */
+  userCorrected: number;
+  /** 最近一次变化的说明，便于复盘。 */
+  lastTrace?: string;
+}
+
+/** 打标的种类。 */
+export type UsageKind = keyof Omit<UsageStats, 'lastTrace'>;
+
+const EMPTY_USAGE: UsageStats = {
+  applied: 0,
+  appliedGood: 0,
+  appliedBad: 0,
+  missed: 0,
+  userCorrected: 0,
+};
+
+/** 证据链状态。 */
+export interface EvidenceState {
+  /** 仍然有效的来源记忆 id。 */
+  supported: string[];
+  /** 已失效的来源记忆 id（被取代 / 删除 / 归档）。 */
+  orphaned: string[];
+  /** intact=全部有效，weakened=部分失效，orphaned=全部失效。 */
+  status: 'intact' | 'weakened' | 'orphaned';
+  checkedAt: number;
+}
 
 /** 条目的历史版本（revise 时保留，不原地覆盖）。 */
 export interface PlaybookHistoryEntry {
@@ -53,6 +103,20 @@ export interface PlaybookEntry {
   history: PlaybookHistoryEntry[];
   /** 与哪条准则疑似冲突（入库时检测，人工裁决）。 */
   conflictWith?: string;
+  /**
+   * 未决冲突组 id。
+   *
+   * 两条准则互相矛盾、但证据强度差不多时，**不强行选一条**——
+   * 都给它们挂同一个组 id，注入时并排呈现，明确标注「存在未决分歧」。
+   * 这是 LeAP 的做法：`new ≥ 1.2×old` 才取代，否则两条都 active。
+   */
+  conflictGroupId?: string;
+  /**
+   * 墓碑：这条**本来就是错的**，不是被更好的取代。
+   *
+   * 与 superseded 必须分开记——「被推翻」和「被超越」是两种完全不同的历史。
+   */
+  tombstone?: { revokedAt: number; reason: string; replacedBy?: string };
 
   /* —— 三道约束开关（默认全关：准则本来只是提醒）—— */
 
@@ -73,10 +137,46 @@ export interface PlaybookEntry {
    */
   required: string;
   /**
+   * 来源等级。
+   *
+   * - `human`：用户手写或明确确认过
+   * - `agent`：模型通过工具写入、但没有人确认
+   * - `auto`：蒸馏器自动产出
+   *
+   * 依据 LeAP/CITE 的四层认识类型：**agent 永远不能自封为 human**，
+   * 晋升只能由用户侧触发，且一次一级、不可跳级。
+   * 注入时把等级翻译成措辞——human 直接陈述，agent 标「AI 记录，待核实」。
+   */
+  origin: PlaybookOrigin;
+  /**
+   * 何时适用（自然语言，如「发布版本时」「改 JS 脚本时」）。
+   *
+   * forge_dc (NeurIPS 2026) 实测：同一条纠正写成**带触发点的祈使 RULE** 合规 95%，
+   * 写成描述性文本只有 55%，且规则方案 token 少约 10 倍。
+   * 「带触发点」就是把「什么时候该用它」显式写在条目里。
+   *
+   * 和下面 trigger（正则，给拦截器机械判定用）不是一回事：
+   * when 给人/模型看，trigger 给代码跑。
+   */
+  when: string;
+  /**
    * 归属主题（多对多）。空 = 未归类。
    * 用于「按任务只注入相关准则」——这是主题层对准则本最直接的收益。
    */
   topicIds: string[];
+  /**
+   * 证据链状态。
+   *
+   * 依据 Doyle 的 TMS（1979）：**撤回一个信念不是删一条记录**，
+   * 而是要让依赖它的下游结论失去支撑。删除源记忆却留下「由它推出的准则」，
+   * 准则会变成没有主人的事实——看起来干净了，污染还在。
+   *
+   * 所以每次源记忆变动都要沿 sourceIds 重算可达性：
+   * 只靠已失效前提支撑的准则标 orphaned（不删、不注入），部分失效标 weakened。
+   */
+  evidence?: EvidenceState;
+  /** 分项使用统计（比 helpful/harmful 更细，见 UsageStats 注释）。 */
+  usage?: UsageStats;
   /** 累计违反次数。 */
   violations: number;
   /** 最近一次违反时间；从未违反为 null。 */
@@ -94,6 +194,10 @@ export interface PlaybookFile {
 export interface PlaybookCandidate {
   section?: string;
   content: string;
+  /** 来源等级；蒸馏产出一律 auto，用户手写传 human。 */
+  origin?: PlaybookOrigin;
+  /** 何时适用（自然语言）。 */
+  when?: string;
   sourceIds?: string[];
   validTo?: number | null;
 }
@@ -108,6 +212,8 @@ export interface MergeOutcome {
 }
 
 export interface PlaybookOptions {
+  /** 判断一条来源记忆是否仍然有效（未被取代 / 删除 / 归档）。 */
+  isSourceAlive?: (id: string) => boolean;
   filePath?: string;
   now?: () => number;
   /** 注入预算（字符）。默认 600。 */
@@ -227,20 +333,22 @@ export class PlaybookStore {
   private readonly maxPerSection: number;
   private readonly dedupeThreshold: number;
   private readonly validateSourceIds: ((ids: readonly string[]) => string[]) | undefined;
+  private readonly isSourceAlive: ((id: string) => boolean) | undefined;
   private data: PlaybookFile = emptyFile();
   private seq = 0;
 
   constructor(options: PlaybookOptions = {}) {
     this.filePath = options.filePath === undefined
-      ? resolveInPackage('cognition-playbook.json')
+      ? resolveDataFile('cognition-playbook.json')
       : resolve(options.filePath);
     this.snapshotDir = join(dirname(this.filePath), '.snapshots', 'playbook');
     this.clock = options.now ?? (() => Date.now());
-    this.maxChars = Math.max(200, options.maxChars ?? 600);
+    this.maxChars = Math.max(200, options.maxChars ?? 700);
     this.maxEntries = Math.max(1, options.maxEntries ?? 12);
     this.maxPerSection = Math.max(1, options.maxPerSection ?? 5);
     this.dedupeThreshold = Math.min(0.99, Math.max(0.5, options.dedupeThreshold ?? 0.7));
     this.validateSourceIds = options.validateSourceIds;
+    this.isSourceAlive = options.isSourceAlive;
   }
 
   get path(): string {
@@ -296,7 +404,13 @@ export class PlaybookStore {
         guard: entry.guard === true,
         enforce: entry.enforce === true,
         audit: entry.audit === true,
+        origin: entry.origin === 'agent' ? 'agent' : entry.origin === 'auto' ? 'auto' : 'human',
+        ...(entry.evidence === undefined ? {} : { evidence: entry.evidence as EvidenceState }),
+        ...(entry.usage === undefined ? {} : { usage: { ...EMPTY_USAGE, ...(entry.usage as Partial<UsageStats>) } }),
+        ...(entry.conflictGroupId === undefined ? {} : { conflictGroupId: String(entry.conflictGroupId) }),
+        ...(entry.tombstone === undefined ? {} : { tombstone: entry.tombstone as { revokedAt: number; reason: string; replacedBy?: string } }),
         trigger: typeof entry.trigger === 'string' ? entry.trigger : '',
+        when: typeof entry.when === 'string' ? entry.when : '',
         topicIds: Array.isArray(entry.topicIds) ? entry.topicIds.map(String).filter((t) => t.length > 0) : [],
         required: typeof entry.required === 'string' ? entry.required : '',
         violations: Number(entry.violations ?? 0),
@@ -453,12 +567,16 @@ export class PlaybookStore {
       note: conflictWith === undefined ? '' : `与 ${conflictWith} 疑似冲突，待人工裁决`,
       history: [],
       ...(conflictWith === undefined ? {} : { conflictWith }),
+      // 蒸馏/模型产出一律 auto，用户手写的走 addManual 显式标 human
+      origin: candidate.origin ?? 'auto',
+      usage: { ...EMPTY_USAGE },
       // 新条目默认只是一句提醒，三道约束都要人工勾选才生效
       guard: false,
       enforce: false,
       audit: false,
       trigger: '',
       required: '',
+      when: (candidate.when ?? '').slice(0, 60),
       topicIds: [],
       violations: 0,
       lastViolationAt: null,
@@ -504,8 +622,9 @@ export class PlaybookStore {
   }
 
   /** 人工直接新增（跳过审核，直接 active）。 */
-  addManual(input: { section?: string; content: string; validTo?: number | null }): MergeOutcome {
-    const outcome = this.submit(input);
+  /** 用户手写/确认的条目，来源直接记 human。 */
+  addManual(input: { section?: string; content: string; validTo?: number | null; when?: string }): MergeOutcome {
+    const outcome = this.submit({ ...input, origin: 'human' });
     if (!outcome.accepted || outcome.entry === undefined) return outcome;
     this.markActive(outcome.entry.id);
     return { accepted: true, entry: this.get(outcome.entry.id) };
@@ -513,10 +632,144 @@ export class PlaybookStore {
 
   /* ------------------------------ 状态流转 ------------------------------ */
 
+  /**
+   * 接受一条待审准则。
+   *
+   * 如果它与现有生效准则冲突，这里做**确定性裁决**（LeAP 的 1.2× 规则）：
+   *   - 新条证据强度 ≥ 1.2×旧条 → 旧条退场（被更强证据取代）
+   *   - 旧条 ≥ 1.2×新条          → 拒绝新条（更弱的证据不能推翻更稳的）
+   *   - 差不多                    → **两条都生效**，挂同一个 conflictGroupId，
+   *                                 注入时并排显示「存在未决分歧」
+   *
+   * 最后一种最重要：证据差不多时**不强行选一条**。
+   * 强行选会静默丢掉分歧，而分歧本身是有价值的信息。
+   */
   accept(id: string): boolean {
     const entry = this.entryRef(id);
     if (entry === undefined || entry.status !== 'pending') return false;
+
+    if (entry.conflictWith !== undefined) {
+      const other = this.entryRef(entry.conflictWith);
+      if (other !== undefined && other.status === 'active') {
+        const mine = this.confidenceOf(entry);
+        const theirs = this.confidenceOf(other);
+        if (mine >= theirs * 1.2) {
+          // 新条更强：旧条退出（记清楚是被谁取代）
+          other.status = 'retired';
+          other.note = `被更强的准则 ${entry.id} 取代（证据强度 ${mine} vs ${theirs}）`;
+          other.updatedAt = this.clock();
+          entry.conflictWith = undefined;
+        } else if (theirs >= mine * 1.2) {
+          // 旧条更强：新条不能生效，留档说明原因
+          entry.status = 'retired';
+          entry.note = `证据强度不足，未推翻 ${other.id}（${mine} vs ${theirs}）`;
+          entry.updatedAt = this.clock();
+          return false;
+        } else {
+          // 势均力敌：两条都保留，进入未决组
+          const gid = `cf-${entry.id}-${other.id}`;
+          entry.conflictGroupId = gid;
+          other.conflictGroupId = gid;
+          entry.note = `与 ${other.id} 存在未决分歧，两条都生效`;
+          other.note = `与 ${entry.id} 存在未决分歧，两条都生效`;
+        }
+      }
+    }
+
     this.markActive(id);
+    this.enforceActiveCap();
+    return true;
+  }
+
+  /**
+   * 活跃条目上限保护。
+   *
+   * 准则本的价值随条数**先升后降**：预算固定时条目越多，每条被注入的概率越低，
+   * 最后等于什么都没说。调研建议上限 300，超过就按证据强度淘汰最弱的。
+   */
+  private enforceActiveCap(cap = 300): void {
+    const active = this.data.entries.filter((entry) => entry.status === 'active');
+    if (active.length <= cap) return;
+    const weakest = active
+      .slice()
+      .sort((a, b) => this.effectiveScore(a) - this.effectiveScore(b))
+      .slice(0, active.length - cap);
+    for (const entry of weakest) {
+      entry.status = 'retired';
+      entry.note = '超出活跃条目上限，按证据强度淘汰';
+      entry.updatedAt = this.clock();
+    }
+  }
+
+  /**
+   * 人工标记两条准则冲突。
+   *
+   * 为什么需要这个：**自然语言的矛盾检测不可靠**。
+   * 例：「不可跳步」和「不必执行」都含「不」，否定词启发式会判成同极性。
+   * 调研结论是「没有 SPO 就不猜」——所以自动检测只当提示，
+   * 真正的冲突由人或模型显式标记，再由 confidence 做确定性裁决。
+   */
+  markConflict(aId: string, bId: string): boolean {
+    const a = this.entryRef(aId);
+    const b = this.entryRef(bId);
+    if (a === undefined || b === undefined || aId === bId) return false;
+    if (a.status !== 'active' || b.status !== 'active') return false;
+    const mine = this.confidenceOf(a);
+    const theirs = this.confidenceOf(b);
+    // 差 1.2 倍以上直接裁决，否则挂未决组
+    if (mine >= theirs * 1.2) {
+      b.status = 'retired';
+      b.note = `被更强的准则 ${aId} 取代（${mine} vs ${theirs}）`;
+      b.updatedAt = this.clock();
+      return true;
+    }
+    if (theirs >= mine * 1.2) {
+      a.status = 'retired';
+      a.note = `被更强的准则 ${bId} 取代（${theirs} vs ${mine}）`;
+      a.updatedAt = this.clock();
+      return true;
+    }
+    const gid = `cf-${aId}-${bId}`;
+    a.conflictGroupId = gid;
+    b.conflictGroupId = gid;
+    a.note = `与 ${bId} 存在未决分歧，两条都生效`;
+    b.note = `与 ${aId} 存在未决分歧，两条都生效`;
+    a.updatedAt = this.clock();
+    b.updatedAt = this.clock();
+    return true;
+  }
+
+  /**
+   * 手动裁决未决冲突：保留哪一条。
+   *
+   * 调用方在界面上点了「以这条为准」后调用——人做最终决定，代码只执行。
+   */
+  resolveConflict(keepId: string, dropId: string, reason = '人工裁决'): boolean {
+    const keep = this.entryRef(keepId);
+    const drop = this.entryRef(dropId);
+    if (keep === undefined || drop === undefined) return false;
+    if (keep.conflictGroupId === undefined || keep.conflictGroupId !== drop.conflictGroupId) return false;
+    drop.status = 'retired';
+    drop.note = `${reason}：由 ${keepId} 胜出`;
+    drop.updatedAt = this.clock();
+    keep.conflictGroupId = undefined;
+    keep.note = '';
+    keep.updatedAt = this.clock();
+    return true;
+  }
+
+  /**
+   * 立墓碑：这条本来就错了（不是被更好的取代）。
+   *
+   * 与 retired 的区别见 tombstone 字段注释——「被推翻」和「被超越」是两种历史。
+   */
+  revoke(id: string, reason: string): boolean {
+    const entry = this.entryRef(id);
+    if (entry === undefined) return false;
+    entry.status = 'retired';
+    entry.tombstone = { revokedAt: this.clock(), reason: reason.slice(0, 120) };
+    entry.note = `已撤销：${reason.slice(0, 80)}`;
+    entry.updatedAt = this.clock();
     return true;
   }
 
@@ -593,7 +846,7 @@ export class PlaybookStore {
    */
   setFlags(
     id: string,
-    flags: { guard?: boolean; enforce?: boolean; audit?: boolean; trigger?: string; required?: string },
+    flags: { guard?: boolean; enforce?: boolean; audit?: boolean; trigger?: string; required?: string; when?: string },
   ): boolean {
     const entry = this.entryRef(id);
     if (entry === undefined) return false;
@@ -602,6 +855,149 @@ export class PlaybookStore {
     if (flags.audit !== undefined) entry.audit = flags.audit;
     if (flags.trigger !== undefined) entry.trigger = flags.trigger.slice(0, 200);
     if (flags.required !== undefined) entry.required = flags.required.slice(0, 200);
+    if (flags.when !== undefined) entry.when = flags.when.slice(0, 60);
+    entry.updatedAt = this.clock();
+    return true;
+  }
+
+  /**
+   * 重算所有条目的证据链状态。
+   *
+   * 源记忆被取代 / 删除 / 归档后调用。复杂度 O(条款数 × 来源数)，几百条无压力。
+   * 返回状态有变化的条目 id。
+   */
+  recheckEvidence(now: number = this.clock()): string[] {
+    const changed: string[] = [];
+    for (const entry of this.data.entries) {
+      if (entry.sourceIds.length === 0) continue;
+      const supported: string[] = [];
+      const orphaned: string[] = [];
+      for (const sourceId of entry.sourceIds) {
+        if (this.isSourceAlive === undefined || this.isSourceAlive(sourceId)) supported.push(sourceId);
+        else orphaned.push(sourceId);
+      }
+      const status: EvidenceState['status'] =
+        orphaned.length === 0 ? 'intact' : supported.length === 0 ? 'orphaned' : 'weakened';
+      const before = entry.evidence?.status;
+      entry.evidence = { supported, orphaned, status, checkedAt: now };
+      // orphaned 的条目自动退出注入，但不删除——前提恢复后会自动回来
+      if (status === 'orphaned' && entry.status === 'active') {
+        entry.note = '证据链断裂：所有来源记忆都已失效，待复核';
+      } else if (status !== 'orphaned' && entry.note.startsWith('证据链断裂')) {
+        entry.note = '';
+      }
+      if (before !== status) changed.push(entry.id);
+    }
+    return changed;
+  }
+
+  /**
+   * 条目的有效分值——注入排序用。
+   *
+   * 依据：
+   * - ACE / ExpeL：**计数来自实际使用结果**，不是手填
+   * - ReasoningBank：判官只有 72.7% 准确，但 70–90% 噪声下性能不敏感
+   *   → 所以样本不足时不给强判断，用 Beta 先验收缩
+   * - TMS：证据链断裂的条目要沉下去
+   */
+  effectiveScore(entry: PlaybookEntry): number {
+    const u = entry.usage ?? EMPTY_USAGE;
+    // Beta(1,1) 先验：没有样本时按 0.5 处理，样本越多越相信实测比例
+    const good = u.appliedGood;
+    const bad = u.appliedBad + u.userCorrected;
+    const ratio = (good + 1) / (good + bad + 2);
+    // 置信度随样本量增长：0 样本 ≈ 0，5 样本 ≈ 0.83
+    const confidence = 1 - Math.exp(-(good + bad) / 2);
+    const base = 10 * ratio * confidence;
+    // 老字段继续计入（兼容手动打的 helpful/harmful）
+    const legacy = entry.helpful - entry.harmful * 2;
+    // 证据链断裂 → 直接沉底；部分失效 → 降权
+    const evidencePenalty =
+      entry.evidence?.status === 'orphaned' ? -100 : entry.evidence?.status === 'weakened' ? -5 : 0;
+    return base + legacy + evidencePenalty;
+  }
+
+  /**
+   * 分项打标。
+   *
+   * 只有 appliedGood / appliedBad / userCorrected 会影响降级判断——
+   * missed 记的是检索问题，不该算到准则头上。
+   */
+  markUsage(id: string, kind: UsageKind, trace = ''): boolean {
+    const entry = this.entryRef(id);
+    if (entry === undefined) return false;
+    const usage = entry.usage ?? { ...EMPTY_USAGE };
+    usage[kind] += 1;
+    if (trace.length > 0) usage.lastTrace = trace.slice(0, 120);
+    entry.usage = usage;
+    entry.updatedAt = this.clock();
+
+    // 降级门槛（ReasoningBank 的噪声结论）：样本够 + 好评率低才降级
+    const good = usage.appliedGood;
+    const bad = usage.appliedBad + usage.userCorrected;
+    const samples = good + bad;
+    if (samples >= 5 && good / samples < 0.3) {
+      entry.status = 'retired';
+      entry.note = `实测好评率过低（${good}/${samples}），自动退场`;
+    }
+    return true;
+  }
+
+  /**
+   * 证据强度（confidence）——冲突裁决的依据。
+   *
+   * 由**代码算**，不让模型自报（LeAP：层级由代码控制，而非模型输出）。
+   *
+   * 设计原则：**已验证 > 未验证，而不是新 > 旧**（AGM / veritas 的核心立场）。
+   *   human + 证据完好 = 1.0（用户确认过，最高）
+   *   agent（AI 记录、人确认过）= 0.6
+   *   auto（模型自产）= 0.4
+   * 证据链部分失效 ×0.7，完全失效 ×0.2。
+   */
+  confidenceOf(entry: PlaybookEntry): number {
+    const tier = entry.origin === 'human' ? 1 : entry.origin === 'agent' ? 0.6 : 0.4;
+    const evidence =
+      entry.evidence === undefined
+        ? 1
+        : entry.evidence.status === 'intact'
+          ? 1
+          : entry.evidence.status === 'weakened'
+            ? 0.7
+            : 0.2;
+    return Number((tier * evidence).toFixed(3));
+  }
+
+  /**
+   * 用时可复用等级（SEU：selective experience use）。
+   *
+   * 依据 PATH-Bench：检索到的经验**在使用时逐条判断**怎么用——
+   * preserve（可直接复用）/ abstract（只取高层模式）/ ignore（忽略），
+   * 这一层判断让 FGT 最多降 16.84pp，且不动记忆库本身，是最便宜的抗负迁移。
+   *
+   * 我们的三档：
+   *   reusable  证据完好 + 用户确认 → 可以直接套用
+   *   reference 来源是 AI 或样本不足 → 只借鉴思路，别当铁律
+   *   doubtful  证据部分失效 / 未决冲突 / 实测差评 → 提出来时标明不确定
+   */
+  usageHint(entry: PlaybookEntry): 'reusable' | 'reference' | 'doubtful' {
+    // 有反证：实测差评明显多于好评
+    const u = entry.usage ?? EMPTY_USAGE;
+    const bad = u.appliedBad + u.userCorrected;
+    if (bad >= 2 && bad > u.appliedGood) return 'doubtful';
+    // 证据链部分失效 / 未决冲突 → 存疑
+    if (entry.evidence?.status === 'weakened' || entry.evidence?.status === 'orphaned') return 'doubtful';
+    if (entry.conflictGroupId !== undefined) return 'doubtful';
+    // 用户确认过的才算「可直接复用」；AI 来源一律先当参考
+    if (entry.origin === 'human') return 'reusable';
+    return 'reference';
+  }
+
+  /** 设置证据来源（sourceIds），调用方随后应重算证据链。 */
+  setSourceIds(id: string, sourceIds: string[]): boolean {
+    const entry = this.entryRef(id);
+    if (entry === undefined) return false;
+    const valid = sourceIds.filter((x) => x.length > 0);
+    entry.sourceIds = [...new Set(valid)];
     entry.updatedAt = this.clock();
     return true;
   }
@@ -698,10 +1094,11 @@ export class PlaybookStore {
     topicName?: (id: string) => string | undefined,
   ): { text: string; omitted: number } {
     const maxChars = Math.max(120, Math.round(budget ?? this.maxChars));
-    const active = this.active(now);
+    // 证据链断裂的条目不注入——但不是删除，前提恢复后它会自动回来
+    const active = this.active(now).filter((entry) => entry.evidence?.status !== 'orphaned');
     if (active.length === 0) return { text: '', omitted: 0 };
 
-    const score = (entry: PlaybookEntry): number => entry.helpful - entry.harmful * 2;
+    const score = (entry: PlaybookEntry): number => this.effectiveScore(entry);
     // 用主题分组：每个条目挂在它的第一个主题下；没有主题的进「未归类」
     const groups = new Map<string, { title: string; list: PlaybookEntry[] }>();
     for (const entry of active) {
@@ -728,7 +1125,21 @@ export class PlaybookStore {
       for (const entry of list) {
         if (lines.length >= this.maxPerSection) break;
         if (total >= this.maxEntries) break;
-        const line = `- [${entry.id}] helpful=${entry.helpful} harmful=${entry.harmful} :: ${entry.content}`;
+        // 来源等级翻译成措辞：human 直接陈述，agent 标「AI 记录待核实」。
+        // auto 不标注——它根本进不了 active，不会出现在这里。
+        const originMark = entry.origin === 'agent' ? '（AI 记录，待核实）' : '';
+        const evidenceMark = entry.evidence?.status === 'weakened' ? '（证据已部分失效）' : '';
+        // 准入标注：只标非「可复用」的——大多数条目没有标记本身就是信息，
+        // 「没标记 = 可放心用」，这样也更省预算。
+        const hint = this.usageHint(entry);
+        const hintMark = hint === 'doubtful' ? '[存疑]' : hint === 'reference' ? '[仅参考]' : '';
+        // 未决冲突必须让模型看见——静默选一条等于丢掉分歧
+        const conflictMark =
+          entry.conflictGroupId === undefined ? '' : `（与同组条目存在未决分歧，${entry.conflictGroupId}）`;
+        const line =
+          entry.when.length > 0
+            ? `- [${entry.id}] helpful=${entry.helpful} harmful=${entry.harmful} :: ${entry.when}：${entry.content}${hintMark}${originMark}${evidenceMark}${conflictMark}`
+            : `- [${entry.id}] helpful=${entry.helpful} harmful=${entry.harmful} :: ${entry.content}${hintMark}${originMark}${evidenceMark}${conflictMark}`;
         if (used + blockChars + line.length + 1 > maxChars) {
           // 预算不够时，至少保证每组有一条
           if (lines.length === 0) {
@@ -764,7 +1175,9 @@ export class PlaybookStore {
   renderSection(now: number = this.clock(), topicName?: (id: string) => string | undefined): string {
     const selfCheck = this.renderSelfCheck(now);
     const header = '【工作准则】（由记忆蒸馏，累计 helpful/harmful）';
-    const footer = '（这些是长期约定；需要具体细节时调用 cognition_recall。）';
+    // 尾注顺带告诉模型怎么回写使用效果——不写这句，分项计数永远是 0。
+    const footer =
+      '（用到某条时按 appliedGood/appliedBad/missed 回写；细节调 cognition_recall。）';
     const hasBody = this.active(now).length > 0;
 
     // 固定开销：各段之间的分隔符 \n\n 也算进去
@@ -802,6 +1215,8 @@ export class PlaybookStore {
   private markActive(id: string): void {
     const entry = this.entryRef(id);
     if (entry === undefined) return;
+    // 人工确认即晋升一级（auto → agent），但绝不跳到 human——human 只能用户手写
+    if (entry.origin === 'auto') entry.origin = 'agent';
     entry.status = 'active';
     entry.updatedAt = this.clock();
     // 已有 active 条数超限时，淘汰打分最低的
@@ -823,7 +1238,7 @@ export class PlaybookStore {
 
   /** 打分最低的 active 条目（helpful − harmful×2，同分取最旧）。 */
   private worstEntry(): PlaybookEntry | undefined {
-    const score = (entry: PlaybookEntry): number => entry.helpful - entry.harmful * 2;
+    const score = (entry: PlaybookEntry): number => this.effectiveScore(entry);
     return this.active()
       .slice()
       .sort((a, b) => score(a) - score(b) || a.updatedAt - b.updatedAt)[0];

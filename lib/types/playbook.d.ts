@@ -14,6 +14,44 @@
 export declare const PLAYBOOK_SECTIONS: readonly ["约定", "坑", "状态", "未分类"];
 export type PlaybookSection = (typeof PLAYBOOK_SECTIONS)[number];
 export type PlaybookStatus = 'active' | 'pending' | 'retired' | 'expired';
+/** 来源等级：只升不降，agent 不能自封 human。 */
+export type PlaybookOrigin = 'human' | 'agent' | 'auto';
+/**
+ * 使用统计——为什么要把 helpful/harmful 拆开。
+ *
+ * 调研结论：用户说「不对」时，可能是**准则错**、**模型没用它**、或**理解错需求**。
+ * 混在一个 harmful 计数里，检索错误会被记到准则头上，
+ * 准则本会因此越用越保守，最后把对的条目也淘汰掉。
+ *
+ * 所以按「应用 / 应用且好 / 应用且差 / 该用没用 / 用户纠正」分开记，
+ * 每次变化都能追到原因。
+ */
+export interface UsageStats {
+    /** 被应用次数（模型点名引用）。 */
+    applied: number;
+    /** 应用且结果好。 */
+    appliedGood: number;
+    /** 应用且结果差（准则可能错）。 */
+    appliedBad: number;
+    /** 该用而没用（检索/触发条件问题，不是准则错）。 */
+    missed: number;
+    /** 用户明确纠正。 */
+    userCorrected: number;
+    /** 最近一次变化的说明，便于复盘。 */
+    lastTrace?: string;
+}
+/** 打标的种类。 */
+export type UsageKind = keyof Omit<UsageStats, 'lastTrace'>;
+/** 证据链状态。 */
+export interface EvidenceState {
+    /** 仍然有效的来源记忆 id。 */
+    supported: string[];
+    /** 已失效的来源记忆 id（被取代 / 删除 / 归档）。 */
+    orphaned: string[];
+    /** intact=全部有效，weakened=部分失效，orphaned=全部失效。 */
+    status: 'intact' | 'weakened' | 'orphaned';
+    checkedAt: number;
+}
 /** 条目的历史版本（revise 时保留，不原地覆盖）。 */
 export interface PlaybookHistoryEntry {
     content: string;
@@ -39,6 +77,24 @@ export interface PlaybookEntry {
     history: PlaybookHistoryEntry[];
     /** 与哪条准则疑似冲突（入库时检测，人工裁决）。 */
     conflictWith?: string;
+    /**
+     * 未决冲突组 id。
+     *
+     * 两条准则互相矛盾、但证据强度差不多时，**不强行选一条**——
+     * 都给它们挂同一个组 id，注入时并排呈现，明确标注「存在未决分歧」。
+     * 这是 LeAP 的做法：`new ≥ 1.2×old` 才取代，否则两条都 active。
+     */
+    conflictGroupId?: string;
+    /**
+     * 墓碑：这条**本来就是错的**，不是被更好的取代。
+     *
+     * 与 superseded 必须分开记——「被推翻」和「被超越」是两种完全不同的历史。
+     */
+    tombstone?: {
+        revokedAt: number;
+        reason: string;
+        replacedBy?: string;
+    };
     /** 自查：渲染进「开工前自查」清单，要求模型动手前先点名适用项。 */
     guard: boolean;
     /** 拦截：工具调用前校验，违反则直接拒绝执行。需要 trigger + required。 */
@@ -56,10 +112,46 @@ export interface PlaybookEntry {
      */
     required: string;
     /**
+     * 来源等级。
+     *
+     * - `human`：用户手写或明确确认过
+     * - `agent`：模型通过工具写入、但没有人确认
+     * - `auto`：蒸馏器自动产出
+     *
+     * 依据 LeAP/CITE 的四层认识类型：**agent 永远不能自封为 human**，
+     * 晋升只能由用户侧触发，且一次一级、不可跳级。
+     * 注入时把等级翻译成措辞——human 直接陈述，agent 标「AI 记录，待核实」。
+     */
+    origin: PlaybookOrigin;
+    /**
+     * 何时适用（自然语言，如「发布版本时」「改 JS 脚本时」）。
+     *
+     * forge_dc (NeurIPS 2026) 实测：同一条纠正写成**带触发点的祈使 RULE** 合规 95%，
+     * 写成描述性文本只有 55%，且规则方案 token 少约 10 倍。
+     * 「带触发点」就是把「什么时候该用它」显式写在条目里。
+     *
+     * 和下面 trigger（正则，给拦截器机械判定用）不是一回事：
+     * when 给人/模型看，trigger 给代码跑。
+     */
+    when: string;
+    /**
      * 归属主题（多对多）。空 = 未归类。
      * 用于「按任务只注入相关准则」——这是主题层对准则本最直接的收益。
      */
     topicIds: string[];
+    /**
+     * 证据链状态。
+     *
+     * 依据 Doyle 的 TMS（1979）：**撤回一个信念不是删一条记录**，
+     * 而是要让依赖它的下游结论失去支撑。删除源记忆却留下「由它推出的准则」，
+     * 准则会变成没有主人的事实——看起来干净了，污染还在。
+     *
+     * 所以每次源记忆变动都要沿 sourceIds 重算可达性：
+     * 只靠已失效前提支撑的准则标 orphaned（不删、不注入），部分失效标 weakened。
+     */
+    evidence?: EvidenceState;
+    /** 分项使用统计（比 helpful/harmful 更细，见 UsageStats 注释）。 */
+    usage?: UsageStats;
     /** 累计违反次数。 */
     violations: number;
     /** 最近一次违反时间；从未违反为 null。 */
@@ -75,6 +167,10 @@ export interface PlaybookFile {
 export interface PlaybookCandidate {
     section?: string;
     content: string;
+    /** 来源等级；蒸馏产出一律 auto，用户手写传 human。 */
+    origin?: PlaybookOrigin;
+    /** 何时适用（自然语言）。 */
+    when?: string;
     sourceIds?: string[];
     validTo?: number | null;
 }
@@ -87,6 +183,8 @@ export interface MergeOutcome {
     duplicateOf?: string;
 }
 export interface PlaybookOptions {
+    /** 判断一条来源记忆是否仍然有效（未被取代 / 删除 / 归档）。 */
+    isSourceAlive?: (id: string) => boolean;
     filePath?: string;
     now?: () => number;
     /** 注入预算（字符）。默认 600。 */
@@ -134,6 +232,7 @@ export declare class PlaybookStore {
     private readonly maxPerSection;
     private readonly dedupeThreshold;
     private readonly validateSourceIds;
+    private readonly isSourceAlive;
     private data;
     private seq;
     constructor(options?: PlaybookOptions);
@@ -170,12 +269,54 @@ export declare class PlaybookStore {
     /** 延长有效期（复核后确认继续有效）。 */
     extend(id: string, validTo: number | null): boolean;
     /** 人工直接新增（跳过审核，直接 active）。 */
+    /** 用户手写/确认的条目，来源直接记 human。 */
     addManual(input: {
         section?: string;
         content: string;
         validTo?: number | null;
+        when?: string;
     }): MergeOutcome;
+    /**
+     * 接受一条待审准则。
+     *
+     * 如果它与现有生效准则冲突，这里做**确定性裁决**（LeAP 的 1.2× 规则）：
+     *   - 新条证据强度 ≥ 1.2×旧条 → 旧条退场（被更强证据取代）
+     *   - 旧条 ≥ 1.2×新条          → 拒绝新条（更弱的证据不能推翻更稳的）
+     *   - 差不多                    → **两条都生效**，挂同一个 conflictGroupId，
+     *                                 注入时并排显示「存在未决分歧」
+     *
+     * 最后一种最重要：证据差不多时**不强行选一条**。
+     * 强行选会静默丢掉分歧，而分歧本身是有价值的信息。
+     */
     accept(id: string): boolean;
+    /**
+     * 活跃条目上限保护。
+     *
+     * 准则本的价值随条数**先升后降**：预算固定时条目越多，每条被注入的概率越低，
+     * 最后等于什么都没说。调研建议上限 300，超过就按证据强度淘汰最弱的。
+     */
+    private enforceActiveCap;
+    /**
+     * 人工标记两条准则冲突。
+     *
+     * 为什么需要这个：**自然语言的矛盾检测不可靠**。
+     * 例：「不可跳步」和「不必执行」都含「不」，否定词启发式会判成同极性。
+     * 调研结论是「没有 SPO 就不猜」——所以自动检测只当提示，
+     * 真正的冲突由人或模型显式标记，再由 confidence 做确定性裁决。
+     */
+    markConflict(aId: string, bId: string): boolean;
+    /**
+     * 手动裁决未决冲突：保留哪一条。
+     *
+     * 调用方在界面上点了「以这条为准」后调用——人做最终决定，代码只执行。
+     */
+    resolveConflict(keepId: string, dropId: string, reason?: string): boolean;
+    /**
+     * 立墓碑：这条本来就错了（不是被更好的取代）。
+     *
+     * 与 retired 的区别见 tombstone 字段注释——「被推翻」和「被超越」是两种历史。
+     */
+    revoke(id: string, reason: string): boolean;
     reject(id: string): boolean;
     /**
      * 永久删除一条准则（任意状态）。
@@ -201,7 +342,59 @@ export declare class PlaybookStore {
         audit?: boolean;
         trigger?: string;
         required?: string;
+        when?: string;
     }): boolean;
+    /**
+     * 重算所有条目的证据链状态。
+     *
+     * 源记忆被取代 / 删除 / 归档后调用。复杂度 O(条款数 × 来源数)，几百条无压力。
+     * 返回状态有变化的条目 id。
+     */
+    recheckEvidence(now?: number): string[];
+    /**
+     * 条目的有效分值——注入排序用。
+     *
+     * 依据：
+     * - ACE / ExpeL：**计数来自实际使用结果**，不是手填
+     * - ReasoningBank：判官只有 72.7% 准确，但 70–90% 噪声下性能不敏感
+     *   → 所以样本不足时不给强判断，用 Beta 先验收缩
+     * - TMS：证据链断裂的条目要沉下去
+     */
+    effectiveScore(entry: PlaybookEntry): number;
+    /**
+     * 分项打标。
+     *
+     * 只有 appliedGood / appliedBad / userCorrected 会影响降级判断——
+     * missed 记的是检索问题，不该算到准则头上。
+     */
+    markUsage(id: string, kind: UsageKind, trace?: string): boolean;
+    /**
+     * 证据强度（confidence）——冲突裁决的依据。
+     *
+     * 由**代码算**，不让模型自报（LeAP：层级由代码控制，而非模型输出）。
+     *
+     * 设计原则：**已验证 > 未验证，而不是新 > 旧**（AGM / veritas 的核心立场）。
+     *   human + 证据完好 = 1.0（用户确认过，最高）
+     *   agent（AI 记录、人确认过）= 0.6
+     *   auto（模型自产）= 0.4
+     * 证据链部分失效 ×0.7，完全失效 ×0.2。
+     */
+    confidenceOf(entry: PlaybookEntry): number;
+    /**
+     * 用时可复用等级（SEU：selective experience use）。
+     *
+     * 依据 PATH-Bench：检索到的经验**在使用时逐条判断**怎么用——
+     * preserve（可直接复用）/ abstract（只取高层模式）/ ignore（忽略），
+     * 这一层判断让 FGT 最多降 16.84pp，且不动记忆库本身，是最便宜的抗负迁移。
+     *
+     * 我们的三档：
+     *   reusable  证据完好 + 用户确认 → 可以直接套用
+     *   reference 来源是 AI 或样本不足 → 只借鉴思路，别当铁律
+     *   doubtful  证据部分失效 / 未决冲突 / 实测差评 → 提出来时标明不确定
+     */
+    usageHint(entry: PlaybookEntry): 'reusable' | 'reference' | 'doubtful';
+    /** 设置证据来源（sourceIds），调用方随后应重算证据链。 */
+    setSourceIds(id: string, sourceIds: string[]): boolean;
     /** 设置归属主题（多对多，空数组 = 未归类）。 */
     setTopics(id: string, topicIds: string[]): boolean;
     /** 记一次违反。 */

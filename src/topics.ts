@@ -20,7 +20,7 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/p
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { cosine, tokenize } from './memory.ts';
-import { resolveInPackage } from './util.ts';
+import { resolveDataFile } from './util.ts';
 
 /* ------------------------------------------------------------------ */
 /* 类型                                                                 */
@@ -89,7 +89,7 @@ export class TopicStore {
 
   constructor(options: TopicStoreOptions = {}) {
     this.filePath = options.filePath === undefined
-      ? resolveInPackage('cognition-topics.json')
+      ? resolveDataFile('cognition-topics.json')
       : resolve(options.filePath);
     this.snapshotDir = join(dirname(this.filePath), '.snapshots', 'topics');
     this.clock = options.now ?? (() => Date.now());

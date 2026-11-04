@@ -9,6 +9,27 @@ export declare const packageRoot: string;
 /** 把相对文件名解析到插件包根目录下。 */
 export declare function resolveInPackage(name: string): string;
 /**
+ * 数据目录。
+ *
+ * **用户数据不能放在代码目录里。** 早期默认放在插件包根目录，结果两次发版的
+ * 「清理临时产物」步骤把准则本、主题、待办全删了（v0.9.1、v0.10.0 各一次）。
+ *
+ * 现在默认放 `~/.dsh/cognition-engine/`，与代码彻底分开——
+ * 清理仓库再也不可能误伤用户数据。
+ *
+ * 可用环境变量 `DSH_COGNITION_DATA_DIR` 覆盖。
+ */
+export declare function dataDir(): string;
+/** 数据文件的默认路径（在 dataDir 下）。 */
+export declare function resolveDataFile(name: string): string;
+/**
+ * 一次性迁移：把旧位置的数据搬到 dataDir。
+ *
+ * 只在目标文件不存在时搬，**绝不覆盖**已有数据。
+ * 返回搬了哪些文件，供启动日志用。
+ */
+export declare function migrateLegacyData(): string[];
+/**
  * src/util.ts — 无状态的纯工具函数
  *
  * 从 index.ts 抽出来的原因：这些函数不碰任何插件状态，

@@ -68,6 +68,12 @@ npm publish --access public
 
 > 发布前记得 `npm run build`，因为 `lib/` 不入库、由构建生成。
 
+> ⚠️ **数据文件不是临时文件。**
+> `cognition-state.json` / `cognition-playbook.json` / `cognition-topics.json` / `tasks.json`
+> 是用户的真实数据，**提交和清理时绝对不要删**。
+> v0.9.1 与 v0.10.0 两次发版都在「清理临时产物」这一步误删了它们，
+> 每次都丢掉全部准则/主题/待办。清理只针对 `_research/`、构建产物、`.bak` 备份。
+
 ## 5. 发布前自检（六步，不可跳步）
 
 按顺序全过一遍再推。前三步是静态检查，第 ⑤ 步才是真正能拦住「发了个用不了的东西」的那一步。

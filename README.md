@@ -200,7 +200,7 @@ dsh plugin --profile desktop add .
 - **巡逻复盘开关**：巡视每 3 小时看一次逾期任务。默认**不调模型**，只写一条「已超期 N 小时」的提示；
   想让它自动跑三段式复盘再打开（每次 3 次模型调用）。
 - **一键安装**：Windows 与 dsh-go 各有一条命令；npm 已发布。
-- **持久化**：记忆写入 `cognition-state.json`，重启自动恢复。
+- **数据与代码分开**：所有状态写在 `~/.dsh/cognition-engine/`，不在插件目录里——清理仓库不会误伤用户数据。
 
 ---
 
@@ -281,7 +281,7 @@ mem-16 「npm 发布时本机 registry 指向淘宝镜像，必须显式加 --re
         communityThreshold: 0.3        # 社区连边阈值
         maxClusterSize: 8              # 单簇上限
         tasksFile: ./tasks.json
-        stateFile: ./cognition-state.json
+        stateFile: ~/.dsh/cognition-engine/cognition-state.json
         heartbeatHours: 6              # 多久没更新算超时
         patrolIntervalHours: 3         # 后台巡视间隔
         recordOnly: true               # 主动发言只记录不发送
@@ -311,7 +311,8 @@ mem-16 「npm 发布时本机 registry 指向淘宝镜像，必须显式加 --re
 
 | 项 | 说明 |
 |---|---|
-| 落盘 | `cognition-state.json`（记忆）、`tasks.json`（任务）、`cognition-playbook.json`（准则）、`cognition-audit.jsonl`（审计）、`.snapshots/`（快照） |
+| 落盘位置 | `~/.dsh/cognition-engine/`（可用环境变量 `DSH_COGNITION_DATA_DIR` 覆盖） |
+| 落盘文件 | `cognition-state.json`（记忆）、`tasks.json`（待办）、`cognition-playbook.json`（准则）、`cognition-topics.json`（主题）、`cognition-audit.jsonl`（审计）、`.snapshots/`（快照） |
 | HTTP | `GET /cognition-engine/state`（仅计数）、`GET /cognition-engine/detail`（含正文）、`GET /cognition-engine/playbook`、`POST /cognition-engine/{clear,model,lock,playbook/*,snapshot/*}` |
 | 记忆读取锁 | 开启后 `detail` 与三个 `POST` 要求 `x-cognition-token`；`state` 始终公开（只有计数） |
 | 外部请求 | 默认零外部请求；只有打开真模型时才会调用宿主配置的模型服务 |

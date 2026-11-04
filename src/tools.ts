@@ -20,6 +20,12 @@ import { asRecord, optionalString, pick, requireString, textOutput, parseMoment 
 /** 工具定义用到的全部外部依赖。 */
 export interface ToolDeps {
   memory: TemporalMemoryStore;
+  /** 记忆变更后重算准则证据链（作废会传染）。 */
+  refreshEvidence?: () => void;
+  /** 登记知识缺口。 */
+  gapRecorder?: (text: string, context?: string) => { id: string; duplicate: boolean; open: number };
+  /** 分项打标。 */
+  playbookRate?: (id: string, kind: 'applied', trace?: string) => boolean;
   /** 主题注册表：用于按主题分组展示矛盾。 */
   topics: TopicStore;
   taskManager: LongHorizonTaskManager;
@@ -41,7 +47,7 @@ type IngestInputLike = Parameters<TemporalMemoryStore['ingest']>[0];
 type RecallOptionsLike = Parameters<TemporalMemoryStore['recall']>[1];
 
 export function createTools(deps: ToolDeps) {
-  const { memory, topics, taskManager, proactive, reflection, touch, tasksReady, config, currentReflectionMode, distillPlaybook } = deps;
+  const { memory, topics, refreshEvidence, playbookRate, gapRecorder, taskManager, proactive, reflection, touch, tasksReady, config, currentReflectionMode, distillPlaybook } = deps;
   const remember = {
     name: 'cognition_remember',
     description:
@@ -223,10 +229,12 @@ export function createTools(deps: ToolDeps) {
       additionalProperties: false,
       required: ['query'],
       properties: {
-        query: { type: 'string', description: '要反思的问题。action=playbook 时可写「蒸馏准则」之类。' },
+        query: { type: 'string', description: '要反思的问题；playbook/rate 时随便填。' },
+        ruleId: { type: 'string', description: 'rate 用：准则 id。' },
+        usageKind: { type: 'string', description: 'rate 用：applied/appliedGood/appliedBad/missed/userCorrected。' },
         action: {
           type: 'string',
-          enum: ['reflect', 'playbook'],
+          enum: ['reflect', 'playbook', 'rate', 'gap'],
           description:
             'playbook = 从记忆里提炼可复用的工作准则（需要真实模型，候选进待审）；默认 reflect = 三段式辩证反思。',
         },
@@ -240,6 +248,30 @@ export function createTools(deps: ToolDeps) {
       const query = requireString(input, 'query');
 
       // 准则蒸馏：一条独立用途，不走三段式
+      // 分项打标：记到对应分项，而不是笼统 +/-1
+      // 卡壳即记：把「我不知道什么」登记下来，下次针对性补
+      if (optionalString(input, 'action') === 'gap') {
+        const text = optionalString(input, 'query') ?? '';
+        if (text.trim().length === 0) throw new Error('gap 需要 query 说明缺什么');
+        if (gapRecorder === undefined) throw new Error('缺口登记不可用：插件未初始化');
+        const result = gapRecorder(text, optionalString(input, 'draft'));
+        touch();
+        return JSON.stringify(result);
+      }
+
+      if (optionalString(input, 'action') === 'rate') {
+        const ruleId = requireString(input, 'ruleId');
+        const kind = optionalString(input, 'usageKind') ?? 'applied';
+        const allowed = ['applied', 'appliedGood', 'appliedBad', 'missed', 'userCorrected'];
+        if (!allowed.includes(kind)) throw new Error(`usageKind 只能是 ${allowed.join(' / ')}`);
+        if (playbookRate === undefined) throw new Error('打标不可用：插件未初始化');
+        if (!playbookRate(ruleId, kind as 'applied', optionalString(input, 'draft') ?? '')) {
+          throw new Error(`准则不存在：${ruleId}`);
+        }
+        touch();
+        return JSON.stringify({ ruleId, usageKind: kind, ok: true });
+      }
+
       if (optionalString(input, 'action') === 'playbook') {
         if (distillPlaybook === undefined) throw new Error('准则蒸馏不可用：插件未初始化');
         const result = await distillPlaybook({ maxCandidates: 5 });
@@ -354,6 +386,8 @@ export function createTools(deps: ToolDeps) {
       if (id !== undefined) removed += memory.remove(id) ? 1 : 0;
       if (source !== undefined) removed += memory.removeBySource(source);
       if (subject !== undefined) removed += memory.removeBySubject(subject);
+      // 删了记忆就要重算准则证据链，否则依赖它的准则会变成「没有主人的结论」
+      if (removed > 0) refreshEvidence?.();
       touch();
       return JSON.stringify({ removed, memory: memory.stats() });
     },
