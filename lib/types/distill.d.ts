@@ -31,6 +31,8 @@ export interface DistillCandidate {
     sourceIds?: string[];
     /** 阶段性有效的准则：ISO 日期或相对表达（"7d" / "2026-12-31"）；长期有效则不填。 */
     validUntil?: string;
+    /** 何时适用（自然语言，如「发布版本时」）。 */
+    when?: string;
 }
 export interface DistillResult {
     reflection: DistillReflection;
@@ -52,6 +54,16 @@ export interface DistillInput {
     maxCandidates?: number;
     /** 项目约定摘要（AGENTS.md），用于避免生成与之冲突的准则。 */
     projectRules?: string;
+    /**
+     * 待补的知识缺口（P6 学习闭环）。
+     *
+     * 有缺口时，蒸馏要**优先针对它们**产出候选——这比泛泛归纳已有记忆有价值得多：
+     * 泛泛归纳只能重组已知，针对缺口才是真的在学习新东西。
+     */
+    gaps?: ReadonlyArray<{
+        id: string;
+        text: string;
+    }>;
 }
 export declare function buildDistillPrompt(input: DistillInput): string;
 /**

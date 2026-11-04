@@ -2,6 +2,7 @@
 
 > 状态：**中间态，不可发版**（后端完整可用，UI 缺挂主题入口）
 > 更新时间：2026-11-04
+> 后续分析与「学习机制」设计：[evaluation-review-and-learning.md](evaluation-review-and-learning.md)
 > 前置调研：`docs/topic-research.md`（论文）、`docs/topic-research-oss.md`（开源项目）、`docs/future-knowledge-base.md`（暂缓方案）
 
 ---

@@ -18,7 +18,7 @@ import { copyFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile }
 import { readFileSync, renameSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
-import { resolveInPackage } from './util.ts';
+import { resolveDataFile } from './util.ts';
 
 /** 同时保留的快照份数。 */
 const MAX_SNAPSHOTS = 5;
@@ -58,7 +58,7 @@ export class JsonStateStore<T> {
   private storageWarning = '';
 
   constructor(options: JsonStoreOptions<T>) {
-    this.filePath = options.filePath === undefined ? resolveInPackage('cognition-state.json') : resolve(options.filePath);
+    this.filePath = options.filePath === undefined ? resolveDataFile('cognition-state.json') : resolve(options.filePath);
     this.checksumPath = `${this.filePath}.sha256`;
     this.lockPath = `${this.filePath}.lock`;
     this.snapshotDir = join(dirname(this.filePath), '.snapshots');

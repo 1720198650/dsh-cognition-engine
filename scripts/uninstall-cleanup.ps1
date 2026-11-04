@@ -1,4 +1,4 @@
-﻿# cognition-engine uninstall cleanup
+# cognition-engine uninstall cleanup
 # Removes the plugin's data files and the AGENTS.md section it added.
 # The plugin itself must still be removed through plugin_manager / dsh plugin.
 
@@ -39,6 +39,17 @@ $snapshotDir = Join-Path $pluginRoot '.snapshots'
 if (Test-Path $snapshotDir) {
     Remove-Item $snapshotDir -Recurse -Force
     Write-Host "[removed] $snapshotDir"
+}
+
+# 1c) 独立数据目录（v0.10.1 起用户数据默认放这里，与代码分开）
+if ($env:DSH_COGNITION_DATA_DIR) {
+    $dataRoot = $env:DSH_COGNITION_DATA_DIR
+} else {
+    $dataRoot = Join-Path $env:USERPROFILE '.dsh\cognition-engine'
+}
+if (Test-Path $dataRoot) {
+    Remove-Item $dataRoot -Recurse -Force
+    Write-Host "[removed] $dataRoot"
 }
 
 # 2) the AGENTS.md section that points at cognition_context

@@ -127,6 +127,9 @@ window.__ModuleLoader__.load({
         pbEnforce: '拦截',
         pbAudit: '审计',
         pbRules: '规则',
+        pbOriginHuman: '用户确认',
+        pbOriginAgent: 'AI 记录',
+        pbWhen: '何时适用（一句话，如「发布版本时」）',
         pbTrigger: '触发条件（正则，匹配「工具名 + 参数 JSON」）',
         pbRequired: '必须满足（正则，空 = 触发即违反）',
         pbSaveRules: '保存规则',
@@ -1188,9 +1191,20 @@ window.__ModuleLoader__.load({
                         dict.pbViolations + ' ' + entry.violations)
                     : null,
                   h('span', null, entry.id),
+                  h(
+                    'span',
+                    { style: { ...S.chip, color: entry.origin === 'human' ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-warn-primary)' } },
+                    entry.origin === 'human' ? dict.pbOriginHuman : dict.pbOriginAgent,
+                  ),
                   topicChips(entry.topicIds || []),
                   topicAssignButton('rule', entry.id),
-                  h('span', null, `helpful=${entry.helpful} harmful=${entry.harmful}`),
+                  h(
+                    'span',
+                    { title: 'applied=应用 good=应用且好 bad=应用且差 missed=该用没用 corrected=用户纠正' },
+                    entry.usage
+                      ? `用 ${entry.usage.applied} · 好 ${entry.usage.appliedGood} · 差 ${entry.usage.appliedBad} · 漏 ${entry.usage.missed}`
+                      : `helpful=${entry.helpful} harmful=${entry.harmful}`,
+                  ),
                   entry.validTo
                     ? h('span', null, '有效期至 ' + new Date(entry.validTo).toLocaleDateString())
                     : null,
@@ -1246,6 +1260,13 @@ window.__ModuleLoader__.load({
                   ? h(
                       'div',
                       { style: S.item },
+                      h('div', { style: S.meta }, h('span', null, dict.pbWhen)),
+                      h('input', {
+                        id: 'pbWhen-' + entry.id,
+                        defaultValue: entry.when || '',
+                        placeholder: '发布版本时',
+                        style: S.input,
+                      }),
                       h(
                         'div',
                         { style: S.meta },
@@ -1270,11 +1291,13 @@ window.__ModuleLoader__.load({
                           type: 'button',
                           style: S.tab,
                           onClick: async () => {
+                            const when = document.getElementById('pbWhen-' + entry.id).value;
                             const trigger = document.getElementById('pbTrigger-' + entry.id).value;
                             const required = document.getElementById('pbRequired-' + entry.id).value;
                             await post(
                               '/cognition-engine/playbook/act?action=flags&id=' +
                                 encodeURIComponent(entry.id) +
+                                '&when=' + encodeURIComponent(when) +
                                 '&trigger=' + encodeURIComponent(trigger) +
                                 '&required=' + encodeURIComponent(required),
                             );

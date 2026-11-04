@@ -9,7 +9,7 @@
 
 import { appendFile, mkdir, readFile, rename, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { resolveInPackage } from './util.ts';
+import { resolveDataFile } from './util.ts';
 
 export interface AuditEvent {
   /** 操作类型：remember / forget / update / delete / restore / consolidate / clear / import。 */
@@ -35,7 +35,7 @@ export class AuditLog {
   private chain: Promise<void> = Promise.resolve();
 
   constructor(options: AuditLogOptions = {}) {
-    this.filePath = options.filePath === undefined ? resolveInPackage('cognition-audit.jsonl') : resolve(options.filePath);
+    this.filePath = options.filePath === undefined ? resolveDataFile('cognition-audit.jsonl') : resolve(options.filePath);
     this.maxBytes = Math.max(64 * 1024, options.maxBytes ?? 5 * 1024 * 1024);
   }
 

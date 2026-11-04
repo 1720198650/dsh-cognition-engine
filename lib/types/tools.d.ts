@@ -14,6 +14,16 @@ import { LongHorizonTaskManager } from './task_manager.ts';
 /** 工具定义用到的全部外部依赖。 */
 export interface ToolDeps {
     memory: TemporalMemoryStore;
+    /** 记忆变更后重算准则证据链（作废会传染）。 */
+    refreshEvidence?: () => void;
+    /** 登记知识缺口。 */
+    gapRecorder?: (text: string, context?: string) => {
+        id: string;
+        duplicate: boolean;
+        open: number;
+    };
+    /** 分项打标。 */
+    playbookRate?: (id: string, kind: 'applied', trace?: string) => boolean;
     /** 主题注册表：用于按主题分组展示矛盾。 */
     topics: TopicStore;
     taskManager: LongHorizonTaskManager;
@@ -214,6 +224,14 @@ export declare function createTools(deps: ToolDeps): readonly [{
         required: string[];
         properties: {
             query: {
+                type: string;
+                description: string;
+            };
+            ruleId: {
+                type: string;
+                description: string;
+            };
+            usageKind: {
                 type: string;
                 description: string;
             };
