@@ -558,27 +558,42 @@ npm run eval       # 20 条评测 + token 预算门禁
 
 ### 去重阈值
 
-| 来源 | 阈值 | 说明 |
+**曾经**是 0.70 一刀切。2026-11 改成三档，因为二元阈值两头都不对：
+
+| 情况 | 处置 | 度量 |
 |---|---|---|
-| ACE (ICLR 2026) | 0.90 | 稠密向量口径 |
-| **本项目** | **0.70** | 字二元组词频余弦 |
+| 归一化后完全相同（全半角/标点/空白差异） | 直接拒 | 文本哈希 |
+| 高度重复 | 自动合并 | min(余弦, LCS) ≥ **0.85** |
+| 相近但不同 | 收下 + 标注「与 X 相近」 | min(余弦, LCS) ∈ [0.5, 0.85) |
+| 其余 | 收下 | — |
 
-实测标定点：
+**合并用 `min` 而不是 `max`**：`max` 是召回导向（适合冲突提示），
+而合并不可逆，必须两个度量都确认——宁可漏合并，不可错合并。
 
-| 场景 | 相似度 |
-|---|---|
-| 完全相同 | 1.000 |
-| 只差几个字 | 0.759 |
-| 同义改写 | 0.694 |
-| 意思相同、措辞不同 | 0.522 |
-| 完全无关 | 0.000 |
+实测标定点（字二元组余弦 / LCS）：
 
-用 0.90 会漏掉「只差几个字」这种最该拦的情况，所以降到 0.70。
+| 场景 | 余弦 | LCS |
+|---|---|---|
+| 完全相同 | 1.000 | 1.000 |
+| 只差几个字 | 0.759 | 0.87 |
+| 同义改写 | 0.694 | 0.60 |
+| 意思相同、措辞不同 | 0.522 | 0.59 |
+| 完全无关 | 0.000 | 0.16 |
 
 ### 冲突判定阈值
 
-同一句话改否定词 → 0.915；「必须跑」改「不要跑」→ 0.786；「不跳步」改「可以跳步」→ 0.420。
-取 **0.38** 才能覆盖最后一种。冲突只打标记给人工看，误报代价远小于漏报。
+相似度阈值取 **0.38**（用的是综合相似度 = max(余弦, LCS)）。标定：
+
+| 场景 | 相似度 |
+|---|---|
+| 同一句话改否定词 | 0.915 |
+| 「必须跑」→「不要跑」 | 0.786 |
+| 「不可跳步」→「可以跳步」 | 0.933 |
+| **本项目真实准则两两（最高）** | **0.173** |
+
+但**光有相似度不够**：否定词是「有没有」而不是「管到哪」，会把
+「不可跳步」和「不必执行」判成同极性而漏检。所以加了 NegEx 式的作用域比对——
+一方否定 X、另一方肯定 X 才算矛盾。冲突只打标记给人工看，误报代价远小于漏报。
 
 ### 为什么「准则」不能整篇重写
 
@@ -618,6 +633,28 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 
 ---
 
+
+## 研究文档
+
+设计决策背后的调研都在 `docs/` 里，**包括没采纳的方案和为什么没采纳**：
+
+| 文档 | 内容 |
+|---|---|
+| [docs/research-bm25-retrieval.md](docs/research-bm25-retrieval.md) | BM25 / IDF / 中文分词：实测 MRR、参数网格搜索、显著性检验（含可复现基准 `docs/bench-bm25/`） |
+| [docs/research-negex-and-ranking.md](docs/research-negex-and-ranking.md) | NegEx 完整规则表（16 伪否定 / 15 后置否定 / 终止词）、中文否定 12 条规则、双重否定统计、多信号排序（RRF / Generative Agents 对比） |
+| [docs/research-frozen-weight-learning.md](docs/research-frozen-weight-learning.md) | 冻结权重下的学习与遗忘：ExpeL / Voyager / AWM / Reflexion / ReasoningBank / ACE / PATH-Bench / Oblivion 的机制与数字 |
+| [docs/research-philosophy-engineering.md](docs/research-philosophy-engineering.md) | 哲学工程化项目逐项核实：GRACE / SCL / LeAP / ITEM / HADES / cognee，**含两个被证伪的引用** |
+| [docs/topic-research.md](docs/topic-research.md) / [topic-research-oss.md](docs/topic-research-oss.md) | 为什么删掉自动聚类：论文证据 + 开源项目对比 |
+| [docs/in-context-learning-research.md](docs/in-context-learning-research.md) | 「学习」在这个插件里到底指什么；四类记忆我们占哪几格 |
+| [docs/upgrade-plan-v2.1.md](docs/upgrade-plan-v2.1.md) | 可信度治理的完整设计方案（六条机制 + 八阶段路线 + 验收标准） |
+| [docs/evaluation-review-and-learning.md](docs/evaluation-review-and-learning.md) | 对外部评估备忘的逐条核实与反驳（含「哪三条说错了」） |
+
+**取证原则：查不到的写「未找到」，不补全。** 上面几份文档里明确标注了几处查不到的东西：
+
+- 「veritas-tms」**这个项目不存在**（GitHub 搜索 0 结果）；
+- HADES 的 `anchoredTo` 字段在其仓库 201 个文件里 **0 命中**；
+- 中文「规则/指令文本」否定识别的论文**未找到**；
+- 成熟的中文 NegEx + 作用域开源实现**未找到**。
 
 ## 参考与致谢
 
@@ -660,7 +697,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 |---|---|
 | [ACE: Agentic Context Engineering](https://arxiv.org/abs/2510.04618)（ICLR 2026） | **一条式条目 + 双向计数**（`[ctxt-00001] helpful=2 harmful=0 :: …`）；**LLM 只产 ADD 候选，合并/去重/淘汰交给确定性代码**——这是增量比整篇重写高 13.4 个点的根因；反思 3–5 轮最优 |
 | [Dynamic Cheatsheet](https://arxiv.org/abs/2504.07952)（EACL 2026） | 分节 + 使用计数、长度预算写进提示词；**DC-∅ 对照**（同指令 + 空小抄）说明「换成任何项目都成立」的套话增益为零，据此加了私有性校验 |
-| [MemoryBank](https://arxiv.org/abs/2305.10250)（AAAI 2024） | 艾宾浩斯遗忘曲线 `R = e^(−t/S)`，被召回即增大强度 S；本项目的 `decay()` 按此让常用记忆衰减更慢 |
+| [MemoryBank](https://arxiv.org/abs/2305.10250)（AAAI 2024） | 遗忘曲线 + 「被召回即增大强度 S」的设计。**公式已改**：从它的指数形式换成幂律（见下「遗忘曲线」），因为指数在 90 天时只剩 0.0001，等于把记忆判死 |
 | [Mem0](https://arxiv.org/abs/2504.19413) | ADD / UPDATE / DELETE / NOOP 四分类与「UPDATE 前必须比较信息量」；其 token −73%、延迟 −92% 的数据支撑了「蒸馏优于堆上下文」的判断 |
 
 ### 反思
@@ -680,6 +717,64 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [dsh-superagent-prototype](https://github.com/deepseek-ai/dsh-superagent-prototype) | 准入矩阵与「默认不做」；Inline & Spill 的 `chars + read pointer`；Worker 异步隔离 |
 | [dsh-context-doctor](https://github.com/Zhenyu98/dsh-context-doctor) | 工具 schema 的 token 成本量化思路（本项目用真分词器自测） |
 | [dsh-tool-squeeze](https://github.com/w2829562572-dev/dsh-tool-squeeze) | 工具结果压缩与原文留存的取舍（评估后未采用） |
+
+### 检索与相似度
+
+| 来源 | 借了什么 |
+|---|---|
+| [BM25 — Robertson & Zaragoza, *The Probabilistic Relevance Framework*](https://www.staff.city.ac.uk/~sbrp622/papers/foundations_bm25_review.pdf)（2009） | 本项目 `bm25Score()` 的全部公式：IDF 用 `ln(1+(N−df+0.5)/(df+0.5))` 保证非负、TF 饱和（k1）、长度归一（b）。参数在本项目 212 个真实章节上网格搜索定为 **k1=1.2 / b=0.5** |
+| [Lucene 6.0 的相似度切换（LUCENE-6789）](https://issues.apache.org/jira/browse/LUCENE-6789) | 「TF-IDF → BM25 是工业界已验证的升级」这一判断的出处 |
+| [Xapian 的 k1=1 / b=0.5 默认值](https://xapian.org/docs/bm25.html) | 短文档语料应把 b 取低——本项目的 b=0.5 与此一致 |
+| [Lucene CJKBigramFilter](https://lucene.apache.org/core/9_0_0/analysis/common/org/apache/lucene/analysis/cjk/CJKBigramFilter.html) | 中文按二元组切分是工业标准做法；本项目 `tokenize()` 的 bigram + 虚词过滤即源于此 |
+| LCS（最长公共子序列） | 中文改写只换个别字，二元组余弦抓不住（「发版前要跑测试」vs「发布版本之前要先跑测试」：余弦 0.107，LCS 0.600）。Dice 归一化实现见 `lcsSimilarity()` |
+
+### 否定识别
+
+| 来源 | 借了什么 |
+|---|---|
+| [NegEx — Chapman et al., *A Simple Algorithm for Identifying Negated Findings*](https://doi.org/10.1006/jbin.2001.1029)（J Biomed Inform 2001） | **否定触发词 + 作用域 + 终止规则**的核心思路；伪否定（pseudo-negation）必须最长匹配后整段跳过 |
+| [ConText — Harkema et al. 2009](https://pmc.ncbi.nlm.nih.gov/articles/PMC2757457/) | NegEx 的扩展：时间性 / 假设性 / 经验者三个维度；本项目冲突判定用到它「时间不同是取代、条件不同是例外」的区分 |
+| 中文否定规则表 | 双重否定（`不得不/不能不/未尝不/非…不可`）在中文里 **83.2% 是加强肯定**（基于 8,639 句统计），必须先归一化再判极性；伪否定实词（非常/未来/别人/特别）要走白名单 |
+
+### 遗忘曲线
+
+| 来源 | 借了什么 |
+|---|---|
+| [Wixted & Ebbesen, *On the Form of Forgetting*](https://doi.org/10.1111/j.1467-9280.1991.tb00175.x)（Psych Sci 1991） | **幂函数比指数拟合更好**；两者在短延迟几乎一致，分歧只在长延迟 |
+| [Rubin & Wenzel 1996](https://doi.org/10.1037/0033-295X.103.4.734)（Psych Review） | 210 个数据集的元分析：幂函数整体最优 |
+| [FSRS（Open Spaced Repetition）](https://github.com/open-spaced-repetition/fsrs4anki) | 具体公式 `R=(1+19/81·t/S)^(−0.5)`，t=S 时 R=0.9。本项目照此实现并加了 0.2 下界 |
+
+### 信念修正
+
+| 来源 | 借了什么 |
+|---|---|
+| [Doyle, *A Truth Maintenance System*](https://dspace.mit.edu/handle/1721.1/6197)（Artificial Intelligence 1979） | **撤回信念不是删一行**：信念携带 justification，撤回要沿依赖网络传播。本项目准则的 `evidence` 状态（intact/weakened/orphaned）就是这个机制 |
+| de Kleer, *An Assumption-Based TMS*（1986） | 每个推导事实携带它的 assumption set；本项目用 `sourceIds` 承担同一角色 |
+| [W3C PROV-O](https://www.w3.org/TR/prov-o/) | `prov:wasDerivedFrom` 作为一等推导边——污染集 = 沿边可达集 |
+| [AGM 信念修正](https://doi.org/10.2307/2274239)（Alchourrón, Gärdenfors, Makinson 1985） | expansion / revision / contraction 三分；**确信度排序**（已验证 > 未验证，而非新 > 旧） |
+
+### 经验学习与准入
+
+| 来源 | 借了什么 |
+|---|---|
+| [LeAP — *Beyond Retrieval: Layered Epistemic Agent Protocol*](https://zenodo.org/records/21029662) | **四层认识类型**（observation → claim → fact → belief）+ 写权限分离：agent 不能自封为 fact；晋升一次一级 |
+| [SCL — *Structured Cognitive Loop*](https://arxiv.org/abs/2510.05107) | **propose vs verified state** 的分离：模型只提出候选，外部记忆保存已验证状态 |
+| [GRACE](https://arxiv.org/abs/2601.10520)（AAAI IASEAI） | 规范判断与工具决策解耦；规范推理不依赖模型能力。（本项目只借「规范在模型外」这一条，未采用其 defeasible logic） |
+| [ExpeL](https://arxiv.org/abs/2308.10144)（AAAI 2024） | 从经验对比中提取「洞察」并带计数 → 本项目的准则本与 `helpful/harmful` 计数 |
+| [Voyager](https://arxiv.org/abs/2305.16291) | 技能必须先验证才能入库；本项目「蒸馏产出走 candidate，人工确认才 active」同构 |
+| [Agent Workflow Memory](https://arxiv.org/abs/2409.07429) | 把多步轨迹归纳成可复用工作流——本项目 `when` 字段的方向参考 |
+| [ReasoningBank](https://arxiv.org/abs/2509.25140)（ICLR 2026） | k=1 检索就够；判官只有 72.7% 准确但 70–90% 噪声下性能不敏感 → 本项目降级门槛设为「样本 ≥5 且好评率 <0.3」 |
+| [forge_dc](https://openreview.net/forum?id=7XhMLOsQoA)（NeurIPS 2026 PALM） | **同一条纠正写成带触发点的祈使规则合规 95%，写成描述性文本 55%，且 token 少约 10 倍**——本项目每条准则带 `when` 的直接依据 |
+| [MemPrompt](https://arxiv.org/abs/2201.06009) | 让模型先输出「它对用户意图的理解」，用户纠正理解而不是纠正答案 |
+
+### 评审基准
+
+| 来源 | 借了什么 |
+|---|---|
+| [PATH-Bench — *Path-Dependent Evaluation of Lifelong Agents*](https://arxiv.org/abs/2608.01149)（2026） | **FGT（遗忘）指标**；以及「加了记忆反而变差」（负 FGT）的实测证据。本项目的 SEU 用时准入（`[可复用]/[仅参考]/[存疑]`）来自它的 preserve/abstract/ignore 三档，实测让 FGT 最多降 16.84pp |
+| [Oblivion — *Decay-Driven Activation*](https://arxiv.org/abs/2604.00131) | 衰减驱动激活、规则类记忆永不删除 |
+| [Lifelong Learning of LLM-based Agents: A Roadmap](https://arxiv.org/abs/2501.07278)（2025） | 记忆四分（working / episodic / semantic / parametric）；「冻结主干只是把稳定性-可塑性两难挪了位置」 |
+| [Is In-Context Learning Learning?](https://arxiv.org/abs/2409.15790)（ICLR 2026）、[LLM 不能自我纠错推理](https://arxiv.org/abs/2310.01798)（ICLR 2024） | 「反馈必须来自外部结果」的理论依据 |
 
 ### 评测方法
 
