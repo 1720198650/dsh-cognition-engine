@@ -120,7 +120,8 @@ const checkers: Record<string, (params: Params, expect: Params) => Promise<void>
     const fact = store.ingest({ content: p.content, subject: p.subject });
     equal(store.decay(fact.id, now), 1, '初始衰减应为 1');
     now += p.halfLifeMs;
-    approx(store.decay(fact.id, now), e.afterOneHalfLife, 1e-9, '一个半衰期后应剩一半');
+    // 幂律（FSRS 形式）：t=S 时 R=0.9，不是指数衰减的 0.5
+      approx(store.decay(fact.id, now), e.afterOneHalfLife, 1e-9, '一个半衰期后应剩约九成');
     store.reinforce(fact.id, 0.5);
     equal(store.decay(fact.id, now), e.afterReinforce, '强化后应重置为 1');
   },

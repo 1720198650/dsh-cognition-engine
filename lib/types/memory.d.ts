@@ -208,8 +208,69 @@ export declare function isValidAt(fact: TemporalFact, validTime: number): boolea
 export declare function isRecordedAt(fact: TemporalFact, recordedTime: number): boolean;
 /** 是否「此刻的当前真值」：未被取代 + 已知 + 当前有效。 */
 export declare function isCurrent(fact: TemporalFact, now: number): boolean;
+/**
+ * 归一化文本，仅用于**比较**（不要拿它存库）。
+ *
+ * 干掉「同一条被存两遍」的最常见来源：全半角、大小写、空白、
+ * 标点、零宽字符。这一步几乎零成本，收益比换任何相似度算法都直接
+ * （SimHash/MinHash 在几百条规模是过度设计）。
+ */
+export declare function normalizeForCompare(text: string): string;
 /** 英文按词、中文按二元组切分，返回词频表（纯虚词 bigram 不产出）。 */
 export declare function tokenize(text: string): Map<string, number>;
+/**
+ * 最长公共子序列（LCS）相似度，Dice 归一化。
+ *
+ * 为什么需要它：中文二元组余弦抓不住「改写」。
+ * 实测：「发版前要跑完整测试」vs「发布版本之前必须先跑测试」
+ *   bigram 余弦只有 0.107，LCS 有 0.600——因为字序相同、只换了个别字。
+ *
+ * 标定数据（本项目真实准则）：
+ *   真实准则两两 LCS 最高 0.173（不会互相误判）
+ *   改了否定词的冲突对 LCS 0.769 / 0.933 / 0.875（能检出）
+ *
+ * 只用于**短文本两两比较**（准则、记忆条目），不要拿来做全库检索——
+ * 它是 O(n×m)，没有索引。
+ */
+export declare function lcsSimilarity(a: string, b: string): number;
+/**
+ * 两个短文本的综合相似度：二元组余弦与 LCS 取较大者。
+ *
+ * 余弦擅长「用词重合」，LCS 擅长「改写」。两者都高才算像，
+ * 取 max 是因为任一种命中都足够说明问题。
+ */
+export declare function textSimilarity(a: string, b: string): number;
+/**
+ * BM25 语料统计。
+ *
+ * 为什么需要它：我们原来用**纯 TF 余弦**（没有 IDF）。
+ * 在 212 个真实章节上实测，把查询从「原文标题」换成更真实的形态后：
+ *
+ *   前一半标题     余弦 49.7% → BM25 77.0%   (+27.3pp)
+ *   标题 + 怎么处理 余弦 76.4% → BM25 89.2%   (+12.8pp)
+ *   去掉修饰词     余弦 52.3% → BM25 74.1%   (+21.8pp)
+ *
+ * 原因：余弦没有 IDF，「的/是/处理」这类高频词会主导打分，
+ * 长文档也会因为词多而占便宜。BM25 三个机制正好治这三个病：
+ * IDF 压低常见词、长度归一化、TF 饱和。
+ */
+export interface Bm25Stats {
+    /** 每个词出现在多少个文档里。 */
+    df: Map<string, number>;
+    /** 平均文档长度（词数）。 */
+    avgLen: number;
+    /** 文档总数。 */
+    N: number;
+}
+/**
+ * 从一批已分词的文档构建 BM25 统计。
+ *
+ * 参数取值依据：在本项目 212 个真实章节上网格搜索，
+ * k1=1.2 / b=0.5 表现最好（短文本语料，长度差异小，所以 b 取低一些）。
+ */
+export declare function buildBm25Stats(docs: Iterable<Map<string, number>>): Bm25Stats;
+/** 单条查询对单条文档的 BM25 得分。 */
+export declare function bm25Score(query: Map<string, number>, doc: Map<string, number>, stats: Bm25Stats, k1?: number, b?: number): number;
 /** 余弦相似度。 */
 export declare function cosine(a: Map<string, number>, b: Map<string, number>): number;
 /** FNV-1a 32 位内容指纹（纯 TS，不依赖 node:crypto）。 */
@@ -264,6 +325,21 @@ export declare class TemporalMemoryStore {
      * 对齐 MemoryBank (AAAI 2024) 的 R = exp(-t/S)：强度 S 随召回增长，
      * 于是常用的记忆衰减更慢。我们用半衰期当 S——activation 每 +1，半衰期翻倍，
      * 最多放大 1 + MAX_STRENGTH_BOOST（=6）倍，避免高频记忆永不衰减。
+     */
+    /**
+     * 时间衰减（0.2 ~ 1.0）。
+     *
+     * 两个依据：
+     * 1. **幂律优于指数**——Wixted & Ebbesen 1991、Rubin & Wenzel 1996（210 个数据集）
+     *    都显示幂函数拟合更好。两者在短延迟几乎一致，**分歧在长延迟**：
+     *    指数半衰期 7 天时 90 天后只剩 0.0001（等于判死），
+     *    同样参数下幂律还有 0.50。这是「长期记忆」和「短期缓存」的区别。
+     * 2. **衰减不能决定真假**——条数少、使用频率低时，衰减参数根本估不出来。
+     *    它只该影响**排序**，不该影响一条记忆是否还成立，
+     *    更不能拿它触发删除（arXiv 2604.11364：最近没被访问 ≠ 不太真）。
+     *
+     * 公式照 FSRS：R = (1 + 19/81 · t/S)^(-0.5)，t=S 时 R=0.9。
+     * 取了下界 0.2——半年前的笔记仍有基础分，只是排序靠后。
      */
     decay(factOrId: TemporalFact | string, now?: number): number;
     /**

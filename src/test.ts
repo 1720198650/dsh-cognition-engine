@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import { TemporalMemoryStore, contentHash, isCurrent, tokenize } from './memory.ts';
+import { TemporalMemoryStore, bm25Score, buildBm25Stats, contentHash, cosine, isCurrent, lcsSimilarity, textSimilarity, tokenize } from './memory.ts';
 import { GapStore } from './gaps.ts';
 import { PlaybookStore } from './playbook.ts';
 import { TopicStore } from './topics.ts';
@@ -51,18 +51,27 @@ async function main(): Promise<void> {
   /* ---------------------------------------------------------------- */
   section('[1] 记忆衰减与强化');
 
-  await test('半衰期：每过一个半衰期权重减半', () => {
+  await test('衰减：幂律而非指数（长尾更厚，且有下界）', () => {
     let now = 1_000_000;
     const store = new TemporalMemoryStore({ now: () => now, halfLifeMs: 60_000 });
     const fact = store.ingest({ content: '部署区域：华东', subject: '部署区域' });
 
     assert.equal(store.decay(fact.id, now), 1);
 
+    // 幂律（FSRS 形式）：t=S 时 R=0.9，而不是指数衰减的 0.5。
+    // 依据：Wixted & Ebbesen 1991 / Rubin & Wenzel 1996 —— 幂函数拟合更好，
+    // 两者在长延迟才分叉，指数过早在"判死"一条记忆。
     now += 60_000;
-    assert.ok(Math.abs(store.decay(fact.id, now) - 0.5) < 1e-9, '一个半衰期后应为 0.5');
+    assert.ok(Math.abs(store.decay(fact.id, now) - 0.9) < 0.02, `一个半衰期后应约 0.9，实得 ${store.decay(fact.id, now)}`);
 
+    // 两个半衰期后仍明显高于指数会给出的 0.25
     now += 60_000;
-    assert.ok(Math.abs(store.decay(fact.id, now) - 0.25) < 1e-9, '两个半衰期后应为 0.25');
+    const two = store.decay(fact.id, now);
+    assert.ok(two > 0.75, `两个半衰期后不该掉太快，实得 ${two.toFixed(3)}`);
+
+    // 很久以后仍有下界：时间久 ≠ 不可信
+    now += 60_000 * 1000;
+    assert.equal(store.decay(fact.id, now), 0.2, '衰减有 0.2 下界，不会归零');
   });
 
   await test('强化：提升激活量并重置衰减计时', () => {
@@ -72,7 +81,7 @@ async function main(): Promise<void> {
 
     now += 120_000;
     const before = store.decay(fact.id, now);
-    assert.ok(before < 0.3, `衰减后应明显下降，实际 ${before}`);
+    assert.ok(before < 1 && before > 0.7, `幂律下 2 个半衰期约 0.83，实际 ${before.toFixed(3)}`);
 
     const reinforced = store.reinforce(fact.id, 0.5);
     assert.equal(reinforced.activation, 0.5);
@@ -121,11 +130,14 @@ async function main(): Promise<void> {
     const fact = store.ingest({ content: '高频记忆', subject: '高频' });
     store.reinforce(fact.id, 100, now);
 
-    // boost 封顶为 1 + MAX_STRENGTH_BOOST = 6 倍 → 有效半衰期 360s；
-    // 过 600s ≈ 1.67 个有效半衰期 → 0.5^1.67 ≈ 0.315
+    // boost 封顶为 1 + MAX_STRENGTH_BOOST = 6 倍 → 有效半衰期 360s，
+    // 过 600s ≈ 1.67 个有效半衰期。幂律下约 (1+19/81*1.67)^-0.5 ≈ 0.78。
     now += 600_000;
     const value = store.decay(fact.id, now);
-    assert.ok(value < 0.36 && value > 0.28, `应仍会衰减到 0.32 附近，实际 ${value.toFixed(3)}`);
+    assert.ok(value < 0.85 && value > 0.7, `应衰减到 0.78 附近，实际 ${value.toFixed(3)}`);
+    // 无论激活多高，最终都会衰减到 0.2 下界，但不会再低
+    now += 60_000 * 10_000;
+    assert.equal(store.decay(fact.id, now), 0.2, '再久也停在下界，不会归零');
   });
 
   await test('激活量高的记忆不被归档', () => {
@@ -911,6 +923,8 @@ async function main(): Promise<void> {
 
   await test('任务可挂主题，成为该主题的进行中事项', async () => {
     const file = resolve(packageRoot, '_research', 'test-task-topic.json');
+    // 先清掉上一轮残留，否则 pending 数量会累积
+    rmSync(file, { force: true });
     const manager = new LongHorizonTaskManager({ filePath: file, now: () => 1_000_000 });
     await manager.load();
     const task = await manager.create_task('整理 10.27 期文档整理', { topicIds: ['t_photo'] });
@@ -1217,6 +1231,151 @@ async function main(): Promise<void> {
     // 没有缺口时不该出现该段
     const plain = buildDistillPrompt({ entries: [], memories: [{ id: 'mem-1', subject: 'a', content: 'b' }] });
     assert.equal(plain.includes('待补的知识缺口'), false);
+  });
+
+  await test('LCS 相似度：改写对高分，无关对低分', () => {
+    // 改写（字序相同、换了个别字）——二元组余弦很低，LCS 应该很高
+    const paraphrase = lcsSimilarity('发版前要跑完整测试', '发布版本之前必须先跑测试');
+    assert.ok(paraphrase > 0.5, `改写对应 > 0.5，实得 ${paraphrase.toFixed(3)}`);
+    // 无关
+    const unrelated = lcsSimilarity('文档整理一格一照', 'npm 发布必须用官方源');
+    assert.ok(unrelated < 0.2, `无关对应 < 0.2，实得 ${unrelated.toFixed(3)}`);
+    // 改否定词的冲突对：高相似
+    const conflict = lcsSimilarity('发版流程不可跳步', '发版流程可以跳步');
+    assert.ok(conflict > 0.7, `冲突对应 > 0.7，实得 ${conflict.toFixed(3)}`);
+  });
+
+  await test('textSimilarity 取余弦与 LCS 的较大者', () => {
+    const a = '插件保持零外部依赖';
+    const b = '不要引入外部数据库依赖';
+    const cos = cosine(tokenize(a), tokenize(b));
+    const lcs = lcsSimilarity(a, b);
+    const combined = textSimilarity(a, b);
+    assert.equal(combined, Math.max(cos, lcs));
+    assert.ok(combined >= cos);
+    assert.ok(combined >= lcs);
+  });
+
+  await test('冲突检测：改写过的矛盾准则也能检出', () => {
+    const pb = newPlaybook();
+    // 旧条：无否定词
+    const old = pb.addManual({ content: '插件保持零外部依赖只用纯 JSON 文件', section: '约定' });
+    // 新条：改写 + 加了否定
+    const neu = pb.submit({ content: '不要引入外部数据库依赖，只用 JSON 存数据', section: '约定' });
+    assert.equal(neu.entry?.conflictWith, old.entry?.id, '改写过的矛盾对应该被检出');
+  });
+
+  await test('冲突检测：否定作用域不同不算矛盾（NegEx 思路）', () => {
+    const pb = newPlaybook();
+    // 旧条否定的是「跳步」，新条否定的是「检查」——否定的不是同一件事
+    pb.addManual({ content: '发版前必须跑完整测试，不可省略步骤', section: '约定' });
+    const free = pb.submit({ content: '发版前必须跑完整测试，不要加没必要的检查', section: '约定' });
+    assert.equal(free.entry?.conflictWith, undefined, '否定不同的事不该判矛盾');
+  });
+
+  await test('冲突检测：一方否定、另一方肯定同一件事才算矛盾', () => {
+    const pb = newPlaybook();
+    // 旧条肯定「跑完整测试」，新条否定「跑完整测试」→ 真矛盾
+    const old = pb.addManual({ content: '发版前必须跑完整测试再打包', section: '约定' });
+    const neu = pb.submit({ content: '发版前不要跑完整测试就直接打包', section: '约定' });
+    assert.equal(neu.entry?.conflictWith, old.entry?.id);
+  });
+
+  await test('冲突检测：两条都含「不」但否定的不是同一件事也能检出', () => {
+    const pb = newPlaybook();
+    // 旧条：肯定「依次执行」，另有一个无关否定「不可跳步」
+    const old = pb.addManual({
+      content: '功能发版前依次执行：卸载验证→兼容性检查→一键安装验证，不可跳步。',
+      section: '约定',
+    });
+    // 新条：否定「依次执行」
+    const neu = pb.submit({ content: '功能发版前不必依次执行卸载验证和兼容性检查，可以直接发布', section: '约定' });
+    assert.equal(neu.entry?.conflictWith, old.entry?.id, '否定作用域比对应该检出这种矛盾');
+  });
+
+  await test('BM25：IDF 压低常见词，稀有词权重更高', () => {
+    const common = tokenize('这是常见的词 处理 处理 处理');
+    const rare = tokenize('这是罕见的词 registry 只有这里出现');
+    const stats = buildBm25Stats([common, rare, tokenize('这是常见的词 处理 处理')]);
+    // 「处理」在多数文档出现（df 高）→ IDF 低；「registry」只在一篇出现 → IDF 高
+    const qCommon = tokenize('处理');
+    const qRare = tokenize('registry');
+    const idfCommon = Math.log(1 + (stats.N - (stats.df.get('处理') ?? 0) + 0.5) / ((stats.df.get('处理') ?? 0) + 0.5));
+    const idfRare = Math.log(1 + (stats.N - (stats.df.get('registry') ?? 0) + 0.5) / ((stats.df.get('registry') ?? 0) + 0.5));
+    assert.ok(idfRare > idfCommon, `稀有词 IDF 应更高：${idfRare.toFixed(2)} vs ${idfCommon.toFixed(2)}`);
+    assert.ok(bm25Score(qRare, rare, stats) > 0);
+    assert.equal(bm25Score(qCommon, rare, stats), 0, '不存在的词得 0 分');
+  });
+
+  await test('BM25：长文档不会因为词多而占便宜（长度归一化）', () => {
+    const base = tokenize('发布流程要按顺序执行');
+    const long = tokenize('发布流程要按顺序执行，另外还有很多其他无关的内容填充在这里面，让这篇文档变得很长很长，词也很多很多');
+    const stats = buildBm25Stats([base, long]);
+    const q = tokenize('发布流程');
+    const sShort = bm25Score(q, base, stats);
+    const sLong = bm25Score(q, long, stats);
+    assert.ok(sShort > sLong, `同样命中，短文档应得分更高：${sShort.toFixed(2)} vs ${sLong.toFixed(2)}`);
+  });
+
+  await test('BM25 召回：真实语料上「发版流程」能正确命中', () => {
+    const store = new TemporalMemoryStore({});
+    store.ingest({ subject: '发布流程', content: '发布流程要先跑完整测试再发版', source: 'user', tags: [] });
+    store.ingest({ subject: '发版频率', content: '发版频率每天最多一次', source: 'user', tags: [] });
+    store.ingest({ subject: '文档整理', content: '文档整理一格一照', source: 'user', tags: [] });
+    const hits = store.recall('发版流程要做什么', { limit: 1 });
+    assert.equal(hits[0]?.fact.subject, '发布流程', `应命中发布流程，实得 ${hits[0]?.fact.subject}`);
+    rmSync(resolve('.dsh-bm25-test.json'), { force: true });
+  });
+
+  await test('否定识别：伪否定词不算否定（非常/未来/别人/特别）', () => {
+    const pb = newPlaybook();
+    const base = pb.addManual({ content: '发版前要跑完整测试再打包发布', section: '约定' });
+    // 「非常」里的"非"不是否定词，不该改变极性
+    const r = pb.submit({ content: '非常重要的是发版前要跑完整测试', section: '约定' });
+    assert.equal(r.entry?.conflictWith, undefined, '含「非常」的句子不该判成否定而触发冲突');
+    assert.ok(pb.get(base.entry!.id) !== undefined);
+  });
+
+  await test('否定识别：双重否定是加强肯定（不得不/无不）', () => {
+    const pb = newPlaybook();
+    pb.addManual({ content: '发版前要跑完整测试再打包发布', section: '约定' });
+    // 「不得不」= 必须，语义是肯定，不该与"要跑测试"构成矛盾
+    const r = pb.submit({ content: '不得不发版前跑完整测试再打包', section: '约定' });
+    assert.equal(r.entry?.conflictWith, undefined, '「不得不」是加强肯定，不是否定');
+  });
+
+  await test('否定识别：条件标记不算否定（除非/除了/否则）', () => {
+    const pb = newPlaybook();
+    pb.addManual({ content: '发版前要跑完整测试再打包发布', section: '约定' });
+    const r = pb.submit({ content: '除非有特殊情况否则要跑测试再打包', section: '约定' });
+    assert.equal(r.entry?.conflictWith, undefined, '「除非」是条件标记，不是否定');
+  });
+
+  await test('否定识别：真否定仍要检出冲突', () => {
+    const pb = newPlaybook();
+    const old = pb.addManual({ content: '发版前必须跑完整测试再打包', section: '约定' });
+    const neu = pb.submit({ content: '发版前不要跑完整测试就直接打包', section: '约定' });
+    assert.equal(neu.entry?.conflictWith, old.entry?.id, '「不要」是真否定，应检出冲突');
+    // 「不可」对「可以」也要检出
+    const pb2 = newPlaybook();
+    const a = pb2.addManual({ content: '发版流程不可跳步骤必须完整执行', section: '约定' });
+    const b = pb2.submit({ content: '发版流程可以跳步骤直接快速执行', section: '约定' });
+    assert.equal(b.entry?.conflictWith, a.entry?.id, '「不可」对「可以」应检出冲突');
+  });
+
+  await test('排序分值：冷启动给中性分，样本多了才拉开', () => {
+    const pb = newPlaybook();
+    const cold = pb.addManual({ content: '这是一条全新的准则还没有任何使用记录', section: '约定' });
+    const warm = pb.addManual({ content: '另一条准则用于对比数值变化的情况', section: '约定' });
+    // 冷启动应给中性分（5 附近），而不是 0——
+    // 否则新条目永远排最后，活跃条目满员时反而先淘汰刚加入的
+    assert.ok(pb.effectiveScore(pb.get(cold.entry!.id)!) > 4, '冷启动不该是 0 分');
+    for (let i = 0; i < 5; i += 1) pb.markUsage(warm.entry!.id, 'appliedGood');
+    assert.ok(pb.effectiveScore(pb.get(warm.entry!.id)!) > pb.effectiveScore(pb.get(cold.entry!.id)!), '好评多了应超过冷启动');
+    // 老计数必须 clamp，否则 20 次 helpful 就压过 base 上限
+    const legacy = pb.addManual({ content: '第三条准则用来测试老计数是否有上限', section: '约定' });
+    for (let i = 0; i < 20; i += 1) pb.mark(legacy.entry!.id, 'helpful');
+    assert.ok(pb.effectiveScore(pb.get(legacy.entry!.id)!) < 15, '老计数应被 clamp 住，不能无界增长');
   });
   /* ---------------------------------------------------------------- */
   console.log('');
