@@ -1077,7 +1077,6 @@ window.__ModuleLoader__.load({
             h('div', { style: S.item }, h('div', { style: S.itemTitle }, `${dict.tasks} ${(detail.counts || {}).tasks || 0}`)),
           );
         } else if (tab === 'memories') {
-        } else if (tab === 'memories') {
           body = renderList(detail.memories, (item) => {
             if (editingId === item.id) {
               return h(

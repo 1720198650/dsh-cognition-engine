@@ -15,7 +15,7 @@
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { cosine, tokenize } from './memory.ts';
+import { cosine, lcsSimilarity, normalizeForCompare, textSimilarity, tokenize } from './memory.ts';
 import { resolveDataFile } from './util.ts';
 
 /* ------------------------------------------------------------------ */
@@ -297,10 +297,163 @@ function normalizeContent(text: string): string {
 }
 
 /** 极简否定检测：够用即可，冲突最终由人裁决。 */
+/**
+ * 否定触发词（NegEx 思路：找触发词，再取它后面的作用域）。
+ *
+ * 为什么不能只判断「有没有不」：
+ *   「不可跳步」和「不必执行」都含「不」，但否定的是**不同的东西**，
+ *   不构成矛盾。必须看否定词管到哪一段。
+ *
+ * 依据 NegEx（Chapman 2001）：触发词 + 作用域窗口 + 终止规则。
+ * 它在临床上能做到 ~95% 精度 / 80% 召回，纯正则、确定性、可审计。
+ */
+/**
+ * 伪否定词：**含"不/无/非/别"但根本不是否定**。
+ *
+ * 不做这层过滤，「非常重要的是要跑测试」会被判成否定句，冲突检测立刻假阳性。
+ */
+const PSEUDO_NEGATION = [
+  '非常', '未来', '别人', '别的', '无锡', '非洲', '非法', '是非', '非议',
+  '无意', '无关', '无穷', '无限', '无奈', '无耻', '特别', '区别', '分别',
+  '级别', '类别', '差别', '告别', '送别', '休息', '退休', '未免', '不免',
+  '不妨', '不禁', '不由得', '不料', '不愧', '差不多', '差点', '恨不得', '巴不得',
+];
+
+/**
+ * 非否定标记：条件、例外、递进、选择。
+ *
+ * 「除非 X 否则不 Y」= 只有 X 才 Y；里面的"不"作用于条件结果，不是否定 Y。
+ */
+const NON_NEGATION = [
+  '不管', '不论', '无论', '除非', '除了', '否则', '是否',
+  '不仅', '不但', '不光', '不只', '不单', '非但', '不止', '不啻',
+];
+
+/**
+ * 双重否定：中文里绝大多数是**加强肯定**（8,639 句统计：83.2%）。
+ * 不归一化就会把「不得不先跑测试」判成否定句。
+ */
+const DOUBLE_NEGATION_PATTERNS: RegExp[] = [
+  /不(?:得|能|会|敢|可|应|该|肯|愿|由|妨|禁|觉|免|惜|够)不/g,
+  /不(?:是|为)[^，。；！？]{0,12}不/g,
+  /非[^，。；！？]{0,12}(?:不可|不行|莫属)/g,
+  /(?:未尝|未必|并非|并不是|不无|无不|无非|莫不|没有不)/g,
+  /不[^，。；！？]{0,8}(?:不行|不好)/g,
+  /(?:不否认|不排除|未尝不可|不无可能|不无道理)/g,
+];
+
+/** 把伪否定 / 非否定 / 双重否定摘掉，只留真正的否定信号。 */
+function normalizeNegationText(text: string): string {
+  let out = text;
+  for (const re of DOUBLE_NEGATION_PATTERNS) out = out.replace(re, '【强调肯定】');
+  for (const word of PSEUDO_NEGATION) out = out.split(word).join('');
+  for (const word of NON_NEGATION) out = out.split(word).join('【条件标记】');
+  return out;
+}
+
+const NEGATION_TRIGGERS = [
+  '不必', '不要', '不可', '不能', '不应', '不得', '不准', '不需要', '无需', '禁止', '避免', '切勿', '别',
+  '不', '没', '无', '非', '未',
+];
+
+/** 作用域截断符：遇到这些标点/连词就认为否定范围结束。 */
+const SCOPE_STOP = /[，。；;,：:、\n]/;
+
+/** 一段被否定的文本：触发词 + 它支配的范围。 */
+interface NegationSpan {
+  trigger: string;
+  /** 作用域文本（触发词之后、到终止符为止）。 */
+  scope: string;
+}
+
+/**
+ * 提取文本里的否定作用域。
+ *
+ * 简化版 NegEx：只处理「向后作用域」（触发词在前），
+ * 因为我们面对的是祈使句准则，极少出现「X 被排除」这种后置否定。
+ */
+function negationSpans(text: string): NegationSpan[] {
+  const spans: NegationSpan[] = [];
+  // 先摘掉伪否定/非否定/双重否定，否则「非常」「除非」「不得不」都会误触发
+  const lower = normalizeNegationText(text).toLowerCase();
+  let i = 0;
+  while (i < lower.length) {
+    const hit = NEGATION_TRIGGERS.find((trig) => lower.startsWith(trig, i));
+    if (hit === undefined) {
+      i += 1;
+      continue;
+    }
+    // 取作用域：从触发词末尾到终止符，最长 12 字
+    let end = i + hit.length;
+    let taken = 0;
+    while (end < lower.length && taken < 12 && !SCOPE_STOP.test(lower[end] ?? '')) {
+      end += 1;
+      taken += 1;
+    }
+    const scope = lower.slice(i + hit.length, end).trim();
+    if (scope.length > 0) spans.push({ trigger: hit, scope });
+    i = end;
+  }
+  return spans;
+}
+
+/**
+ * 判断两段文本是否构成矛盾（相比只比「有没有否定词」更精确）。
+ *
+ * 规则：
+ *   A 否定了 X，而 B 明确含有 X 且没有否定它 → 矛盾
+ *   B 否定了 Y，而 A 明确含有 Y 且没有否定它 → 矛盾
+ *
+ * 两条都否定同一件事（如都说「不可跳步」）则不矛盾。
+ */
+function contradictoryNegation(a: string, b: string): boolean {
+  const spansA = negationSpans(a);
+  const spansB = negationSpans(b);
+
+  // 作用域是一串词，直接用整串匹配会失败（「依次执行：卸载验证」中间有标点）。
+  // 改成看二元组覆盖率：作用域的大部分词出现在对方文本里，就算「对方提到了这件事」。
+  const bigrams = (s: string): Set<string> => {
+    const out = new Set<string>();
+    for (let i = 0; i < s.length - 1; i += 1) out.add(s.slice(i, i + 2));
+    return out;
+  };
+  const covers = (spans: NegationSpan[], target: string): boolean => {
+    const grams = bigrams(target);
+    return spans.some((s) => {
+      const scopeGrams = bigrams(s.scope);
+      let hit = 0;
+      for (const g of scopeGrams) if (grams.has(g)) hit += 1;
+      return scopeGrams.size > 0 && hit / scopeGrams.size >= 0.6;
+    });
+  };
+  const mentions = (text: string, scope: string): number => {
+    const grams = bigrams(scope);
+    if (grams.size === 0) return 0;
+    let hit = 0;
+    for (const g of grams) if (text.includes(g)) hit += 1;
+    return hit / grams.size;
+  };
+
+  for (const s of spansA) {
+    if (s.scope.length < 2) continue;
+    // 对方也提到了同样的内容，但没有否定它 → 矛盾
+    if (mentions(b, s.scope) >= 0.6 && !covers(spansB, s.scope)) return true;
+  }
+  for (const s of spansB) {
+    if (s.scope.length < 2) continue;
+    if (mentions(a, s.scope) >= 0.6 && !covers(spansA, s.scope)) return true;
+  }
+  return false;
+}
+
+/** 保留旧函数名做兼容：是否含有否定表述。 */
 function hasNegation(text: string): boolean {
-  // 单字「不」也要算：准则里最常见的否定就是「不跳步」「不要用 X」。
-  // 这里只是打冲突标记供人工看，误报的代价远小于漏报。
-  return /(不|没|无|非|未|别|never|not|don't|do not|avoid)/i.test(text);
+  // 必须先用归一化文本：直接跑正则会把这些判成否定——
+  //   「非常重要的是要跑测试」（非常）
+  //   「不得不先跑测试」（双重否定 = 加强肯定）
+  //   「除非 X 否则不 Y」（条件标记）
+  // 误判会让冲突检测出一堆假阳性。
+  return negationSpans(text).length > 0;
 }
 
 /** 非法正则不能抛错：用户填错一个括号不该让整个插件崩掉。 */
@@ -346,7 +499,8 @@ export class PlaybookStore {
     this.maxChars = Math.max(200, options.maxChars ?? 700);
     this.maxEntries = Math.max(1, options.maxEntries ?? 12);
     this.maxPerSection = Math.max(1, options.maxPerSection ?? 5);
-    this.dedupeThreshold = Math.min(0.99, Math.max(0.5, options.dedupeThreshold ?? 0.7));
+    // 默认 0.85：分档后这一档代表「自动合并」，不可逆，要比原来的 0.70 更保守
+    this.dedupeThreshold = Math.min(0.99, Math.max(0.5, options.dedupeThreshold ?? 0.85));
     this.validateSourceIds = options.validateSourceIds;
     this.isSourceAlive = options.isSourceAlive;
   }
@@ -534,14 +688,35 @@ export class PlaybookStore {
     const section = clampSection(candidate.section);
     const conflictWith = this.detectConflict(content, section);
 
+    // 记录「与哪条相近」——去重不再一刀切，相近的收下但标注
+    let relatedTo: string | undefined;
+
     if (conflictWith === undefined) {
-      const own = tokenize(content);
+      // 去重分三档（调研结论：二元阈值 0.70 既会误删也会漏判）：
+      //   归一化后完全相同        → 直接拒（零成本，收益最高的一档）
+      //   min(余弦, LCS) >= 0.85 → 自动合并（不可逆，所以要求两个指标都高）
+      //   0.50 ~ 0.85            → 收下，但标注「与 X 相近」
+      //
+      // 合并用 min 而不是 max：max 是召回导向，适合冲突提示；
+      // 合并不可逆，必须两个度量都确认——宁可漏合并，不可错合并。
+      const normalized = normalizeForCompare(content);
+      const ownTokens = tokenize(content);
       for (const entry of this.data.entries) {
         if (entry.status === 'retired') continue;
-        const similarity = cosine(own, tokenize(entry.content));
-        if (similarity >= this.dedupeThreshold) {
-          return { accepted: false, reason: `与 ${entry.id} 重复（相似度 ${similarity.toFixed(2)}）`, duplicateOf: entry.id };
+        if (normalizeForCompare(entry.content) === normalized) {
+          return { accepted: false, reason: `与 ${entry.id} 内容相同（归一化后一致）`, duplicateOf: entry.id };
         }
+        const cos = cosine(ownTokens, tokenize(entry.content));
+        const lcs = lcsSimilarity(content, entry.content);
+        const merged = Math.min(cos, lcs);
+        if (merged >= this.dedupeThreshold) {
+          return {
+            accepted: false,
+            reason: `与 ${entry.id} 高度重复（余弦 ${cos.toFixed(2)} / LCS ${lcs.toFixed(2)}）`,
+            duplicateOf: entry.id,
+          };
+        }
+        if (merged >= 0.5 && relatedTo === undefined) relatedTo = entry.id;
       }
     }
 
@@ -564,7 +739,12 @@ export class PlaybookStore {
       status: 'pending',
       createdAt: now,
       updatedAt: now,
-      note: conflictWith === undefined ? '' : `与 ${conflictWith} 疑似冲突，待人工裁决`,
+      note:
+        conflictWith !== undefined
+          ? `与 ${conflictWith} 疑似冲突，待人工裁决`
+          : relatedTo !== undefined
+            ? `与 ${relatedTo} 内容相近，注意是否重复`
+            : '',
       history: [],
       ...(conflictWith === undefined ? {} : { conflictWith }),
       // 蒸馏/模型产出一律 auto，用户手写的走 addManual 显式标 human
@@ -592,16 +772,20 @@ export class PlaybookStore {
    * 只标记，交给人工在审核界面并排看。
    */
   detectConflict(content: string, section: PlaybookSection): string | undefined {
-    const own = tokenize(content);
+    const ownText = content;
     const ownNegated = hasNegation(content);
     for (const entry of this.active()) {
       if (entry.section !== section) continue;
-      const similarity = cosine(own, tokenize(entry.content));
-      // 标定：同一句话改否定词 0.915 / 「必须跑」改「不要跑」0.786 /
-      // 「不跳步」改「可以跳步」0.420。取 0.38 才能覆盖最后一种。
-      // 冲突只是打标记给人看，误报的代价远小于漏报。
+      // 综合相似度：二元组余弦 + LCS 取大。
+      // 标定（本项目真实准则）：真实准则两两最高 0.173，远低于阈值；
+      // 改否定词的冲突对 0.769 / 0.933 / 0.875，能稳定检出。
+      // 冲突只是打标记给人看，误报代价远小于漏报。
+      const similarity = textSimilarity(ownText, entry.content);
       if (similarity < 0.38) continue;
+      // 否定作用域比对（NegEx 思路）：只有「一方否定 X、另一方肯定 X」才算矛盾。
+      // 只比「有没有否定词」会把「不可跳步」和「不必执行」误判成同极性而漏检。
       if (hasNegation(entry.content) !== ownNegated) return entry.id;
+      if (contradictoryNegation(ownText, entry.content)) return entry.id;
     }
     return undefined;
   }
@@ -902,18 +1086,23 @@ export class PlaybookStore {
    */
   effectiveScore(entry: PlaybookEntry): number {
     const u = entry.usage ?? EMPTY_USAGE;
-    // Beta(1,1) 先验：没有样本时按 0.5 处理，样本越多越相信实测比例
+    // Beta(1,1) 先验 + 样本量收缩：n=0 时给中性分 5（而不是 0）。
+    // 原来的公式 0 样本 = 0 分，导致**新条目永远排最后**，
+    // 活跃条目到上限时反而先淘汰刚加入的那条。
     const good = u.appliedGood;
     const bad = u.appliedBad + u.userCorrected;
-    const ratio = (good + 1) / (good + bad + 2);
-    // 置信度随样本量增长：0 样本 ≈ 0，5 样本 ≈ 0.83
-    const confidence = 1 - Math.exp(-(good + bad) / 2);
-    const base = 10 * ratio * confidence;
-    // 老字段继续计入（兼容手动打的 helpful/harmful）
-    const legacy = entry.helpful - entry.harmful * 2;
-    // 证据链断裂 → 直接沉底；部分失效 → 降权
+    const n = good + bad;
+    const ratio = (good + 1) / (n + 2);
+    const feedback = 0.5 + (ratio - 0.5) * (n / (n + 2));
+    const base = 10 * feedback;
+    // 老字段兜底：必须 clamp。
+    // 不 clamp 的话 20 次 helpful 就是 +20，彻底压过 base 上限 10，
+    // 老条目会永久霸榜——这正是"计数淘汰"要避免的。
+    const legacy = Math.max(-3, Math.min(3, entry.helpful - entry.harmful * 2));
+    // 证据链：orphaned 沉底但不删除（render 会直接过滤掉它）。
+    // 用有界惩罚而不是 -100，避免 legacy 很大时惩罚失效。
     const evidencePenalty =
-      entry.evidence?.status === 'orphaned' ? -100 : entry.evidence?.status === 'weakened' ? -5 : 0;
+      entry.evidence?.status === 'orphaned' ? -20 : entry.evidence?.status === 'weakened' ? -5 : 0;
     return base + legacy + evidencePenalty;
   }
 

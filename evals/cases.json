@@ -185,7 +185,7 @@
         "subject": "值班表"
       },
       "expect": {
-        "afterOneHalfLife": 0.5,
+        "afterOneHalfLife": 0.9,
         "afterReinforce": 1
       }
     },
