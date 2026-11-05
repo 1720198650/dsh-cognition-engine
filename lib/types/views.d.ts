@@ -5,11 +5,9 @@
  * 不持有状态、不改任何东西，方便单独测。
  */
 import type { TemporalMemoryStore } from './memory.ts';
-import type { SchemaGraphManager } from './graph.ts';
 import type { LongHorizonTaskManager } from './task_manager.ts';
 export interface DetailDeps {
     memory: TemporalMemoryStore;
-    graph: SchemaGraphManager;
     taskManager: LongHorizonTaskManager;
 }
 /** 核心记忆摘要的字数上限（≈150 tokens）。 */
@@ -26,4 +24,4 @@ export declare function buildCoreDigest(memory: TemporalMemoryStore, options?: {
     now?: number;
 }): string;
 /** 面板展开时按需拉取的明细（不走模型上下文，只给页面看）。 */
-export declare function buildDetail({ memory, graph, taskManager }: DetailDeps): Record<string, unknown>;
+export declare function buildDetail({ memory, taskManager }: DetailDeps): Record<string, unknown>;

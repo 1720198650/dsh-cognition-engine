@@ -51,6 +51,13 @@ export declare function tryParseJson(text: string): Record<string, unknown> | nu
 /** 从 JSON 输出里取某个字符串字段；不是 JSON 就原样返回。 */
 export declare function unwrapField(text: string, field: string): string;
 /** 解析 antithesis：优先 JSON 的 contradictions 数组，回退到文本格式。 */
+/**
+ * 从 markdown / 编号列表里抽矛盾条目。
+ *
+ * 模型经常把批判写成「1. xxx」「- xxx」列表而不是 CONTRADICTION:/EVIDENCE: 对，
+ * 只认后者会让 contradictions 恒为空数组——反方阶段等于白跑。
+ */
+export declare function extractListContradictions(text: string): Contradiction[];
 export declare function parseAntithesis(text: string): {
     text: string;
     contradictions: Contradiction[];

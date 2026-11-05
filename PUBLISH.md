@@ -23,7 +23,7 @@ git --version
 ## 2. 初始化仓库
 
 ```powershell
-cd D:\dshgz\cognition-engine
+cd <插件目录>
 git init
 git add .
 git commit -m "feat: dsh-cognition-engine v0.1.0"
@@ -68,12 +68,72 @@ npm publish --access public
 
 > 发布前记得 `npm run build`，因为 `lib/` 不入库、由构建生成。
 
-## 5. 发布前自检
+> ⚠️ **数据文件不是临时文件。**
+> `cognition-state.json` / `cognition-playbook.json` / `cognition-topics.json` / `tasks.json`
+> 是用户的真实数据，**提交和清理时绝对不要删**。
+> v0.9.1 与 v0.10.0 两次发版都在「清理临时产物」这一步误删了它们，
+> 每次都丢掉全部准则/主题/待办。清理只针对 `_research/`、构建产物、`.bak` 备份。
+
+## 5. 发布前自检（六步，不可跳步）
+
+按顺序全过一遍再推。前三步是静态检查，第 ⑤ 步才是真正能拦住「发了个用不了的东西」的那一步。
+
+### ① 卸载验证
+
+```powershell
+# 沙箱验证清理脚本本身
+# 真实流程：plugin_manager remove_bundle → 确认工具消失 → 重新 install_bundle → 确认数据完好
+```
+
+清理脚本要覆盖**全部**落盘文件：`cognition-state.json`、`tasks.json`、`cognition-playbook.json`、
+`cognition-audit.jsonl`、`.sha256`、`.lock`、`.snapshots/`、以及 `AGENTS.md` 里的第九节。
+
+### ② 兼容性检查
+
+```powershell
+npm run eval
+```
+
+评测里的「兼容性」5 项：单个工具重名、缺 webServer、缺事件能力、落盘文件损坏、系统提示段注册失败——
+都不该拖垮插件。
+
+### ③ 代码优化
 
 ```powershell
 npm run build
 npm test
-npm run eval
+node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters
+node --check client.js
 ```
 
-三项全绿再推。评测里的「打包自检」会检查清单、`client.js` 的模块 id、patch 的包名是否一致——这是装上去才会炸的那类错误。
+无未使用项、无类型错误、客户端语法通过。
+
+### ④ README 覆盖检查
+
+逐条核对**新功能是否在 README 的功能列表与引用里有位置**。
+
+- 能力清单：把本轮新增的每项能力列出来，逐条在 README 里搜关键词
+- 引用：新借用的论文/项目必须进「参考与致谢」，并写清借了什么
+- **CHANGELOG 不算数**——CHANGELOG 是给「从上一版升上来的人」看的，README 是给「第一次来的人」看的
+
+### ⑤ 在真实入口点一遍 ⭐
+
+**测试全绿 ≠ 功能能用。** 这一步专门抓「接口写了、按钮没做」这类问题。
+
+- 打开面板，把本轮改动涉及的页签逐个点开
+- 每个新按钮都要**真的点下去**，看有没有反应、有没有报错
+- 新工具要**真的调一次**（不是看代码，是发起调用）
+- 涉及多个步骤的流程（如蒸馏 → 审核 → 生效）要**走完整链路**
+- 看状态条/页签上的数字对不对
+
+> 这条是 0.9.0 的教训：准则本的「重新蒸馏」「手动新增」只写了 HTTP 接口没做按钮，
+> 单元测试 67 条全绿、评测 20/20 全过，但页面上根本点不到，40 分钟后被迫补发 0.9.1。
+
+### ⑥ 发布
+
+前面五步全过才 push / 打 tag / 建 Release / `npm publish`。
+
+发版频率：**每天最多一次**，小改动攒着合并发。
+门槛是「有用户可感知的改动」；纯内部修正、文案微调、UI 对齐不单独发。
+例外：编译失败、数据损坏、安全问题可随时发。
+

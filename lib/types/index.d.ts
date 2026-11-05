@@ -12,10 +12,13 @@
  */
 import { TemporalMemoryStore } from './memory.ts';
 import type { TemporalFact } from './memory.ts';
-import { SchemaGraphManager } from './graph.ts';
 interface ToolHost {
     register(definition: unknown): () => void;
 }
+/** 落盘的整体状态。 */
+/** 反思引擎模式：关闭 / 本地占位 / 真实模型。 */
+export type ReflectionMode = 'off' | 'local' | 'real';
+export declare function normalizeReflectionMode(value: unknown): ReflectionMode;
 interface PluginLogger {
     info?(message: string): void;
     warn?(message: string): void;
@@ -37,6 +40,26 @@ export interface CognitionConfig {
     overlapThreshold?: number;
     communityThreshold?: number;
     maxClusterSize?: number;
+    /** 是否把跨会话摘要注入系统提示。默认 true；false 时只能靠 cognition_context 手动取。 */
+    injectMemory?: boolean;
+    /** 准则本注入预算（字符），默认 600。 */
+    playbookChars?: number;
+    /** 准则本条目上限，默认 12。 */
+    playbookMaxEntries?: number;
+    /**
+     * 巡逻发现逾期任务时，是否自动调用模型做一次三段式复盘。
+     *
+     * 默认关闭：一次完整复盘 = 3 次模型调用 ≈ 3100 tokens，每 3 小时可能触发一次。
+     * 关掉后巡逻仍会写「已超期 N 小时」的提示，只是不烧 token。
+     */
+    autoReflect?: boolean;
+    /**
+     * 反思/蒸馏的推理档位。留空 = 自动（选模型声明的最低档）。
+     *
+     * 设成别的值是省 token / 求质量之间的手动权衡：当前模型默认档位会先吐上万字推理，
+     * 且推理 token 与正文共用 maxTokens，档位过高会把正文挤没。
+     */
+    reflectionEffort?: string;
     /** 多久没更新就算需要催办（小时）。 */
     heartbeatHours?: number;
     /** 后台巡视间隔（小时）。 */
@@ -49,13 +72,18 @@ export interface CognitionConfig {
     tasksFile?: string;
     /** 记忆的落盘路径，默认 <cwd>/cognition-state.json。 */
     stateFile?: string;
+    /** 准则本的落盘路径，默认插件目录下的 cognition-playbook.json。 */
+    playbookFile?: string;
+    /** 主题注册表的落盘路径，默认插件目录下的 cognition-topics.json。 */
+    topicsFile?: string;
     /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
     lockToken?: string;
     /** 真模型：显式指定 provider / model，不设则跟随当前默认模型。 */
     llmProvider?: string;
     llmModel?: string;
     /** 启动时是否直接启用真模型。 */
-    useRealModel?: boolean;
+    /** 反思引擎初始模式，默认 off（不开启，避免默认产出误导性输出）。 */
+    reflectionMode?: string;
 }
 export declare const name = "cognition-engine";
 /** 需要 tools 服务才能注册工具。 */
@@ -64,7 +92,7 @@ export declare const inject: string[];
  * 反思回写记忆（Generative Agents 的闭环）：把 synthesis 存成一条可召回的记忆，
  * 并让结论也进图式网络，这样以后 expand 能把相关结论带出来。
  */
-export declare function persistReflection(memory: TemporalMemoryStore, graph: SchemaGraphManager, result: {
+export declare function persistReflection(memory: TemporalMemoryStore, result: {
     query: string;
     synthesis: string;
 }): TemporalFact;

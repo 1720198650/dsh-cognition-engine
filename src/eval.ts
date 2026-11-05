@@ -16,13 +16,13 @@
  * 本文件不注册任何工具，不进入模型上下文，运行它本身不消耗 token。
  */
 
-import { readFileSync, existsSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { TemporalMemoryStore } from './memory.ts';
-import { SchemaGraphManager, expandBySchema } from './graph.ts';
 import { DialecticalReflectionEngine, MockDialecticalLLM, extractContradictions } from './reflection.ts';
+import { PlaybookStore } from './playbook.ts';
 import { ProactiveGate } from './proactive.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
 import { apply, persistReflection } from './index.ts';
@@ -120,7 +120,8 @@ const checkers: Record<string, (params: Params, expect: Params) => Promise<void>
     const fact = store.ingest({ content: p.content, subject: p.subject });
     equal(store.decay(fact.id, now), 1, '初始衰减应为 1');
     now += p.halfLifeMs;
-    approx(store.decay(fact.id, now), e.afterOneHalfLife, 1e-9, '一个半衰期后应剩一半');
+    // 幂律（FSRS 形式）：t=S 时 R=0.9，不是指数衰减的 0.5
+      approx(store.decay(fact.id, now), e.afterOneHalfLife, 1e-9, '一个半衰期后应剩约九成');
     store.reinforce(fact.id, 0.5);
     equal(store.decay(fact.id, now), e.afterReinforce, '强化后应重置为 1');
   },
@@ -130,26 +131,6 @@ const checkers: Record<string, (params: Params, expect: Params) => Promise<void>
     const fact = store.ingest({ content: p.content, subject: p.subject });
     equal(store.remove(fact.id), e.removed, '删除结果不符');
     equal(store.recall(String(p.query), { mode: 'strict' }).length, e.hits, '删除后不应再召回');
-  },
-
-  'graph.ingest': (p, e) => {
-    const graph = new SchemaGraphManager({ now: () => 1 });
-    const outcomes = (p.texts as string[]).map((text) => graph.ingest(text));
-    equal(outcomes.map((item) => item.mode).join(','), (e.modes as string[]).join(','), '同化/顺应序列不符');
-    (e.sameSchema as boolean[]).forEach((expected, index) => {
-      equal(outcomes[index + 1]!.schemaId === outcomes[0]!.schemaId, expected, `第 ${index + 2} 条与第 1 条是否同图式不符`);
-    });
-    if (e.edges !== undefined) {
-      equal(graph.neighbors(outcomes[1]!.schemaId).length, e.edges, '连边数不符');
-    }
-  },
-
-  'graph.polarity': (p, e) => {
-    const graph = new SchemaGraphManager({ now: () => 1 });
-    const outcomes = (p.texts as string[]).map((text) => graph.ingest(text));
-    const last = outcomes[outcomes.length - 1]!;
-    equal(last.mode, e.mode, '否定陈述应触发顺应');
-    if (e.conflictWithFirst) equal(last.conflictWith, outcomes[0]!.schemaId, '应记录与第一个图式冲突');
   },
 
   'reflection.sequence': async (p, e) => {
@@ -171,6 +152,44 @@ const checkers: Record<string, (params: Params, expect: Params) => Promise<void>
     if (e.evidence !== undefined) equal(parsed[0]?.evidence, e.evidence, '证据文本不符');
   },
 
+
+  /**
+   * 准则本评测（DC-∅ 的结构化代理）。
+   *
+   * Dynamic Cheatsheet 的消融说明：同指令 + **空小抄** 相对原始基线已经能涨十几到三十个点，
+   * 所以「有准则本 vs 无准则本」的差异必须排除「指令包装本身」。真实 A/B 要调模型，
+   * 评测台不联网，这里退而检查三条结构性质：
+   *   1) 套话必须写不进去（否则增益只来自指令包装）
+   *   2) 渲染必须守住预算（否则等于把上下文又堆回去）
+   *   3) 空准则本必须渲染为空串（否则「有/无」无法区分）
+   */
+  'playbook.gate': (p, e) => {
+    const store = new PlaybookStore({ filePath: resolve(ROOT, '.dsh-eval-playbook.json'), now: () => 1_000 });
+
+    // 1) 套话：模拟「换成任何项目都成立」的候选，必须全被拒
+    if (Array.isArray(p.cliches)) {
+      for (const text of p.cliches) {
+        const outcome = store.submit({ content: String(text), section: '约定' });
+        equal(outcome.accepted, false, `套话应被拒：${String(text)}`);
+      }
+    }
+
+    // 2) 空准则本必须给空串——调用方据此回退 digest
+    equal(store.render(), '', '空准则本应渲染为空串');
+
+    // 3) 加入真实条目后必须能渲染，且守住预算
+    for (const text of (p.entries ?? []) as string[]) {
+      const outcome = store.addManual({ content: String(text), section: '约定' });
+      equal(outcome.accepted, true, `应接受：${String(text)}`);
+    }
+    const rendered = store.render();
+    if (e.maxChars !== undefined) {
+      equal(rendered.length <= Number(e.maxChars), true, `渲染超预算：${rendered.length} > ${String(e.maxChars)}`);
+    }
+    if (e.hasId === true) equal(/\[ctxt-\d{5}\]/.test(rendered), true, '渲染应带 ID 便于回写计数');
+    if (e.hasCounts === true) equal(/helpful=\d+ harmful=\d+/.test(rendered), true, '渲染应带双向计数');
+  },
+
   'proactive.gate': (p, e) => {
     const gate = new ProactiveGate({ now: () => 0, idleThresholdMs: 60000, recordOnly: p.recordOnly ?? true });
     const first = gate.observe(p.signal);
@@ -178,20 +197,6 @@ const checkers: Record<string, (params: Params, expect: Params) => Promise<void>
     if (e.draftUndefined) equal(first.draft, undefined, '第一次判断不应有草稿');
     const second = gate.judge(first.observationId);
     equal(second.state, e.judge, '第二次判断结果不符');
-  },
-
-  'recall.expand': (p, e) => {
-    const store = new TemporalMemoryStore({ now: () => 1 });
-    const graph = new SchemaGraphManager({ now: () => 1 });
-    for (const text of p.texts as string[]) {
-      graph.ingest(text);
-      store.ingest({ content: text, subject: text.slice(0, 4) });
-    }
-    const related = expandBySchema(store, graph, [String(p.seed)]);
-    equal(related.length, e.related, '关联记忆条数不符');
-    if (e.contains !== undefined) {
-      assert(related.some((item) => item.content === e.contains), `关联结果应包含「${e.contains}」`);
-    }
   },
 
   'reflection.draft': async (p, e) => {
@@ -206,10 +211,9 @@ const checkers: Record<string, (params: Params, expect: Params) => Promise<void>
 
   'reflection.save': async (p, e) => {
     const store = new TemporalMemoryStore({ now: () => 1 });
-    const graph = new SchemaGraphManager({ now: () => 1 });
     const engine = new DialecticalReflectionEngine(new MockDialecticalLLM().call);
     const result = await engine.reflect(String(p.query));
-    const saved = persistReflection(store, graph, result);
+    const saved = persistReflection(store, result);
     assert(saved.subject.startsWith(String(e.subjectPrefix)), `subject 应以「${e.subjectPrefix}」开头，实际 ${saved.subject}`);
     equal(saved.source, e.source, '来源标记不符');
     if (e.recallable) {
@@ -263,6 +267,8 @@ async function measureCost(): Promise<{ schemas: CostRow[]; outputs: CostRow[]; 
   const dispose = apply(ctx as never, {
     tasksFile: resolve(ROOT, '.dsh-eval-runtime-tasks.json'),
     stateFile: resolve(ROOT, '.dsh-eval-state.json'),
+    // 成本测量要真实跑一遍 cognition_reflect；引擎默认关闭，这里显式开本地占位。
+    reflectionMode: 'local',
   });
 
   const schemas: CostRow[] = captured.map((definition) => {
@@ -275,6 +281,8 @@ async function measureCost(): Promise<{ schemas: CostRow[]; outputs: CostRow[]; 
   });
 
   const byName = new Map(captured.map((definition) => [definition.name, definition]));
+  // 成本测量需要真实跑一遍工具；反思引擎默认关闭，这里临时按配置开启本地占位，
+  // 否则 cognition_reflect 会按设计抛「未开启」，成本表就测不到它。
   const samples: Array<[string, unknown]> = [
     ['cognition_remember', { text: '评测样例：部署区域在华东', subject: '部署区域', tags: ['infra'] }],
     ['cognition_recall', { query: '部署区域', mode: 'strict' }],
@@ -468,6 +476,124 @@ function checkCompatibility(): PackCheck[] {
     ok: !threwPrompt && promptAttempts === 1,
     detail: `尝试注册 ${promptAttempts} 次`,
   });
+
+  // 6) 注入内容：准则非空时必须注入准则本，而不是记忆摘要
+  //
+  // 这条是回归测试。曾经注入段只拼了 buildCoreDigest(memory)、
+  // 而面板的「注入来源」却按准则本判断，于是面板报「正在注入准则本」、
+  // 模型实际只看到记忆摘要——显示与实际不一致，而单测全绿。
+  {
+    const injectPlaybook = resolve(ROOT, '.dsh-compat-inject-playbook.json');
+    writeFileSync(
+      injectPlaybook,
+      JSON.stringify({
+        version: 1,
+        revision: 1,
+        updatedAt: 1,
+        entries: [
+          {
+            id: 'ctxt-00001',
+            section: '约定',
+            content: '发版前必须跑完整测试再打包发布',
+            helpful: 0,
+            harmful: 0,
+            sourceIds: [],
+            validFrom: null,
+            validTo: null,
+            status: 'active',
+            createdAt: 1,
+            updatedAt: 1,
+            note: '',
+            history: [],
+          },
+        ],
+      }),
+      'utf8',
+    );
+
+    let captured: (() => string) | undefined;
+    let applied = true;
+    try {
+      const dispose = apply(
+        {
+          get: (key: string) => {
+            if (key === 'tools') return { register: () => () => {} };
+            if (key === 'systemPrompt') {
+              return {
+                section: (options: { text: () => string }) => {
+                  captured = options.text;
+                  return () => {};
+                },
+              };
+            }
+            return undefined;
+          },
+          logger: {},
+        } as never,
+        { tasksFile: tasks, stateFile: state, playbookFile: injectPlaybook },
+      );
+      if (typeof dispose === 'function') dispose();
+    } catch {
+      applied = false;
+    }
+
+    const injected = typeof captured === 'function' ? captured() : '';
+    checks.push({
+      name: '准则非空时注入准则本（不是记忆摘要）',
+      ok: applied && injected.includes('【工作准则】') && injected.includes('ctxt-00001'),
+      detail: applied ? '注入 ' + injected.length + ' 字符：' + injected.slice(0, 40) + '…' : 'apply 抛错',
+    });
+
+    // 准则本为空时必须回退，不能注入空串占位
+    const emptyPlaybook = resolve(ROOT, '.dsh-compat-inject-empty.json');
+    writeFileSync(emptyPlaybook, JSON.stringify({ version: 1, revision: 0, updatedAt: 0, entries: [] }), 'utf8');
+    let capturedEmpty: (() => string) | undefined;
+    try {
+      const dispose = apply(
+        {
+          get: (key: string) => {
+            if (key === 'tools') return { register: () => () => {} };
+            if (key === 'systemPrompt') {
+              return {
+                section: (options: { text: () => string }) => {
+                  capturedEmpty = options.text;
+                  return () => {};
+                },
+              };
+            }
+            return undefined;
+          },
+          logger: {},
+        } as never,
+        { tasksFile: tasks, stateFile: state, playbookFile: emptyPlaybook },
+      );
+      if (typeof dispose === 'function') dispose();
+    } catch {
+      /* 已由上一条覆盖 */
+    }
+    const fallbackText = typeof capturedEmpty === 'function' ? capturedEmpty() : 'x';
+    checks.push({
+      name: '准则本为空时回退且不注入空占位',
+      ok: typeof fallbackText === 'string' && !fallbackText.includes('【工作准则】'),
+      detail: fallbackText.length === 0 ? '空串（回退到无注入）' : fallbackText.slice(0, 30) + '…',
+    });
+
+    try {
+      rmSync(injectPlaybook, { force: true });
+      rmSync(emptyPlaybook, { force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 清扫：损坏文件会被隔离成 *.corrupt-<ts>，不清会越积越多
+  try {
+    for (const name of readdirSync(ROOT)) {
+      if (name.startsWith('.dsh-compat-')) rmSync(resolve(ROOT, name), { force: true });
+    }
+  } catch {
+    /* 清扫失败不影响评测结论 */
+  }
 
   return checks;
 }

@@ -1,9 +1,9 @@
-﻿# cognition-engine uninstall cleanup
+# cognition-engine uninstall cleanup
 # Removes the plugin's data files and the AGENTS.md section it added.
 # The plugin itself must still be removed through plugin_manager / dsh plugin.
 
 param(
-    [string]$Workspace = 'D:\dshgz'
+    [string]$Workspace = (Get-Location).Path
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,8 +13,19 @@ $pluginRoot = Split-Path -Parent $PSScriptRoot
 $dataFiles = @(
     'cognition-state.json',
     'cognition-state.json.tmp',
+    'cognition-state.json.sha256',
+    'cognition-state.json.lock',
+    'cognition-audit.jsonl',
+    'cognition-audit.jsonl.1',
+    'cognition-playbook.json',
+    'cognition-playbook.json.tmp',
+    'cognition-topics.json',
+    'cognition-topics.json.tmp',
+    'cognition-gaps.json',
+    'cognition-gaps.json.tmp',
     'tasks.json',
     'tasks.json.tmp',
+    'tasks.json.lock',
     'inject-probe.log'
 )
 foreach ($name in $dataFiles) {
@@ -25,6 +36,24 @@ foreach ($name in $dataFiles) {
     }
 }
 
+# 1b) 自动快照目录
+$snapshotDir = Join-Path $pluginRoot '.snapshots'
+if (Test-Path $snapshotDir) {
+    Remove-Item $snapshotDir -Recurse -Force
+    Write-Host "[removed] $snapshotDir"
+}
+
+# 1c) 独立数据目录（v0.10.1 起用户数据默认放这里，与代码分开）
+if ($env:DSH_COGNITION_DATA_DIR) {
+    $dataRoot = $env:DSH_COGNITION_DATA_DIR
+} else {
+    $dataRoot = Join-Path $env:USERPROFILE '.dsh\cognition-engine'
+}
+if (Test-Path $dataRoot) {
+    Remove-Item $dataRoot -Recurse -Force
+    Write-Host "[removed] $dataRoot"
+}
+
 # 2) the AGENTS.md section that points at cognition_context
 $agents = Join-Path $Workspace 'AGENTS.md'
 if (Test-Path $agents) {
@@ -32,7 +61,12 @@ if (Test-Path $agents) {
     $marker = '## 九、认知引擎'
     $index = $text.IndexOf($marker)
     if ($index -ge 0) {
-        $trimmed = $text.Substring(0, $index).TrimEnd() + "`n"
+        $head = $text.Substring(0, $index).TrimEnd()
+        # 一并摘掉章节前面的 --- 分隔线，避免留下孤立的分隔符
+        if ($head.EndsWith('---')) {
+            $head = $head.Substring(0, $head.Length - 3).TrimEnd()
+        }
+        $trimmed = $head + "`n"
         [System.IO.File]::WriteAllText($agents, $trimmed, (New-Object System.Text.UTF8Encoding($false)))
         Write-Host "[removed] cognition section from $agents"
     } else {

@@ -1,0 +1,95 @@
+{
+  "manifest_version": 2,
+  "type": "plugin",
+  "id": "1720198650/dsh-cognition-engine",
+  "version": "0.11.0",
+  "channel": "stable",
+  "name": "认知引擎 Cognition Engine",
+  "description": "给 AI 装一个会作废、会记账、会自我纠错的长期记忆。双时态记忆 + 人定主题 + 准则本（带证据链、来源分级、冲突裁决），零外部依赖，纯本地 JSON。",
+  "runtime": {
+    "type": "plugin",
+    "host": "node",
+    "engine": "cordis",
+    "activation": "eager"
+  },
+  "entrypoints": {
+    "main": "lib/index.js",
+    "client": "client.js"
+  },
+  "capabilities": [
+    "memory.bitemporal",
+    "memory.recall",
+    "playbook.rules",
+    "topics.scope",
+    "tasks.longhorizon",
+    "context.injection",
+    "ui.dock"
+  ],
+  "permissions": [
+    "filesystem"
+  ],
+  "dependencies": [],
+  "compatibility": {
+    "os": [
+      "win32",
+      "darwin",
+      "linux"
+    ],
+    "arch": [
+      "x64",
+      "arm64"
+    ],
+    "node": ">=22.0.0"
+  },
+  "publisher": {
+    "id": "1720198650",
+    "name": "1720198650",
+    "provider": "github",
+    "url": "https://github.com/1720198650"
+  },
+  "security": {
+    "network": "none",
+    "telemetry": "none",
+    "data_location": "local"
+  },
+  "metadata": {
+    "category": "memory",
+    "tags": [
+      "dsh",
+      "memory",
+      "agent-memory",
+      "long-term-memory",
+      "bitemporal",
+      "playbook",
+      "context-engineering",
+      "zero-dependency",
+      "local-first"
+    ],
+    "repository": "1720198650/dsh-cognition-engine",
+    "homepage": "https://github.com/1720198650/dsh-cognition-engine#readme",
+    "license": "MIT",
+    "auto_restart": false,
+    "data_dir": "~/.dsh/cognition-engine"
+  },
+  "source": {
+    "provider": "github",
+    "repo": "1720198650/dsh-cognition-engine"
+  },
+  "plugin": {
+    "framework": "cordis",
+    "injects": [
+      "tools"
+    ],
+    "entry": "lib/index.js",
+    "client_entry": "client.js",
+    "slot": "conversation.input.dock",
+    "tools": [
+      "cognition_context",
+      "cognition_recall",
+      "cognition_remember",
+      "cognition_forget",
+      "cognition_state",
+      "cognition_reflect"
+    ]
+  }
+}

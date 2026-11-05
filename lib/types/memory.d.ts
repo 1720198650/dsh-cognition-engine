@@ -19,7 +19,7 @@
  *
  * 存储：纯 TypeScript + Map，无任何外部数据库。
  */
-/** 召回口径。 */
+import type { AdmissionRules, WriteOrigin } from './admission.ts';
 export type RecallMode = 'strict' | 'historical' | 'belief' | 'associative';
 /** 记忆作用域：全局共享 / 工作区共享 / 会话私有。 */
 export type MemoryScope = 'global' | 'workspace' | 'session';
@@ -39,6 +39,13 @@ export interface TemporalFact {
     readonly tags: readonly string[];
     readonly source: string;
     readonly importance: number;
+    /**
+     * 归属主题（多对多）。空 = 未归类。
+     *
+     * 主题是人定的适用范围键，不是自动聚类的结果——
+     * 调研结论见 docs/topic-research.md。
+     */
+    readonly topicIds: readonly string[];
     /** 作用域，默认 global。 */
     readonly scope: MemoryScope;
     /** scope = workspace 时的归属工作区 id。 */
@@ -49,6 +56,14 @@ export interface TemporalFact {
     readonly activation: number;
     /** 是否已归档：不进 strict 召回，但历史与联想仍可查。 */
     readonly archived: boolean;
+    /** 最近一次手动修正的时间（用户改过内容/状态/录入时间）。 */
+    readonly revisedAt?: number;
+    /** 已被归并到哪条记忆（归并后不进 strict 召回，但历史仍可查）。 */
+    readonly mergedInto?: string;
+    /** 软删除时间：任何召回口径都不再返回，但数据保留可恢复。 */
+    readonly deletedAt?: number;
+    /** 写入通道：agent_tool / ui / import / reflection。 */
+    readonly origin?: WriteOrigin;
     readonly lastAccessedAt: number;
 }
 /** 兼容旧命名：外部文档里把这条记录叫 MemoryNode。 */
@@ -63,7 +78,11 @@ export interface IngestInput {
     content: string;
     subject?: string;
     tags?: readonly string[];
+    /** 归属主题 id（多对多）；不传 = 未归类。 */
+    topicIds?: readonly string[];
     source?: string;
+    /** 写入通道；由入口代码决定，agent 不能自填。默认 agent_tool。 */
+    origin?: WriteOrigin;
     importance?: number;
     /** 作用域，默认 global。 */
     scope?: MemoryScope;
@@ -156,13 +175,29 @@ export interface MemoryStats {
     conflicts: number;
     /** 已归档的记忆条数。 */
     archived: number;
+    /** 已软删除（可恢复）的条数。 */
+    deleted: number;
 }
 export interface MemoryOptions {
     now?: () => number;
     /** 衰减半衰期，默认 7 天。 */
     halfLifeMs?: number;
     idPrefix?: string;
+    /** 审计回调：每次变更触发一次，失败不影响主流程。 */
+    onEvent?: (event: {
+        op: string;
+        id?: string;
+        subject?: string;
+        hash?: string;
+        source?: string;
+        origin?: string;
+        detail?: string;
+    }) => void;
 }
+/** 召回强化：低于这个相似度的命中不加权，避免把噪声记忆越喂越重。 */
+export declare const RECALL_REINFORCE_FLOOR = 0.12;
+/** 单次召回命中给多少激活量。 */
+export declare const RECALL_ACTIVATION_GAIN = 0.1;
 /** importance ≥ 此值视为「核心记忆」（对应需求里的 CORE 级）。 */
 export declare const CORE_IMPORTANCE = 0.8;
 /** 超过这个年龄的核心记忆会触发「怀旧」。 */
@@ -173,8 +208,69 @@ export declare function isValidAt(fact: TemporalFact, validTime: number): boolea
 export declare function isRecordedAt(fact: TemporalFact, recordedTime: number): boolean;
 /** 是否「此刻的当前真值」：未被取代 + 已知 + 当前有效。 */
 export declare function isCurrent(fact: TemporalFact, now: number): boolean;
+/**
+ * 归一化文本，仅用于**比较**（不要拿它存库）。
+ *
+ * 干掉「同一条被存两遍」的最常见来源：全半角、大小写、空白、
+ * 标点、零宽字符。这一步几乎零成本，收益比换任何相似度算法都直接
+ * （SimHash/MinHash 在几百条规模是过度设计）。
+ */
+export declare function normalizeForCompare(text: string): string;
 /** 英文按词、中文按二元组切分，返回词频表（纯虚词 bigram 不产出）。 */
 export declare function tokenize(text: string): Map<string, number>;
+/**
+ * 最长公共子序列（LCS）相似度，Dice 归一化。
+ *
+ * 为什么需要它：中文二元组余弦抓不住「改写」。
+ * 实测：「发版前要跑完整测试」vs「发布版本之前必须先跑测试」
+ *   bigram 余弦只有 0.107，LCS 有 0.600——因为字序相同、只换了个别字。
+ *
+ * 标定数据（本项目真实准则）：
+ *   真实准则两两 LCS 最高 0.173（不会互相误判）
+ *   改了否定词的冲突对 LCS 0.769 / 0.933 / 0.875（能检出）
+ *
+ * 只用于**短文本两两比较**（准则、记忆条目），不要拿来做全库检索——
+ * 它是 O(n×m)，没有索引。
+ */
+export declare function lcsSimilarity(a: string, b: string): number;
+/**
+ * 两个短文本的综合相似度：二元组余弦与 LCS 取较大者。
+ *
+ * 余弦擅长「用词重合」，LCS 擅长「改写」。两者都高才算像，
+ * 取 max 是因为任一种命中都足够说明问题。
+ */
+export declare function textSimilarity(a: string, b: string): number;
+/**
+ * BM25 语料统计。
+ *
+ * 为什么需要它：我们原来用**纯 TF 余弦**（没有 IDF）。
+ * 在 212 个真实章节上实测，把查询从「原文标题」换成更真实的形态后：
+ *
+ *   前一半标题     余弦 49.7% → BM25 77.0%   (+27.3pp)
+ *   标题 + 怎么处理 余弦 76.4% → BM25 89.2%   (+12.8pp)
+ *   去掉修饰词     余弦 52.3% → BM25 74.1%   (+21.8pp)
+ *
+ * 原因：余弦没有 IDF，「的/是/处理」这类高频词会主导打分，
+ * 长文档也会因为词多而占便宜。BM25 三个机制正好治这三个病：
+ * IDF 压低常见词、长度归一化、TF 饱和。
+ */
+export interface Bm25Stats {
+    /** 每个词出现在多少个文档里。 */
+    df: Map<string, number>;
+    /** 平均文档长度（词数）。 */
+    avgLen: number;
+    /** 文档总数。 */
+    N: number;
+}
+/**
+ * 从一批已分词的文档构建 BM25 统计。
+ *
+ * 参数取值依据：在本项目 212 个真实章节上网格搜索，
+ * k1=1.2 / b=0.5 表现最好（短文本语料，长度差异小，所以 b 取低一些）。
+ */
+export declare function buildBm25Stats(docs: Iterable<Map<string, number>>): Bm25Stats;
+/** 单条查询对单条文档的 BM25 得分。 */
+export declare function bm25Score(query: Map<string, number>, doc: Map<string, number>, stats: Bm25Stats, k1?: number, b?: number): number;
 /** 余弦相似度。 */
 export declare function cosine(a: Map<string, number>, b: Map<string, number>): number;
 /** FNV-1a 32 位内容指纹（纯 TS，不依赖 node:crypto）。 */
@@ -184,12 +280,18 @@ export declare function deriveSubject(content: string): string;
 export declare class TemporalMemoryStore {
     private readonly facts;
     private readonly bySubject;
+    /** 用户可配置的准入规则。 */
+    private rules;
+    /** 同主题自动取代的相似度阈值。 */
     private readonly tokens;
     private readonly clock;
     private readonly halfLifeMs;
     private readonly idPrefix;
+    private readonly onEvent;
     private seq;
     constructor(options?: MemoryOptions);
+    /** 安全触发审计回调。 */
+    private emit;
     /** 当前时钟。 */
     now(): number;
     get size(): number;
@@ -217,8 +319,36 @@ export declare class TemporalMemoryStore {
         superseded: TemporalFact;
         current: TemporalFact;
     };
-    /** 记忆衰减：距上次访问越久，权重越低（指数半衰期）。 */
+    /**
+     * 衰减系数。
+     *
+     * 对齐 MemoryBank (AAAI 2024) 的 R = exp(-t/S)：强度 S 随召回增长，
+     * 于是常用的记忆衰减更慢。我们用半衰期当 S——activation 每 +1，半衰期翻倍，
+     * 最多放大 1 + MAX_STRENGTH_BOOST（=6）倍，避免高频记忆永不衰减。
+     */
+    /**
+     * 时间衰减（0.2 ~ 1.0）。
+     *
+     * 两个依据：
+     * 1. **幂律优于指数**——Wixted & Ebbesen 1991、Rubin & Wenzel 1996（210 个数据集）
+     *    都显示幂函数拟合更好。两者在短延迟几乎一致，**分歧在长延迟**：
+     *    指数半衰期 7 天时 90 天后只剩 0.0001（等于判死），
+     *    同样参数下幂律还有 0.50。这是「长期记忆」和「短期缓存」的区别。
+     * 2. **衰减不能决定真假**——条数少、使用频率低时，衰减参数根本估不出来。
+     *    它只该影响**排序**，不该影响一条记忆是否还成立，
+     *    更不能拿它触发删除（arXiv 2604.11364：最近没被访问 ≠ 不太真）。
+     *
+     * 公式照 FSRS：R = (1 + 19/81 · t/S)^(-0.5)，t=S 时 R=0.9。
+     * 取了下界 0.2——半年前的笔记仍有基础分，只是排序靠后。
+     */
     decay(factOrId: TemporalFact | string, now?: number): number;
+    /**
+     * 设置一条记忆的归属主题。
+     *
+     * 主题是人定的适用范围键，所以这里只接受显式 id 列表；
+     * 传空数组表示移回「未归类」。
+     */
+    setTopics(id: string, topicIds: readonly string[]): TemporalFact;
     /** 显式强化：提升激活量并重置衰减计时。 */
     reinforce(id: string, amount?: number, now?: number): TemporalFact;
     /**
@@ -246,6 +376,18 @@ export declare class TemporalMemoryStore {
      */
     conflicts(): Conflict[];
     stats(): MemoryStats;
+    /**
+     * 手动修正一条记忆：内容、主题、录入时间、有效状态。
+     *
+     * 注意 recordedAt 是双时态的事务时间轴，改动会让 belief 口径的答案偏移，
+     * 所以这里会打上 revisedAt 标记，表示「这条被人工改过」。
+     */
+    updateFact(id: string, patch: {
+        content?: string;
+        subject?: string;
+        recordedAt?: number;
+        superseded?: boolean;
+    }): TemporalFact | undefined;
     /** 归档 / 取消归档一条记忆（不删数据，只影响 strict 召回）。 */
     setArchived(id: string, archived: boolean): boolean;
     /**
@@ -257,6 +399,27 @@ export declare class TemporalMemoryStore {
         maxActivation?: number;
         now?: number;
     }): string[];
+    /**
+     * 记忆归并：同一主题下，内容高度相似且极性一致的条目收敛成一条，
+     * 其余标记 mergedInto（不删除，历史仍可查）。
+     *
+     * 纯规则实现，不调用 LLM：相似度用词频余弦，保留重要度最高的一条作为主条目。
+     */
+    consolidate(options?: {
+        subject?: string;
+        threshold?: number;
+    }): Array<{
+        kept: string[];
+        merged: string[];
+    }>;
+    /** 软删除：任何召回口径都不再返回，数据保留，可恢复。 */
+    softDelete(id: string): boolean;
+    /** 恢复一条软删除的记忆。 */
+    restoreDeleted(id: string): boolean;
+    /** 设置准入规则（页面上的开关）。 */
+    setRules(rules: Partial<AdmissionRules>): AdmissionRules;
+    /** 当前准入规则。 */
+    getRules(): AdmissionRules;
     /** 导出为纯 JSON（可自行落盘到 .json 文件，仍然不依赖数据库）。 */
     serialize(): TemporalFact[];
     /** 从 serialize() 的结果恢复；缺失字段按默认值补齐。 */

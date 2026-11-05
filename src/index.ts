@@ -12,18 +12,22 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { basename } from 'node:path';
 
+import { GapStore } from './gaps.ts';
 import { TemporalMemoryStore } from './memory.ts';
 import type { TemporalFact } from './memory.ts';
-import { SchemaGraphManager, expandBySchema } from './graph.ts';
 import { JsonStateStore } from './persist.ts';
 import { buildDetail, buildCoreDigest } from './views.ts';
 import { DialecticalReflectionEngine, MockDialecticalLLM, ReflectionWorker } from './reflection.ts';
-import { asRecord, assertObjectSchema, messageOf, optionalString, pick, requireString, textOutput } from './util.ts';
+import { assertObjectSchema, dataDir, messageOf, migrateLegacyData, parseMoment } from './util.ts';
+import { createTools } from './tools.ts';
 import { ProactiveGate } from './proactive.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
-import type { LongTaskStatus } from './task_manager.ts';
-import type { RecallMode } from './memory.ts';
+import { AuditLog } from './audit.ts';
+import { PlaybookStore } from './playbook.ts';
+import { TopicStore } from './topics.ts';
+import { buildDistillPrompt, parseDistillResult } from './distill.ts';
 
 /* ------------------------------------------------------------------ */
 /* 宿主最小接口（不引入任何运行时依赖）                                 */
@@ -58,6 +62,17 @@ interface LlmStreamChunk {
 
 interface LlmService {
   stream(options: Record<string, unknown>): AsyncIterable<LlmStreamChunk>;
+  /**
+   * 可选：解析模型能力。用来查这个模型支持哪些推理档位。
+   *
+   * 这个能力很关键：当前模型会先吐很长的 reasoning 再吐正文，
+   * 推理 token 也计入 maxTokens。不压低推理档位的话，2000 token 会被推理吃光、
+   * 正文一个字没有。老版本宿主可能没有这个方法，所以是可选。
+   */
+  resolveModelInfo?(
+    provider: string,
+    model: string,
+  ): Promise<{ reasoning?: { efforts?: Array<{ id: string; name?: string }>; defaultEffort?: string } } | undefined>;
 }
 
 interface ModelSelectionLike {
@@ -81,11 +96,26 @@ interface SystemPromptHost {
 }
 
 /** 落盘的整体状态。 */
+/** 反思引擎模式：关闭 / 本地占位 / 真实模型。 */
+export type ReflectionMode = 'off' | 'local' | 'real';
+
+export function normalizeReflectionMode(value: unknown): ReflectionMode {
+  if (value === 'local' || value === 'real' || value === 'off') return value;
+  // 任何无法识别的值都退回关闭——默认产出模板内容比不产出更糟。
+  return 'off';
+}
+
 interface PersistedState {
   version: number;
   facts: TemporalFact[];
+  /** 反思引擎是否使用真实模型（重启后保留）。 */
+  /** 反思引擎模式（重启后保留）：off / local / real。 */
+  reflectionMode?: string;
+  /** 旧字段，仅用于迁移。 */
+  realModel?: boolean;
+  /** 记忆准入规则（重启后保留）。 */
+  rules?: Record<string, boolean>;
 }
-
 interface PluginLogger {
   info?(message: string): void;
   warn?(message: string): void;
@@ -109,6 +139,26 @@ export interface CognitionConfig {
   overlapThreshold?: number;
   communityThreshold?: number;
   maxClusterSize?: number;
+  /** 是否把跨会话摘要注入系统提示。默认 true；false 时只能靠 cognition_context 手动取。 */
+  injectMemory?: boolean;
+  /** 准则本注入预算（字符），默认 600。 */
+  playbookChars?: number;
+  /** 准则本条目上限，默认 12。 */
+  playbookMaxEntries?: number;
+  /**
+   * 巡逻发现逾期任务时，是否自动调用模型做一次三段式复盘。
+   *
+   * 默认关闭：一次完整复盘 = 3 次模型调用 ≈ 3100 tokens，每 3 小时可能触发一次。
+   * 关掉后巡逻仍会写「已超期 N 小时」的提示，只是不烧 token。
+   */
+  autoReflect?: boolean;
+  /**
+   * 反思/蒸馏的推理档位。留空 = 自动（选模型声明的最低档）。
+   *
+   * 设成别的值是省 token / 求质量之间的手动权衡：当前模型默认档位会先吐上万字推理，
+   * 且推理 token 与正文共用 maxTokens，档位过高会把正文挤没。
+   */
+  reflectionEffort?: string;
   /** 多久没更新就算需要催办（小时）。 */
   heartbeatHours?: number;
   /** 后台巡视间隔（小时）。 */
@@ -121,20 +171,27 @@ export interface CognitionConfig {
   tasksFile?: string;
   /** 记忆的落盘路径，默认 <cwd>/cognition-state.json。 */
   stateFile?: string;
+  /** 准则本的落盘路径，默认插件目录下的 cognition-playbook.json。 */
+  playbookFile?: string;
+  /** 主题注册表的落盘路径，默认插件目录下的 cognition-topics.json。 */
+  topicsFile?: string;
   /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
   lockToken?: string;
   /** 真模型：显式指定 provider / model，不设则跟随当前默认模型。 */
   llmProvider?: string;
   llmModel?: string;
   /** 启动时是否直接启用真模型。 */
-  useRealModel?: boolean;
+  /** 反思引擎初始模式，默认 off（不开启，避免默认产出误导性输出）。 */
+  reflectionMode?: string;
 }
 
 type ResolvedConfig = Required<
-  Omit<CognitionConfig, 'tasksFile' | 'stateFile' | 'lockToken' | 'llmProvider' | 'llmModel'>
+  Omit<CognitionConfig, 'tasksFile' | 'stateFile' | 'playbookFile' | 'topicsFile' | 'lockToken' | 'llmProvider' | 'llmModel'>
 > & {
   tasksFile?: string;
   stateFile?: string;
+  playbookFile?: string;
+  topicsFile?: string;
   lockToken?: string;
   llmProvider?: string;
   llmModel?: string;
@@ -145,6 +202,23 @@ export const name = 'cognition-engine';
 /** 需要 tools 服务才能注册工具。 */
 export const inject = ['tools'];
 
+/**
+ * 解析访问口令。
+ *
+ * 当前行为：
+ *   - config.lockToken 显式传字符串 → 用它上锁
+ *   - 其他情况（含显式传空串）      → 不上锁
+ *
+ * 为什么不默认自动生成：早期版本会生成口令写到数据文件旁边，
+ * 那对同机进程毫无防护作用，只会把页面自己的写操作挡在门外。
+ * 想防同机其他程序读记忆正文，必须自己配一个口令。
+ */
+function resolveLockToken(config: CognitionConfig): string | null {
+  if (typeof config.lockToken === 'string' && config.lockToken.trim().length > 0) {
+    return config.lockToken.trim();
+  }
+  return null;
+}
 const HOUR_MS = 60 * 60 * 1000;
 
 function numberOr(value: unknown, fallback: number): number {
@@ -160,6 +234,11 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     overlapThreshold: numberOr(config.overlapThreshold, 0.42),
     communityThreshold: numberOr(config.communityThreshold, 0.3),
     maxClusterSize: Math.max(1, Math.round(numberOr(config.maxClusterSize, 8))),
+    injectMemory: config.injectMemory !== false,
+    playbookChars: Math.max(200, Math.round(numberOr(config.playbookChars, 700))),
+    playbookMaxEntries: Math.max(1, Math.round(numberOr(config.playbookMaxEntries, 12))),
+    autoReflect: config.autoReflect === true,
+    reflectionEffort: config.reflectionEffort ?? '',
     heartbeatHours: Math.max(0.01, numberOr(config.heartbeatHours, 6)),
     patrolIntervalHours: Math.max(0.01, numberOr(config.patrolIntervalHours, 3)),
     idleThresholdMinutes: Math.max(0.1, numberOr(config.idleThresholdMinutes, 5)),
@@ -171,6 +250,14 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     stateFile:
       typeof config.stateFile === 'string' && config.stateFile.trim().length > 0
         ? config.stateFile
+        : undefined,
+    playbookFile:
+      typeof config.playbookFile === 'string' && config.playbookFile.trim().length > 0
+        ? config.playbookFile
+        : undefined,
+    topicsFile:
+      typeof config.topicsFile === 'string' && config.topicsFile.trim().length > 0
+        ? config.topicsFile
         : undefined,
     lockToken:
       typeof config.lockToken === 'string' && config.lockToken.trim().length > 0
@@ -184,7 +271,7 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
       typeof config.llmModel === 'string' && config.llmModel.trim().length > 0
         ? config.llmModel
         : undefined,
-    useRealModel: config.useRealModel === true,
+    reflectionMode: normalizeReflectionMode(config.reflectionMode),
   };
 }
 
@@ -194,7 +281,6 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
  */
 export function persistReflection(
   memory: TemporalMemoryStore,
-  graph: SchemaGraphManager,
   result: { query: string; synthesis: string },
 ): TemporalFact {
   const subject = `结论:${result.query}`.slice(0, 60);
@@ -206,12 +292,9 @@ export function persistReflection(
     source: 'reflection',
     importance: 0.6,
   });
-  graph.ingest(result.synthesis);
   return fact;
 }
 
-type IngestInputLike = Parameters<TemporalMemoryStore['ingest']>[0];
-type RecallOptionsLike = Parameters<TemporalMemoryStore['recall']>[1];
 
 /* ------------------------------------------------------------------ */
 /* 插件入口                                                            */
@@ -220,22 +303,62 @@ type RecallOptionsLike = Parameters<TemporalMemoryStore['recall']>[1];
 export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | undefined {
   const config = normalizeConfig(rawConfig);
 
-  const memory = new TemporalMemoryStore({ halfLifeMs: config.decayHalfLifeHours * HOUR_MS });
-  const graph = new SchemaGraphManager({
-    assimilateThreshold: config.assimilateThreshold,
-    overlapThreshold: config.overlapThreshold,
-    communityThreshold: config.communityThreshold,
-    maxClusterSize: config.maxClusterSize,
+  const audit = new AuditLog();
+  const playbook = new PlaybookStore({
+    ...(config.playbookFile === undefined ? {} : { filePath: config.playbookFile }),
+    maxChars: config.playbookChars,
+    maxEntries: config.playbookMaxEntries,
+    // 来源校验：sourceIds 必须真实存在，防止模型臆造出处
+    validateSourceIds: (ids) => ids.filter((id) => memory.get(id) !== undefined),
+    // 证据链：源记忆必须仍然「活着」——未被取代、未删除、未归档。
+    // 只要它变了，依赖它的准则就该知道自己失去了支撑（Doyle TMS）。
+    isSourceAlive: (id) => {
+      const fact = memory.get(id);
+      if (fact === undefined) return false;
+      if (fact.deletedAt !== undefined) return false;
+      if (fact.supersededAt !== null) return false;
+      if (fact.archived) return false;
+      return true;
+    },
   });
+  const topics = new TopicStore({
+    ...(config.topicsFile === undefined ? {} : { filePath: config.topicsFile }),
+  });
+
+  // 知识缺口：模型卡壳时登记，下次针对性补（P6 学习闭环）
+  const gaps = new GapStore();
+  const memory = new TemporalMemoryStore({
+    halfLifeMs: config.decayHalfLifeHours * HOUR_MS,
+    onEvent: (event) => audit.append(event),
+  });
+  /** 从存档恢复出来的模式（在 reflectionMode 声明前捕获）。 */
+  let restoredReflectionMode: ReflectionMode | undefined;
+
   // —— 落盘：记忆 ——
   const stateStore = new JsonStateStore<PersistedState>({
     ...(config.stateFile === undefined ? {} : { filePath: config.stateFile }),
-    serialize: () => ({ version: 1, facts: memory.serialize() }),
+    serialize: () => ({ version: 1, facts: memory.serialize(), reflectionMode, rules: { ...memory.getRules() } as Record<string, boolean> }),
     restore: (data) => {
       if (Array.isArray(data.facts)) memory.restore(data.facts);
+      if (typeof data.reflectionMode === 'string') restoredReflectionMode = normalizeReflectionMode(data.reflectionMode);
+      // 兼容旧存档：realModel: true 等价于 real
+      else if (data.realModel === true) restoredReflectionMode = 'real';
+      if (data.rules !== undefined) memory.setRules(data.rules as never);
     },
   });
   try {
+    // 先把旧位置（插件包根目录）的数据搬到独立数据目录，再加载。
+  // 用户数据放代码目录里，任何「清理仓库」都会误伤——这个坑踩过两次。
+  const migrated = migrateLegacyData();
+  if (migrated.length > 0) {
+    ctx.logger?.info?.(
+      `cognition-engine: 已将 ${migrated.length} 个数据文件迁到 ${dataDir()}（${migrated.join(', ')}）`,
+    );
+  }
+
+  playbook.loadSync();
+  topics.loadSync();
+  gaps.loadSync();
     if (stateStore.loadSync()) {
       ctx.logger?.info?.(`cognition-engine: 已从磁盘恢复 ${memory.size} 条记忆`);
     }
@@ -247,9 +370,31 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
   // —— 真模型开关 ——
   const mockLLM = new MockDialecticalLLM();
-  let useRealModel = config.useRealModel;
+  let reflectionMode: ReflectionMode = restoredReflectionMode ?? normalizeReflectionMode(config.reflectionMode);
+  /**
+   * 巡逻发现逾期任务时是否自动跑模型复盘。
+   *
+   * 默认关闭：一次完整三段式复盘 = 3 次模型调用 ≈ 3100 tokens，
+   * 每 patrolIntervalHours（默认 3 小时）就可能触发一次，一天最多 8 次。
+   * 关掉后巡逻仍会写「已超期 N 小时」的提示，只是不烧 token。
+   */
+  let autoReflect = config.autoReflect === true;
+  /** 反思/蒸馏用的推理档位；空串表示「自动（最低）」。 */
+  let reflectionEffort: string = config.reflectionEffort ?? '';
+  /** 当前模型声明的档位，启动后异步填充，供页面显示。 */
+  let availableEfforts: string[] = [];
+  /** 探测一次模型能力，失败就当宿主不支持，不影响主流程。 */
+  const refreshEfforts = async (): Promise<void> => {
+    const service = ctx.get?.('llm') as LlmService | undefined;
+    const { provider, model } = resolveModel();
+    if (service === undefined || provider === '' || model === '') return;
+    const efforts = await probeEfforts(service, provider, model);
+    if (efforts !== null) availableEfforts = efforts;
+  };
   /** 上锁口令；null 表示未上锁。 */
-  let lockToken: string | null = config.lockToken ?? null;
+  let lockToken: string | null = resolveLockToken(config);
+  /** 用户是否显式配置了口令（决定 /detail 是否要鉴权）。 */
+  const explicitLock = typeof config.lockToken === 'string' && config.lockToken.trim().length > 0;
 
   const resolveModel = (): { provider: string; model: string } => {
     if (config.llmProvider !== undefined && config.llmModel !== undefined) {
@@ -260,31 +405,236 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     return { provider: selection?.provider ?? '', model: selection?.model ?? '' };
   };
 
-  const callRealModel = async (prompt: string): Promise<string> => {
+  /**
+   * 查询当前模型声明的推理档位，并缓存。
+   *
+   * 返回 null 表示宿主不提供能力查询（老版本），调用方按默认档位走。
+   */
+  const probeEfforts = async (
+    llm: LlmService,
+    provider: string,
+    model: string,
+  ): Promise<string[] | null> => {
+    try {
+      if (typeof llm.resolveModelInfo !== 'function') return null;
+      const info = await llm.resolveModelInfo(provider, model);
+      return (info?.reasoning?.efforts ?? []).map((effort) => effort.id);
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * 决定这次调用用哪个推理档位。
+   *
+   * `reflectionEffort` 为空表示「自动」——选最低档，因为反思与蒸馏都是
+   * 按格式输出结构化结果的任务，不需要长链推理，而推理 token 和正文抢同一个预算。
+   */
+  const resolveEffort = async (llm: LlmService, provider: string, model: string): Promise<string | undefined> => {
+    if (reflectionEffort !== undefined && reflectionEffort !== '') return reflectionEffort;
+    const efforts = await probeEfforts(llm, provider, model);
+    if (efforts === null || efforts.length === 0) return undefined;
+    return efforts.find((id) => /minimal|none|off|low|fast|light/i.test(id)) ?? efforts[0];
+  };
+
+  const callRealModel = async (prompt: string, maxTokens = 4000): Promise<string> => {
     const llm = ctx.get?.('llm') as LlmService | undefined;
     if (llm === undefined || typeof llm.stream !== 'function') throw new Error('llm 服务不可用');
     const { provider, model } = resolveModel();
     if (provider === '' || model === '') {
       throw new Error('未找到可用模型：请在 cordis.patch.yml 设 llmProvider / llmModel');
     }
+
+    // 推理档位压到最低：这些任务是格式化的结构化输出，不需要长链推理，
+    // 而推理 token 和正文抢同一个 maxTokens 预算。
+    const reasoningEffort = await resolveEffort(llm, provider, model);
+
     let text = '';
+    let reasoning = '';
+    let hitMaxTokens = false;
+    // 诊断用：记录收到过哪些 chunk 类型，空内容时能说清是模型没吐字还是字段名对不上。
+    const seen = new Map<string, number>();
     for await (const chunk of llm.stream({
       provider,
       model,
-      maxTokens: 800,
+      maxTokens,
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       // 单段最多等 90 秒，避免模型卡住把整个反思流程挂死
       signal: AbortSignal.timeout(90_000),
       messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
     })) {
+      const type = String((chunk as { type?: unknown }).type ?? 'unknown');
+      seen.set(type, (seen.get(type) ?? 0) + 1);
       if (chunk.type === 'text-delta' && typeof chunk.text === 'string') text += chunk.text;
-      if (chunk.type === 'finish' && chunk.reason?.kind === 'error') throw new Error('模型返回错误');
+      if (chunk.type === 'reasoning-delta' && typeof chunk.text === 'string') reasoning += chunk.text;
+      if (chunk.type === 'finish') {
+        if (chunk.reason?.kind === 'error') throw new Error('模型返回错误');
+        if (chunk.reason?.kind === 'max-tokens') hitMaxTokens = true;
+      }
     }
-    if (text.trim().length === 0) throw new Error('模型返回空内容');
+    if (text.trim().length === 0) {
+      // 只出推理不出正文 = 预算被思考过程吃光，不是模型故障。
+      if (reasoning.length > 0 || hitMaxTokens) {
+        throw new Error(
+          `模型只输出了推理过程（${reasoning.length} 字${hitMaxTokens ? '，已触及 maxTokens 上限' : ''}），` +
+            `正文被 token 预算截断。已尝试推理档位 ${reasoningEffort ?? '默认'}；调大 maxTokens（当前 ${maxTokens}）后重试。`,
+        );
+      }
+      const shapes = [...seen.entries()].map(([type, count]) => `${type}×${count}`).join(', ');
+      throw new Error(`模型返回空内容（收到 chunk：${shapes.length > 0 ? shapes : '无'}）`);
+    }
     return text;
   };
 
+  /**
+   * 准则蒸馏：从未被覆盖的记忆里提炼候选，并给现有准则打标记。
+   *
+   * 不直接改准则——候选进 pending，标记直接生效（标记可以随时改回来，风险低）。
+   */
+  const runDistill = async (options: { maxCandidates?: number } = {}): Promise<Record<string, unknown>> => {
+    if (reflectionMode === 'off') {
+      throw new Error('反思引擎未开启：准则蒸馏需要真实模型，请在设置页切到「真实模型」');
+    }
+    if (reflectionMode === 'local') {
+      throw new Error('本地占位引擎无法蒸馏准则：它只会输出固定模板，请切换到「真实模型」');
+    }
+
+    // 已被任何准则引用过的记忆不再重复喂给模型
+    const referenced = new Set(playbook.all().flatMap((entry) => entry.sourceIds));
+    const uncovered = memory
+      .all()
+      .filter((fact) => fact.deletedAt === undefined && fact.supersededAt === null && !fact.archived)
+      .filter((fact) => !referenced.has(fact.id))
+      .sort((a, b) => b.importance - a.importance || b.recordedAt - a.recordedAt)
+      .slice(0, 20)
+      .map((fact) => ({ id: fact.id, subject: fact.subject, content: fact.content }));
+
+    const prompt = buildDistillPrompt({
+      entries: playbook.all(),
+      memories: uncovered,
+      maxCandidates: options.maxCandidates ?? 5,
+      // 有缺口时蒸馏优先针对它们，而不是泛泛归纳
+      gaps: gaps.open().map((g) => ({ id: g.id, text: g.text })),
+    });
+
+    const raw = await callRealModel(prompt);
+    const parsed = parseDistillResult(raw);
+
+    // 标记直接生效：helpful/harmful 可以再改，风险低
+    let marked = 0;
+    for (const item of parsed.marks) {
+      if (playbook.mark(item.id, item.mark)) marked += 1;
+    }
+
+    // 候选进 pending，必须人工审核
+    const submitted: Array<Record<string, unknown>> = [];
+    for (const candidate of parsed.candidates) {
+      // 相对表达（"7d"）与 ISO 日期都由 parseMoment 归一成毫秒；解析不了就当长期有效。
+      const validTo = candidate.validUntil === undefined ? null : (parseMoment(candidate.validUntil) ?? null);
+      const outcome = playbook.submit({
+        section: candidate.section,
+        content: candidate.content,
+        when: candidate.when,
+        sourceIds: candidate.sourceIds,
+        validTo,
+      });
+      submitted.push({
+        content: candidate.content,
+        section: candidate.section ?? '未分类',
+        accepted: outcome.accepted,
+        ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+        ...(outcome.entry === undefined ? {} : { id: outcome.entry.id }),
+        ...(validTo === null ? {} : { validTo }),
+        ...(outcome.entry?.conflictWith === undefined ? {} : { conflictWith: outcome.entry.conflictWith }),
+      });
+    }
+    await playbook.flush();
+
+    return {
+      reflection: parsed.reflection,
+      marked,
+      candidates: submitted,
+      uncoveredMemories: uncovered.length,
+      parseFailed: parsed.raw !== undefined,
+      // 解析失败时把模型原文前 600 字带出来，否则无法判断是格式问题还是内容问题。
+      ...(parsed.raw === undefined
+        ? {}
+        : {
+            rawLength: parsed.raw.length,
+            rawTail: parsed.raw.slice(-120),
+            rawPreview: parsed.raw.slice(0, 300),
+          }),
+      stats: playbook.stats(),
+    };
+  };
+
+  /**
+   * 三道约束里的「拦截」与「审计」。
+   *
+   * 'tools/pre-execute' 是宿主给的真拦截点（waterfall，可返回 { kind: 'deny' }）。
+   * 这里做两件事：
+   *   - enforce=true 的准则违反 → 直接拒绝这次工具调用
+   *   - audit=true   的准则违反 → 记一次违反（不拦），写进条目计数与审计日志
+   * 勾了「自查」的条目走提示词，不走事件。
+   *
+   * 老版本宿主没有事件能力时整段静默跳过，准则本退化为纯提醒。
+   */
+  const installToolGuards = (): void => {
+    const on = (ctx as { on?: (name: string, handler: (...args: never[]) => unknown) => unknown }).on;
+    if (typeof on !== 'function') return;
+
+    const handler = async (
+      exec: unknown,
+      next: () => Promise<unknown>,
+    ): Promise<unknown> => {
+      // 没有启用任何拦截/审计时直接放行，避免每次调用都走一遍判定
+      const stats = playbook.stats();
+      if (stats.enforced === 0 && stats.audited === 0) return next();
+
+      const record = exec as { name?: unknown; arguments?: unknown };
+      // 「工具名 + 参数 JSON」一起参与匹配：准则可能要判工具名，也可能要判命令内容
+      const text = `${String(record.name ?? '')} ${JSON.stringify(record.arguments ?? {})}`;
+      const { blocked, violated } = playbook.checkToolCall(text);
+      if (violated.length === 0) return next();
+
+      for (const entry of violated) {
+        playbook.recordViolation(entry.id);
+        audit.append({
+          op: 'playbook.violation',
+          id: entry.id,
+          subject: entry.section,
+          origin: 'agent_tool',
+          detail: `${entry.enforce ? '已拦截' : '仅记录'}：${String(record.name ?? '')}`,
+        });
+      }
+      void playbook.flush();
+
+      if (blocked.length > 0) {
+        const list = blocked.map((entry) => `[${entry.id}] ${entry.content}`).join('；');
+        return {
+          kind: 'deny',
+          reason: `违反准则，调用被拒绝：${list}。补齐后再试，或在设置页停掉这条准则。`,
+        };
+      }
+      return next();
+    };
+
+    try {
+      on.call(ctx, 'tools/pre-execute', handler);
+    } catch (error) {
+      ctx.logger?.warn?.(`cognition-engine: 准则拦截注册失败 ${messageOf(error)}`);
+    }
+  };
+  installToolGuards();
+
   const reflection = new DialecticalReflectionEngine((prompt, phase) =>
-    useRealModel ? callRealModel(prompt) : Promise.resolve(mockLLM.call(prompt, phase)),
+    reflectionMode === 'real'
+      ? callRealModel(prompt)
+      : reflectionMode === 'local'
+        // 不在中间产物上加警示：它会作为下一阶段的输入，会被模型当成正文引用。
+        // 警示统一在工具层按模式补。
+        ? Promise.resolve(mockLLM.call(prompt, phase))
+        : Promise.reject(new Error('反思引擎未开启：请在设置页开启，或直接回答而不调用 cognition_reflect')),
   );
   const worker = new ReflectionWorker(reflection, 1);
   const proactive = new ProactiveGate({
@@ -310,13 +660,58 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   let disposed = false;
   const disposers: Array<() => void> = [];
 
+  /**
+   * 计算「本轮注入到系统提示的上下文」。
+   *
+   * 注入与面板上的「注入来源」共用这一个函数——之前是两套各写一遍的代码，
+   * 结果注入段只拼了记忆摘要、统计段却按准则本判断，面板报「正在注入准则本」
+   * 而模型实际只看到记忆摘要。这类「显示与实际不一致」的 bug 单靠测试抓不到，
+   * 只能靠两者同源来根治。
+   *
+   * 优先级：准则本 > 记忆摘要 > 不注入。两者不叠加——ACE 与 DC 都说明
+   * 上下文越长越容易稀释信号。
+   */
+  const buildInjectedContext = (): { text: string; source: 'playbook' | 'digest' | 'none' } => {
+    // 待补缺口很短（通常 0~3 行），接在准则本后面——
+    // 它提醒模型「这些是你还不知道的」，避免在同一个地方反复卡壳。
+    const gapText = gaps.renderSection();
+    const withGaps = (text: string): string => (gapText.length === 0 ? text : `${text}\n\n${gapText}`);
+
+    const section = playbook.renderSection(undefined, (id) => topics.get(id)?.name);
+    if (section.length > 0) return { text: withGaps(section), source: 'playbook' };
+
+    const digest = buildCoreDigest(memory);
+    if (digest.length > 0) {
+      return { text: withGaps(`${digest}\n（需要细节时调用 cognition_recall。）`), source: 'digest' };
+    }
+    if (gapText.length > 0) return { text: gapText, source: 'playbook' };
+    return { text: '', source: 'none' };
+  };
+
+  /**
+   * 记忆变了就重算准则的证据链。
+   *
+   * 这是「作废会传染」的落点：删一条记忆，依赖它的准则必须知道自己失去了支撑，
+   * 而不是继续当作无事发生（那正是 TMS 说的「留下没有主人的下游结论」）。
+   */
+  const refreshEvidence = (): void => {
+    try {
+      const changed = playbook.recheckEvidence();
+      if (changed.length > 0) {
+        ctx.logger?.info?.(`cognition-engine: ${changed.length} 条准则的证据链状态变化（${changed.join(', ')}）`);
+        void playbook.flush();
+      }
+    } catch (error) {
+      ctx.logger?.warn?.(`cognition-engine: 证据链重算失败 ${messageOf(error)}`);
+    }
+  };
+
   /** 页面可视化用的快照（纯 JSON，客户端每 2 秒拉一次）。 */
   const snapshot = (): Record<string, unknown> => {
     return {
       memory: memory.stats(),
       /** 标记为 test 的事实条数：页面上用来提醒「这些不是真事」。 */
       samples: memory.all().filter((fact) => fact.source === 'test').length,
-      graph: graph.stats(),
       tasks: {
         pending: taskManager.get_pending_tasks().length,
         due: taskManager.check_due_tasks().length,
@@ -325,28 +720,53 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         pending: proactive.pending().length,
         recordOnly: proactive.isRecordOnly,
       },
-      storage: { state: stateStore.path, tasks: taskManager.path },
       model: (() => {
         const resolved = resolveModel();
         return {
-          enabled: useRealModel,
+          enabled: reflectionMode !== 'off',
+          mode: reflectionMode,
+          autoReflect,
+          effort: reflectionEffort,
+          efforts: availableEfforts,
           provider: resolved.provider,
           model: resolved.model,
           available: resolved.provider !== '' && resolved.model !== '',
         };
       })(),
       locked: lockToken !== null,
+      storageFile: basename(stateStore.path),
+      playbook: {
+        ...playbook.stats(),
+        /** 当前注入的是准则本、原始记忆摘要，还是都不注入（与注入段同源）。 */
+        injectSource: buildInjectedContext().source,
+      },
+      topics: topics.stats(),
+      storageWarning: stateStore.warning,
+      rules: memory.getRules(),
       updatedAt: Date.now(),
     };
   };
 
   /** 面板展开时按需拉取的明细（不走模型上下文，只给页面看）。 */
-  const detail = (): Record<string, unknown> => buildDetail({ memory, graph, taskManager });
+  // 准则本指标也放进 detail：页面页签的数字统一从 detail 取，
+  // 之前只放在 /state 里，导致「准则」页签后面永远没有数字。
+  const detail = (): Record<string, unknown> => ({
+    ...buildDetail({ memory, taskManager }),
+    playbook: playbook.stats(),
+    topics: {
+      list: topics.all(),
+      stats: topics.stats(),
+      /** 未归类计数：没有 topicIds 的就是未归类。 */
+      unclassified: {
+        memories: memory.all().filter((f) => f.deletedAt === undefined && f.topicIds.length === 0).length,
+        rules: playbook.all().filter((e) => e.status !== 'retired' && e.topicIds.length === 0).length,
+      },
+    },
+  });
 
   // 宿主 → 页面 的数据桥：Client 半区 fetch('/cognition-engine/state')
   // 注意：不能放在 /api 前缀下——那条前缀归 API 网关所有，会先被它 401 掉。
-  const webServer = ctx.get?.('webServer') as WebServerHost | undefined;
-  if (webServer !== undefined && typeof webServer.register === 'function') {
+  const setupRoutes = (webServer: WebServerHost): void => {
     const send = (response: WebResponseLike, status: number, body: unknown): void => {
       response.writeHead(status, {
         'content-type': 'application/json; charset=utf-8',
@@ -377,7 +797,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           webServer.register({
             kind: 'exact',
             path,
-            handler: (request, response) => {
+            handler: async (request, response) => {
               try {
                 const req = request as { method?: string; url?: string };
                 if ((req.method ?? 'GET').toUpperCase() !== method) {
@@ -388,7 +808,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
                   send(response, 401, { error: 'unauthorized' });
                   return;
                 }
-                send(response, 200, produce(new URL(req.url ?? path, 'http://local')));
+                send(response, 200, await produce(new URL(req.url ?? path, 'http://local')));
               } catch (error) {
                 send(response, 500, { error: messageOf(error) });
               }
@@ -403,8 +823,35 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       }
     };
 
+    // 知识缺口：模型卡壳时登记，下次针对性补
+    route('/cognition-engine/gaps', () => ({ gaps: gaps.all(), open: gaps.open(), stats: gaps.stats() }));
+    route(
+      '/cognition-engine/gaps/add',
+      (url) => {
+        const text = url.searchParams.get('text') ?? '';
+        if (text.trim().length === 0) throw new Error('缺口描述不能为空');
+        const context = url.searchParams.get('context');
+        const { gap, duplicate } = gaps.add({ text, ...(context === null ? {} : { context }) });
+        gaps.flush();
+        return { gap, duplicate };
+      },
+      { method: 'POST' },
+    );
+    route(
+      '/cognition-engine/gaps/resolve',
+      (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        const ok = gaps.resolve(id, url.searchParams.get('by') ?? '人工确认');
+        if (ok) gaps.flush();
+        return { id, ok };
+      },
+      { method: 'POST' },
+    );
+
     route('/cognition-engine/state', () => snapshot());
-    route('/cognition-engine/detail', () => detail(), { requireAuth: true });
+    // 读取记忆默认开放（令牌文件本就可被同机进程读取，锁读取只增加摩擦）；
+    // 显式配置 lockToken 时才保护详情。写操作（clear/model/lock）始终需要口令。
+    route('/cognition-engine/detail', () => detail(), { requireAuth: explicitLock });
 
     /** 读 ?name=true 这类布尔开关。 */
     const flag = (url: URL, name: string): boolean => url.searchParams.get(name) === 'true';
@@ -420,7 +867,6 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         let removed = 0;
         removed = memory.all().length;
         for (const fact of memory.all()) memory.remove(fact.id);
-        graph.reset();
         void stateStore.flush();
         return { cleared: 'memory', removed, memory: memory.stats() };
       },
@@ -431,11 +877,517 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     route(
       '/cognition-engine/model',
       (url) => {
-        useRealModel = flag(url, 'enabled');
+        // 两个参数各自独立：只传一个时不能把另一个重置掉。
+        // （早期写法无条件 normalizeReflectionMode(null)，传 autoReflect 会顺手把引擎关成 off。）
+        const mode = url.searchParams.get('mode');
+        if (mode !== null) reflectionMode = normalizeReflectionMode(mode);
+        const auto = url.searchParams.get('autoReflect');
+        if (auto !== null) autoReflect = auto === 'true' || auto === '1';
+        // effort 传空串 = 回到「自动（最低）」
+        const effort = url.searchParams.get('effort');
+        if (effort !== null) reflectionEffort = effort;
+        void stateStore.flush();
         const { provider, model } = resolveModel();
-        return { enabled: useRealModel, provider, model, available: provider !== '' && model !== '' };
+        return {
+          enabled: reflectionMode !== 'off',
+          mode: reflectionMode,
+          autoReflect,
+          effort: reflectionEffort,
+          efforts: availableEfforts,
+          provider,
+          model,
+          available: provider !== '' && model !== '',
+        };
       },
       { method: 'POST', requireAuth: true },
+    );
+
+    // 界面直接新建任务（含时间段）
+    route(
+      '/cognition-engine/task/create',
+      async (url) => {
+        const description = (url.searchParams.get('description') ?? '').trim();
+        if (description.length === 0) throw new Error('description 不能为空');
+        const s = url.searchParams.get('startAt');
+        const e = url.searchParams.get('endAt');
+        const rawTopics = url.searchParams.get('topicIds');
+        const task = await taskManager.create_task(description, {
+          ...(s === null ? {} : { startAt: Number(s) }),
+          ...(e === null ? {} : { endAt: Number(e) }),
+          ...(rawTopics === null
+            ? {}
+            : { topicIds: rawTopics.split(',').map((x) => x.trim()).filter((x) => x.length > 0) }),
+        });
+        return { task };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 调整任务顺序 / 并行
+    route(
+      '/cognition-engine/task/meta',
+      async (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        const o = url.searchParams.get('order');
+        const pl = url.searchParams.get('parallel');
+        const task = await taskManager.set_meta(id, {
+          ...(o === null ? {} : { order: Number(o) }),
+          ...(pl === null ? {} : { parallel: pl === 'true' }),
+        });
+        if (task === undefined) throw new Error('任务不存在');
+        return { task };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 归并同类记忆（手动触发）
+    route(
+      '/cognition-engine/consolidate',
+      () => {
+        const groups = memory.consolidate();
+        void stateStore.flush();
+        return {
+          groups: groups.length,
+          merged: groups.reduce((sum, group) => sum + group.merged.length, 0),
+          detail: groups,
+        };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 删除任务
+    route(
+      '/cognition-engine/task/delete',
+      async (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        const ok = await taskManager.delete_task(id);
+        if (!ok) throw new Error('任务不存在');
+        return { id, deleted: true };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+
+    // 改任务状态（页面上的「开始 / 完成 / 重新打开」）
+    route(
+      '/cognition-engine/task/status',
+      async (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        const status = url.searchParams.get('status') ?? '';
+        if (status !== 'PENDING' && status !== 'IN_PROGRESS' && status !== 'COMPLETED') {
+          throw new Error('status 只能是 PENDING / IN_PROGRESS / COMPLETED');
+        }
+        const clue = url.searchParams.get('clue');
+        const task = await taskManager.update_task_progress(
+          id,
+          status,
+          clue === null || clue.trim().length === 0 ? undefined : clue.trim(),
+        );
+        return { task };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 删除 / 恢复一条记忆（软删除）
+    route(
+      '/cognition-engine/memory/delete',
+      (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        const restore = url.searchParams.get('restore') === 'true';
+        const ok = restore ? memory.restoreDeleted(id) : memory.softDelete(id);
+        if (!ok) throw new Error(restore ? '没有可恢复的记忆' : '记忆不存在');
+        refreshEvidence();
+        void stateStore.flush();
+        return { id, deleted: !restore };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 手动修正一条记忆
+    route(
+      '/cognition-engine/memory/update',
+      (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        const content = url.searchParams.get('content');
+        const subject = url.searchParams.get('subject');
+        const recordedAt = url.searchParams.get('recordedAt');
+        const superseded = url.searchParams.get('superseded');
+        const fact = memory.updateFact(id, {
+          ...(content === null ? {} : { content }),
+          ...(subject === null ? {} : { subject }),
+          ...(recordedAt === null ? {} : { recordedAt: Number(recordedAt) }),
+          ...(superseded === null ? {} : { superseded: superseded === 'true' }),
+        });
+        if (fact === undefined) throw new Error('记忆不存在');
+        void stateStore.flush();
+        return {
+          id: fact.id,
+          content: fact.content,
+          recordedAt: fact.recordedAt,
+          superseded: fact.supersededAt !== null,
+        };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 界面直接写记忆
+    route(
+      '/cognition-engine/memory/create',
+      (url) => {
+        const content = (url.searchParams.get('content') ?? '').trim();
+        if (content.length === 0) throw new Error('content 不能为空');
+        const subject = url.searchParams.get('subject') ?? undefined;
+        const fact = memory.ingest({ content, subject, source: 'user', origin: 'ui' });
+        void stateStore.flush();
+        return { id: fact.id, subject: fact.subject };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 记忆准入规则：读 / 改
+    route('/cognition-engine/rules', () => ({ rules: memory.getRules() }));
+    route(
+      '/cognition-engine/rules/set',
+      (url) => {
+        const patch: Record<string, boolean> = {};
+        for (const key of ['transient', 'sensitive', 'injection', 'authority']) {
+          const v = url.searchParams.get(key);
+          if (v !== null) patch[key] = v === 'true';
+        }
+        memory.setRules(patch as never);
+        void stateStore.flush();
+        return { rules: memory.getRules() };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // —— 主题（人定的适用范围键）——
+    route('/cognition-engine/topics', () => {
+      // 每个主题挂了多条记忆/准则——页面上要显示人话，不是裸 id
+      const facts = memory.all().filter((f) => f.deletedAt === undefined);
+      const rules = playbook.all().filter((e) => e.status !== 'retired');
+      // 取全部任务：已完成的也要能看到，否则点「完成」后任务会凭空消失
+      const allTasks = taskManager.all();
+      return {
+        stats: topics.stats(),
+        list: topics.all().map((topic) => {
+          const owned = allTasks.filter((task) => (task.topicIds ?? []).includes(topic.id));
+          return {
+            ...topic,
+            memoryCount: facts.filter((f) => f.topicIds.includes(topic.id)).length,
+            ruleCount: rules.filter((e) => e.topicIds.includes(topic.id)).length,
+            taskCount: owned.length,
+            // 主题卡片上直接列出「进行中事项」，任务不再是孤立台账
+            tasks: owned.slice(0, 5).map((task) => ({ id: task.id, description: task.description, status: task.status })),
+          };
+        }),
+      unclassified: {
+        memories: memory.all().filter((f) => f.deletedAt === undefined && f.topicIds.length === 0).length,
+        rules: rules.filter((e) => e.topicIds.length === 0).length,
+        },
+      };
+    });
+
+    route(
+      '/cognition-engine/topics/add',
+      async (url) => {
+        const aliases = (url.searchParams.get('aliases') ?? '')
+          .split(',')
+          .map((a) => a.trim())
+          .filter((a) => a.length > 0);
+        const parent = url.searchParams.get('parentId');
+        const result = topics.add({
+          name: url.searchParams.get('name') ?? '',
+          description: url.searchParams.get('description') ?? '',
+          aliases,
+          parentId: parent === null || parent.length === 0 ? null : parent,
+        });
+        if (typeof result === 'string') return { accepted: false, reason: result };
+        await topics.flush();
+        return { accepted: true, topic: result };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    route(
+      '/cognition-engine/topics/update',
+      async (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        const name = url.searchParams.get('name');
+        const description = url.searchParams.get('description');
+        const aliasesRaw = url.searchParams.get('aliases');
+        const parentRaw = url.searchParams.get('parentId');
+        const ok = topics.update(id, {
+          ...(name === null ? {} : { name }),
+          ...(description === null ? {} : { description }),
+          ...(aliasesRaw === null
+            ? {}
+            : { aliases: aliasesRaw.split(',').map((a) => a.trim()).filter((a) => a.length > 0) }),
+          ...(parentRaw === null ? {} : { parentId: parentRaw.length === 0 ? null : parentRaw }),
+        });
+        if (!ok) throw new Error('主题更新失败：不存在、重名或父级非法');
+        await topics.flush();
+        return { id, updated: true };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    route(
+      '/cognition-engine/topics/archive',
+      async (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        if (!topics.archive(id)) throw new Error('主题不存在');
+        await topics.flush();
+        return { id, archived: true };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    route(
+      '/cognition-engine/topics/assign',
+      async (url) => {
+        const targetType = url.searchParams.get('targetType') ?? '';
+        const id = url.searchParams.get('id') ?? '';
+        const topicIds = (url.searchParams.get('topicIds') ?? '')
+          .split(',')
+          .map((x) => x.trim())
+          .filter((x) => x.length > 0);
+        // 只允许挂到存在且未归档的主题，避免悬空引用
+        const valid = topicIds.filter((tid) => topics.get(tid)?.status === 'active');
+        if (targetType === 'memory') {
+          memory.setTopics(id, valid);
+          void stateStore.flush();
+          return { targetType, id, topicIds: valid };
+        }
+        if (targetType === 'rule') {
+          if (!playbook.setTopics(id, valid)) throw new Error('准则不存在');
+          await playbook.flush();
+          return { targetType, id, topicIds: valid };
+        }
+        if (targetType === 'task') {
+          const task = await taskManager.set_meta(id, { topicIds: valid });
+          if (task === undefined) throw new Error('任务不存在');
+          return { targetType, id, topicIds: valid };
+        }
+        throw new Error('targetType 只能是 memory / rule / task');
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 只给候选，不落库——主题是人工确认的
+    route(
+      '/cognition-engine/topics/suggest',
+      (url) => {
+        const text = url.searchParams.get('text') ?? '';
+        return { suggestions: topics.match(text, 3) };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // —— 准则蒸馏 ——
+    route(
+      '/cognition-engine/playbook/distill',
+      async (url) => {
+        const raw = url.searchParams.get('maxCandidates');
+        const maxCandidates = raw === null ? 5 : Math.max(1, Math.min(10, Number(raw)));
+        return runDistill({ maxCandidates: Number.isFinite(maxCandidates) ? maxCandidates : 5 });
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // —— 准则本 ——
+    route('/cognition-engine/playbook', () => ({
+      stats: playbook.stats(),
+      // 带上计算出来的过期标记：页面不用自己算时间，也能正确分组到「已过期」
+      entries: playbook.all().map((entry) => ({
+        ...entry,
+        expired: entry.status === 'active' && playbook.isExpired(entry),
+      })),
+      rendered: playbook.render(),
+    }));
+
+    route(
+      '/cognition-engine/playbook/candidate',
+      async (url) => {
+        const rawValidTo = url.searchParams.get('validTo');
+        const outcome = playbook.submit({
+          content: url.searchParams.get('content') ?? '',
+          section: url.searchParams.get('section') ?? undefined,
+          sourceIds: (url.searchParams.get('sourceIds') ?? '')
+            .split(',')
+            .map((id) => id.trim())
+            .filter((id) => id.length > 0),
+          validTo: rawValidTo === null ? null : (parseMoment(rawValidTo) ?? null),
+        });
+        if (outcome.accepted) await playbook.flush();
+        return outcome;
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    route(
+      '/cognition-engine/playbook/add',
+      async (url) => {
+        const outcome = playbook.addManual({
+          content: url.searchParams.get('content') ?? '',
+          section: url.searchParams.get('section') ?? undefined,
+        });
+        if (outcome.accepted) await playbook.flush();
+        return outcome;
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    route(
+      '/cognition-engine/playbook/act',
+      async (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        const action = url.searchParams.get('action') ?? '';
+        let ok = false;
+        switch (action) {
+          case 'accept': ok = playbook.accept(id); break;
+          case 'reject': ok = playbook.reject(id); break;
+          case 'retire': ok = playbook.retire(id, '手动停用'); break;
+          case 'revive': ok = playbook.revive(id); break;
+          case 'revise': ok = playbook.revise(id, url.searchParams.get('content') ?? ''); break;
+          case 'extend': {
+            const raw = url.searchParams.get('validTo');
+            ok = playbook.extend(id, raw === null ? null : (parseMoment(raw) ?? null));
+            break;
+          }
+          case 'helpful': ok = playbook.mark(id, 'helpful'); break;
+          case 'harmful': ok = playbook.mark(id, 'harmful'); break;
+          // 永久删除（任意状态）。停用只是不注入，删除是当它没存在过。
+          case 'delete': ok = playbook.remove(id); break;
+          // 人工标记冲突对：自动检测不可靠时用这个
+          case 'markConflict': {
+            const otherId = url.searchParams.get('otherId') ?? '';
+            ok = playbook.markConflict(id, otherId);
+            break;
+          }
+          // 未决冲突的人工裁决：保留哪一条
+          case 'resolve': {
+            const keepId = url.searchParams.get('keepId') ?? '';
+            ok = playbook.resolveConflict(keepId, id, url.searchParams.get('reason') ?? '人工裁决');
+            break;
+          }
+          // 立墓碑：这条本来就错了（区别于被更好的取代）
+          case 'revoke': ok = playbook.revoke(id, url.searchParams.get('reason') ?? '人工撤销'); break;
+          // 分项使用打标：applied / appliedGood / appliedBad / missed / userCorrected
+          case 'usage': {
+            const kind = url.searchParams.get('kind') ?? '';
+            const allowed = ['applied', 'appliedGood', 'appliedBad', 'missed', 'userCorrected'];
+            if (!allowed.includes(kind)) throw new Error(`kind 只能是 ${allowed.join(' / ')}`);
+            ok = playbook.markUsage(id, kind as 'applied', url.searchParams.get('trace') ?? '');
+            break;
+          }
+          // 设置证据来源（sourceIds）：改完立刻重算证据链
+          case 'source': {
+            const ids = (url.searchParams.get('sourceIds') ?? '')
+              .split(',')
+              .map((x) => x.trim())
+              .filter((x) => x.length > 0);
+            ok = playbook.setSourceIds(id, ids);
+            if (ok) refreshEvidence();
+            break;
+          }
+          // 三道约束开关：只改传了的项，没传的保持原值
+          case 'flags': {
+            const bool = (name: string): boolean | undefined => {
+              const value = url.searchParams.get(name);
+              return value === null ? undefined : value === 'true' || value === '1';
+            };
+            const str = (name: string): string | undefined => url.searchParams.get(name) ?? undefined;
+            ok = playbook.setFlags(id, {
+              guard: bool('guard'),
+              enforce: bool('enforce'),
+              audit: bool('audit'),
+              trigger: str('trigger'),
+              required: str('required'),
+              when: str('when'),
+            });
+            break;
+          }
+          default:
+            throw new Error(
+              'action 只能是 accept/reject/retire/revive/revise/extend/helpful/harmful/delete/flags',
+            );
+        }
+        if (!ok) throw new Error(`准则本操作失败：${action} ${id}`);
+        await playbook.flush();
+        return { id, action, ok };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 当前实际注入到系统提示的内容（排查「面板说有、模型看不到」这类问题用）
+    route('/cognition-engine/injected', () => {
+      const { text, source } = buildInjectedContext();
+      return { source, chars: text.length, text };
+    });
+
+    // 审计日志（最近 N 条）
+    route(
+      '/cognition-engine/audit',
+      async (url) => {
+        const raw = url.searchParams.get('limit');
+        const limit = raw === null ? 20 : Number(raw);
+        const lines = await audit.tail(Number.isFinite(limit) ? limit : 20);
+        return {
+          path: audit.path,
+          count: lines.length,
+          items: lines.map((line) => {
+            try {
+              return JSON.parse(line) as Record<string, unknown>;
+            } catch {
+              return { raw: line };
+            }
+          }),
+        };
+      },
+    );
+
+    // 快照列表与回滚
+    route('/cognition-engine/snapshots', async () => ({ items: await stateStore.listSnapshots() }));
+    route(
+      '/cognition-engine/snapshot/restore',
+      async (url) => {
+        const name = url.searchParams.get('name') ?? '';
+        const ok = await stateStore.restoreSnapshot(name);
+        if (!ok) throw new Error('快照不存在或名称非法');
+        stateStore.clearWarning();
+        return { restored: name };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // 导出：整库记忆（JSON）
+    route('/cognition-engine/export', () => ({
+      version: 1,
+      exportedAt: Date.now(),
+      facts: memory.serialize(),
+    }));
+
+    // 导入：用请求体里的 JSON 整体替换记忆库
+    route(
+      '/cognition-engine/import',
+      (url) => {
+        const raw = url.searchParams.get('payload');
+        if (raw === null || raw.length === 0) throw new Error('缺少 payload');
+        const parsed = JSON.parse(raw) as { facts?: unknown };
+        if (!Array.isArray(parsed.facts)) throw new Error('payload.facts 必须是数组');
+        for (const fact of memory.all()) memory.remove(fact.id);
+        // 导入的条目统一标成 import 通道，避免外部内容冒充用户陈述
+        const imported = (parsed.facts as Array<Record<string, unknown>>).map((fact) => ({
+          ...fact,
+          origin: 'import',
+        }));
+        memory.restore(imported as never);
+        refreshEvidence();
+        void stateStore.flush();
+        return { imported: memory.stats().total };
+      },
+      { method: 'POST', requireAuth: explicitLock },
     );
 
     // 上锁开关：开启时返回口令，页面用它设置 x-cognition-token
@@ -445,349 +1397,62 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         lockToken = flag(url, 'enabled') ? (config.lockToken ?? randomUUID()) : null;
         return { locked: lockToken !== null, token: lockToken };
       },
-      { method: 'POST', requireAuth: true },
+      // 自动生成的口令可自助开关；用户显式配置口令时才要求鉴权
+      { method: 'POST', requireAuth: explicitLock },
     );
+  };
+
+  const webServer = ctx.get?.('webServer') as WebServerHost | undefined;
+  if (webServer !== undefined && typeof webServer.register === 'function') {
+    setupRoutes(webServer);
+  } else {
+    // 宿主启动顺序可能晚于插件：轮询等待 webServer 出现后补注册，避免全部 404
+    let tries = 0;
+    const waitTimer = setInterval(() => {
+      tries += 1;
+      const late = ctx.get?.('webServer') as WebServerHost | undefined;
+      if (late !== undefined && typeof late.register === 'function') {
+        clearInterval(waitTimer);
+        try {
+          setupRoutes(late);
+          ctx.logger?.info?.('cognition-engine: webServer 就绪，HTTP 路由已补注册');
+        } catch (error) {
+          ctx.logger?.warn?.(`cognition-engine: 路由补注册失败: ${messageOf(error)}`);
+        }
+      } else if (tries >= 120) {
+        clearInterval(waitTimer);
+      }
+    }, 500);
+    waitTimer.unref?.();
+    disposers.push(() => clearInterval(waitTimer));
   }
 
-  const remember = {
-    name: 'cognition_remember',
-    description:
-      '写入双时态记忆；supersedes 取代旧事实（保留 id/hash，可历史召回）。返回 id、hash、残留冲突。',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['text'],
-      properties: {
-        text: { type: 'string', description: '事实原文。' },
-        subject: { type: 'string', description: '主题键，默认取冒号前短语。' },
-        tags: { type: 'array', items: { type: 'string' }, description: '标签。' },
-        importance: { type: 'number', description: '重要度 0..1。' },
-        validFrom: { type: 'number', description: '开始为真的 Unix 毫秒。' },
-        supersedes: { type: 'string', description: '被取代的旧事实 id。' },
-        source: {
-          type: 'string',
-          description: '来源：user/agent/test/imported，默认 agent。',
-        },
-        scope: {
-          type: 'string',
-          enum: ['global', 'workspace', 'session'],
-          description: '作用域，默认 global；session 自动绑定当前会话。',
-        },
-      },
+  const toolList = createTools({
+    memory,
+    topics,
+    taskManager,
+    proactive,
+    touch,
+    reflection,
+    persistReflection: (result) => persistReflection(memory, result),
+    tasksReady,
+    config,
+    refreshEvidence,
+    gapRecorder: (text, context) => {
+      const { gap, duplicate } = gaps.add({ text, ...(context === undefined ? {} : { context }) });
+      if (!duplicate) gaps.flush();
+      return { id: gap.id, duplicate, open: gaps.open().length };
     },
-    output: textOutput,
-    async execute(args: unknown, exec?: unknown): Promise<string> {
-      const input = asRecord(args);
-      const text = requireString(input, 'text');
-      const scopeValue = (optionalString(input, 'scope') ?? 'global') as 'global' | 'workspace' | 'session';
-      const agentId = (exec as { agent?: { id?: string } } | undefined)?.agent?.id;
-      const fact = memory.ingest({
-        content: text,
-        source: optionalString(input, 'source') ?? 'agent',
-        ...pick(input, ['subject', 'tags', 'importance', 'validFrom', 'supersedes']),
-        scope: scopeValue,
-        ...(scopeValue === 'session' && agentId !== undefined ? { sessionId: agentId } : {}),
-      } as IngestInputLike);
-
-      graph.ingest(text);
-      // 重建多级图式层次（CAM 的 run_hierarchy）；图很小，成本可忽略
-      graph.buildHierarchy();
-      touch();
-
-      return JSON.stringify({
-        stored: {
-          id: fact.id,
-          subject: fact.subject,
-          hash: fact.hash,
-          validFrom: fact.validFrom,
-          validTo: fact.validTo,
-          recordedAt: fact.recordedAt,
-        },
-        superseded: optionalString(input, 'supersedes') ?? null,
-        conflicts: memory.conflicts(),
-        memory: memory.stats(),
-      });
+    playbookRate: (id, kind, trace) => {
+      const ok = playbook.markUsage(id, kind, trace);
+      if (ok) void playbook.flush();
+      return ok;
     },
-  };
-
-  const recall = {
-    name: 'cognition_recall',
-    description:
-      '召回记忆。strict 当前真值 / historical 该时刻为真 / belief 当时已知 / associative 联想（不过滤时间）。render 走 Inline&Spill，expand 按图式带关联。',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['query'],
-      properties: {
-        query: { type: 'string', description: '检索语句。' },
-        mode: {
-          type: 'string',
-          enum: ['strict', 'historical', 'belief', 'associative'],
-          description: '口径，默认 strict。',
-        },
-        validTime: { type: 'number', description: 'historical 的时刻，毫秒。' },
-        recordedTime: { type: 'number', description: 'belief 的时刻，毫秒。' },
-        limit: { type: 'number', description: '条数，默认 5。' },
-        subject: { type: 'string', description: '限定主题。' },
-        tags: { type: 'array', items: { type: 'string' }, description: '标签（全含）。' },
-        render: { type: 'boolean', description: '近期给正文，久远只给 ID。' },
-        inlineChars: { type: 'number', description: 'render 单条上限，默认 240。' },
-        expand: { type: 'boolean', description: '带出同图式关联。' },
-        scope: {
-          type: 'string',
-          enum: ['all', 'global', 'workspace', 'session'],
-          description: '作用域，默认 all。',
-        },
-      },
-    },
-    output: textOutput,
-    async execute(args: unknown, exec?: unknown): Promise<string> {
-      const input = asRecord(args);
-      const query = requireString(input, 'query');
-      const rawMode = optionalString(input, 'mode') ?? 'strict';
-      if (rawMode !== 'strict' && rawMode !== 'historical' && rawMode !== 'belief' && rawMode !== 'associative') {
-        throw new Error('mode 只能是 strict / historical / belief / associative');
-      }
-      const agentId = (exec as { agent?: { id?: string } } | undefined)?.agent?.id;
-      const options = {
-        mode: rawMode as RecallMode,
-        ...pick(input, ['validTime', 'recordedTime', 'limit', 'subject', 'tags', 'inlineChars', 'scope']),
-        ...(agentId === undefined ? {} : { sessionId: agentId }),
-      } as RecallOptionsLike;
-
-      if (input.render === true) return JSON.stringify(memory.render(query, options));
-      const hits = memory.recall(query, options);
-
-      // 联想模式用 Personalized PageRank 重排（HippoRAG，arXiv:2405.14831）：
-      // 把命中图式当种子，让相关度沿图传播，隔一层但相关的记忆也能浮上来。
-      if (rawMode === 'associative' && hits.length > 1) {
-        const seeds = [...new Set(hits.flatMap((hit) => graph.schemasForText(hit.fact.content)))];
-        const ranks = graph.personalizedPageRank(seeds);
-        if (ranks.size > 0) {
-          const boost = (content: string): number => {
-            const ids = graph.schemasForText(content);
-            return ids.reduce((max, id) => Math.max(max, ranks.get(id) ?? 0), 0);
-          };
-          hits.sort((a, b) => b.score + 2 * boost(b.fact.content) - (a.score + 2 * boost(a.fact.content)));
-        }
-      }
-
-      // 图式接进召回：把命中项所在图式的其他成员一并带出（GraphRAG 的社区扩展思路）
-      // 联想模式自动带上图式扩展（LongMemory 的 associative recall 会混合图关联信号）
-      const related =
-        input.expand === true || rawMode === 'associative'
-          ? expandBySchema(memory, graph, hits.map((hit) => hit.fact.content))
-          : [];
-
-      return JSON.stringify(
-        {
-          mode: rawMode,
-          count: hits.length,
-          ...(related.length === 0 ? {} : { related }),
-          hits: hits.map((hit) => ({
-            id: hit.fact.id,
-            subject: hit.fact.subject,
-            content: hit.fact.content,
-            score: Number(hit.score.toFixed(4)),
-            similarity: Number(hit.similarity.toFixed(4)),
-            decay: Number(hit.decay.toFixed(4)),
-            validFrom: hit.fact.validFrom,
-            validTo: hit.fact.validTo,
-            supersededBy: hit.fact.supersededBy,
-          })),
-        });
-    },
-  };
-
-  const reflect = {
-    name: 'cognition_reflect',
-    description:
-      '三段式辩证反思：THESIS → 对抗性 ANTITHESIS（CONTRADICTION/EVIDENCE 成对）→ SYNTHESIS，严格串行。给 draft 则跳过第一步；save 存结论。默认离线推理器，设置页可切真模型。',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['query'],
-      properties: {
-        query: { type: 'string', description: '要反思的问题。' },
-        draft: { type: 'string', description: '已有回答；给了就跳过第一步，直接批评并合成。' },
-        save: { type: 'boolean', description: '把 synthesis 存成记忆（subject=结论:问题）。' },
-      },
-    },
-    output: textOutput,
-    async execute(args: unknown): Promise<string> {
-      const input = asRecord(args);
-      const query = requireString(input, 'query');
-      const draft = optionalString(input, 'draft');
-      const result =
-        draft === undefined
-          ? await reflection.reflect(query)
-          : await reflection.reflectDraft(query, draft);
-      const saved = input.save === true ? persistReflection(memory, graph, result) : undefined;
-      if (saved !== undefined) touch();
-      // 只回真正有用的四块：transcript 会把三段再抄一遍，phases 恒为固定顺序，durationMs 对模型无用。
-      return JSON.stringify({
-        query: result.query,
-        thesis: result.thesis,
-        contradictions: result.contradictions,
-        synthesis: result.synthesis,
-        ...(saved === undefined ? {} : { saved: { id: saved.id, subject: saved.subject } }),
-      });
-    },
-  };
-
-  const state = {
-    name: 'cognition_state',
-    description: '查看认知引擎状态：记忆库统计、图式网络统计、待办与跨会话摘要。',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {},
-    },
-    output: textOutput,
-    async execute(): Promise<string> {
-      return JSON.stringify(
-        {
-          memory: memory.stats(),
-          graph: { ...graph.stats(), levels: graph.hierarchy().length },
-          /** 跨会话核心记忆块（≤400 字）。 */
-          digest: buildCoreDigest(memory),
-          tasks: {
-            pending: taskManager.get_pending_tasks().length,
-            due: taskManager.check_due_tasks().length,
-          },
-          proactive: {
-            pending: proactive.pending().length,
-            recordOnly: proactive.isRecordOnly,
-          },
-        });
-    },
-  };
-
-  const forget = {
-    name: 'cognition_forget',
-    description:
-      '删除记忆，用于纠正错误或清理测试数据。至少给一个条件：id 单条 / source 按来源批量（如 test、reflection）/ subject 按主题批量。',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        id: { type: 'string', description: '事实 id。' },
-        source: { type: 'string', description: '来源，如 test / reflection / agent。' },
-        subject: { type: 'string', description: '主题。' },
-      },
-    },
-    output: textOutput,
-    async execute(args: unknown): Promise<string> {
-      const input = asRecord(args);
-      const id = optionalString(input, 'id');
-      const source = optionalString(input, 'source');
-      const subject = optionalString(input, 'subject');
-      if (id === undefined && source === undefined && subject === undefined) {
-        throw new Error('cognition_forget 需要至少一个条件：id / source / subject');
-      }
-      let removed = 0;
-      if (id !== undefined) removed += memory.remove(id) ? 1 : 0;
-      if (source !== undefined) removed += memory.removeBySource(source);
-      if (subject !== undefined) removed += memory.removeBySubject(subject);
-      touch();
-      return JSON.stringify({ removed, memory: memory.stats() });
-    },
-  };
-
-  const cognitionContext = {
-    name: 'cognition_context',
-    description: '读取跨会话核心记忆（≤400 字的摘要）。新会话开头先调它，能想起之前定下的事。',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {},
-    },
-    output: textOutput,
-    async execute(): Promise<string> {
-      const digest = buildCoreDigest(memory);
-      return JSON.stringify({
-        digest,
-        empty: digest.length === 0,
-        total: memory.stats().total,
-      });
-    },
-  };
-
-  const manageLongTask = {
-    name: 'manage_long_task',
-    description:
-      '长程任务台账（落盘、重启恢复）。create / update / list / due / delete；后台定时巡视复盘。',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['action'],
-      properties: {
-        action: {
-          type: 'string',
-          enum: ['create', 'update', 'list', 'due', 'delete'],
-          description: '操作。',
-        },
-        description: { type: 'string', description: 'create：任务目标。' },
-        id: { type: 'string', description: 'update / delete：任务 id。' },
-        status: {
-          type: 'string',
-          enum: ['PENDING', 'IN_PROGRESS', 'COMPLETED'],
-          description: 'update：新状态。',
-        },
-        context: { type: 'string', description: 'update：追加线索，换行分隔。' },
-      },
-    },
-    output: textOutput,
-    async execute(args: unknown): Promise<string> {
-      await tasksReady;
-      const input = asRecord(args);
-      const action = requireString(input, 'action');
-
-      switch (action) {
-        case 'create': {
-          const task = await taskManager.create_task(requireString(input, 'description'));
-          return JSON.stringify({ task, store: taskManager.path });
-        }
-        case 'update': {
-          const id = requireString(input, 'id');
-          const rawStatus = requireString(input, 'status');
-          if (rawStatus !== 'PENDING' && rawStatus !== 'IN_PROGRESS' && rawStatus !== 'COMPLETED') {
-            throw new Error('status 只能是 PENDING / IN_PROGRESS / COMPLETED');
-          }
-          const clue = optionalString(input, 'context');
-          const task = await taskManager.update_task_progress(
-            id,
-            rawStatus as LongTaskStatus,
-            clue === undefined ? undefined : clue.split(/\r?\n/),
-          );
-          return JSON.stringify({ task, store: taskManager.path });
-        }
-        case 'list': {
-          return JSON.stringify(
-            {
-              pending: taskManager.get_pending_tasks(),
-              all: taskManager.all(),
-              store: taskManager.path,
-            });
-        }
-        case 'due': {
-          return JSON.stringify(
-            {
-              heartbeatHours: config.heartbeatHours,
-              due: taskManager.check_due_tasks(),
-            });
-        }
-        case 'delete': {
-          const id = requireString(input, 'id');
-          const removed = await taskManager.delete_task(id);
-          return JSON.stringify({ removed, store: taskManager.path });
-        }
-        default: {
-          throw new Error(`未知 action：${action}`);
-        }
-      }
-    },
-  };
+    // 这两个之前漏传：导致「本地占位告警」从未出现、准则蒸馏不可用。
+    currentReflectionMode: () => reflectionMode,
+    distillPlaybook: runDistill,
+  });
+  const [remember, recall, forget, reflect, state, cognitionContext, manageLongTask] = toolList;
 
   for (const definition of [remember, recall, forget, reflect, state, cognitionContext, manageLongTask]) {
     try {
@@ -802,22 +1467,19 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   }
 
   /**
-   * P0：把跨会话核心记忆挂进系统提示，只在真的有记忆时才产出文本。
+   * 把跨会话上下文挂进系统提示：有生效准则就注入准则本，否则回退到记忆摘要。
    *
-   * 每次装配都会调用 text()，内容永远是最新的；没有记忆时返回空串——不占 token。
+   * 每次装配都会调用 text()，内容永远是最新的；两者都为空时返回空串——不占 token。
+   * 具体拼什么由 buildInjectedContext 决定，与面板的「注入来源」同源。
    */
   const systemPrompt = ctx.get?.('systemPrompt') as SystemPromptHost | undefined;
-  if (systemPrompt !== undefined && typeof systemPrompt.section === 'function') {
+  if (config.injectMemory && systemPrompt !== undefined && typeof systemPrompt.section === 'function') {
     try {
       disposers.push(
         systemPrompt.section({
           name: 'cognition-engine-memory',
           order: 900,
-          text: () => {
-            const digest = buildCoreDigest(memory);
-            if (digest.length === 0) return '';
-            return `${digest}\n（需要细节时调用 cognition_recall。）`;
-          },
+          text: () => buildInjectedContext().text,
         }),
       );
     } catch (error) {
@@ -835,6 +1497,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
       // P1 记忆生命周期：长期没被想起的记忆退出 strict 召回（不删数据）
       const archived = memory.autoArchive({ idleDays: 180, maxActivation: 1 });
+      if (archived.length > 0) refreshEvidence();
       if (archived.length > 0) {
         ctx.logger?.info?.(`cognition-engine: 已归档 ${archived.length} 条长期未访问的记忆`);
         touch();
@@ -843,10 +1506,25 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       const due = taskManager.check_due_tasks();
       const target = due[0];
       if (target === undefined) return;
+      const overdueHours = Math.round(target.overdueMs / 3_600_000);
+
+      // 自动复盘要花 3 次模型调用（≈3100 tokens），默认不跑。
+      // 关掉时仍然写一条提示，「提醒」这个功能保留，只是不烧 token。
+      if (!autoReflect || reflectionMode !== 'real') {
+        ctx.logger?.info?.(
+          `cognition-engine: 巡视发现 ${due.length} 个待催办任务，已记录提示（未开启自动复盘）`,
+        );
+        await taskManager.update_task_progress(
+          target.id,
+          target.status,
+          `自动巡视：已超期 ${overdueHours} 小时，待处理`,
+        );
+        return;
+      }
+
       ctx.logger?.info?.(
         `cognition-engine: 巡视发现 ${due.length} 个待催办任务，后台复盘 ${target.id}`,
       );
-      const overdueHours = Math.round(target.overdueMs / 3_600_000);
       const result = await worker.submit(
         `长程任务「${target.description}」已 ${overdueHours} 小时没有更新，下一步应该推进什么`,
       );
@@ -858,6 +1536,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       );
     }
   };
+
+  // 启动后探测一次模型能力，让设置页能列出可选推理档位
+  void refreshEfforts();
 
   const timer = setInterval(() => {
     void patrol();

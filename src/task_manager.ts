@@ -7,6 +7,7 @@
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { resolveDataFile } from './util.ts';
 
 export type LongTaskStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
 
@@ -19,6 +20,21 @@ export interface LongTask {
   lastUpdatedAt: number;
   /** 线索：每次更新追加一条。 */
   context: string[];
+  /** 任务开始时间（用户可自定义），毫秒。 */
+  startAt?: number;
+  /** 兼容字段：不再作为截止时间使用（任务改为提醒式）。 */
+  endAt?: number;
+  /** 手动排序号，小的在前。 */
+  order?: number;
+  /** 是否与相邻任务并行推进。 */
+  parallel?: boolean;
+  /**
+   * 归属主题（多对多）。空 = 未归类。
+   *
+   * 任务不再是独立台账，而是主题下的「进行中事项」——
+   * 打开某主题就能看到它有哪些事没做完。
+   */
+  topicIds?: string[];
 }
 
 export interface DueTask extends LongTask {
@@ -60,7 +76,7 @@ export class LongHorizonTaskManager {
   private writeChain: Promise<void> = Promise.resolve();
 
   constructor(options: TaskManagerOptions = {}) {
-    this.filePath = resolve(options.filePath ?? 'tasks.json');
+    this.filePath = options.filePath === undefined ? resolveDataFile('tasks.json') : resolve(options.filePath);
     this.clock = options.now ?? (() => Date.now());
     this.heartbeatMs = options.heartbeatMs ?? 6 * 60 * 60 * 1000;
     this.readImpl = options.readFileImpl ?? readFile;
@@ -88,6 +104,15 @@ export class LongHorizonTaskManager {
             createdAt: Number(task.createdAt ?? 0),
             lastUpdatedAt: Number(task.lastUpdatedAt ?? 0),
             context: Array.isArray(task.context) ? task.context.map(String) : [],
+            // 可选字段必须显式带上：之前这里是白名单，导致 startAt / endAt /
+            // order / parallel / topicIds 每次重启都被丢掉（任务排序和主题归属无声消失）。
+            ...(typeof task.startAt === 'number' ? { startAt: task.startAt } : {}),
+            ...(typeof task.endAt === 'number' ? { endAt: task.endAt } : {}),
+            ...(typeof task.order === 'number' ? { order: task.order } : {}),
+            ...(typeof task.parallel === 'boolean' ? { parallel: task.parallel } : {}),
+            ...(Array.isArray(task.topicIds)
+              ? { topicIds: task.topicIds.map(String).filter((x) => x.length > 0) }
+              : {}),
           };
           this.tasks.set(normalized.id, normalized);
           const tail = Number.parseInt(normalized.id.replace(/^task-/, ''), 10);
@@ -103,7 +128,10 @@ export class LongHorizonTaskManager {
   }
 
   /** 创建任务并落盘。 */
-  async create_task(description: string): Promise<LongTask> {
+  async create_task(
+    description: string,
+    span?: { startAt?: number; endAt?: number; order?: number; parallel?: boolean; topicIds?: string[] },
+  ): Promise<LongTask> {
     const text = description.trim();
     if (text.length === 0) throw new Error('create_task: description 不能为空');
     await this.load();
@@ -116,10 +144,33 @@ export class LongHorizonTaskManager {
       createdAt: now,
       lastUpdatedAt: now,
       context: [],
+      ...(span?.startAt === undefined ? {} : { startAt: span.startAt }),
+      ...(span?.endAt === undefined ? {} : { endAt: span.endAt }),
+      ...(span?.order === undefined ? {} : { order: span.order }),
+      ...(span?.parallel === undefined ? {} : { parallel: span.parallel }),
+      ...(span?.topicIds === undefined ? {} : { topicIds: [...new Set(span.topicIds.filter((x) => x.length > 0))] }),
     };
     this.tasks.set(task.id, task);
     await this.persist();
     return { ...task, context: [...task.context] };
+  }
+
+  /** 调整排序号或并行标记（不改状态）。 */
+  async set_meta(
+    id: string,
+    meta: { order?: number; parallel?: boolean; topicIds?: string[] },
+  ): Promise<LongTask | undefined> {
+    await this.load();
+    const task = this.tasks.get(id);
+    if (task === undefined) return undefined;
+    if (meta.order !== undefined) task.order = meta.order;
+    if (meta.parallel !== undefined) task.parallel = meta.parallel;
+    if (meta.topicIds !== undefined) {
+      task.topicIds = [...new Set(meta.topicIds.filter((x) => x.length > 0))];
+    }
+    task.lastUpdatedAt = this.clock();
+    await this.persist();
+    return cloneTask(task);
   }
 
   /** 更新进度：状态必填，线索可追加。 */
@@ -189,9 +240,12 @@ export class LongHorizonTaskManager {
   }
 
   private sorted(): LongTask[] {
-    return [...this.tasks.values()].sort(
-      (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id),
-    );
+    return [...this.tasks.values()].sort((a, b) => {
+      const ao = a.order ?? Number.MAX_SAFE_INTEGER;
+      const bo = b.order ?? Number.MAX_SAFE_INTEGER;
+      if (ao !== bo) return ao - bo;
+      return a.createdAt - b.createdAt;
+    });
   }
 
   /** 串行化写入：临时文件 + rename，保证读者永远看不到半个文件。 */

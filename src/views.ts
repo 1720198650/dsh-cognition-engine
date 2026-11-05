@@ -7,12 +7,10 @@
 
 import { isCurrent } from './memory.ts';
 import type { TemporalMemoryStore } from './memory.ts';
-import type { SchemaGraphManager } from './graph.ts';
 import type { LongHorizonTaskManager } from './task_manager.ts';
 
 export interface DetailDeps {
   memory: TemporalMemoryStore;
-  graph: SchemaGraphManager;
   taskManager: LongHorizonTaskManager;
 }
 
@@ -33,16 +31,28 @@ export function buildCoreDigest(
   const limit = options.limit ?? 8;
   const maxChars = options.chars ?? CORE_DIGEST_CHARS;
 
-  const candidates = memory
+  // 只取全局、未被取代、未归档、且不是 test 来源的记忆——
+  // 调试数据（source: 'test'）不该被注入到每个会话的系统提示里。
+  const sorted = memory
     .all()
-    .filter((fact) => fact.scope === 'global' && fact.supersededAt === null)
+    .filter((fact) => fact.scope === 'global' && fact.supersededAt === null && !fact.archived && fact.source !== 'test')
     .map((fact) => {
       const ageDays = Math.max(0, now - fact.recordedAt) / 86_400_000;
       const freshness = 1 / (1 + ageDays / 30);
-      return { fact, score: fact.importance * 0.7 + freshness * 0.3 };
+      // 纠正记录是「经验教训」，跨会话价值最高，加权置顶（A-MEM 式的重要性分层）
+      const weight = fact.tags.includes('correction') ? 1.4 : 0.7;
+      return { fact, score: fact.importance * weight + freshness * 0.3 };
     })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+    .sort((a, b) => b.score - a.score);
+
+  // 同一主题只保留得分最高的一条：否则两代规则会重复占用摘要名额，
+  // 把「工作区结构」「文档规范」这些真正不同的信息挤出去。
+  const seenSubjects = new Set<string>();
+  const candidates = sorted.filter((entry) => {
+    if (seenSubjects.has(entry.fact.subject)) return false;
+    seenSubjects.add(entry.fact.subject);
+    return true;
+  }).slice(0, limit);
 
   if (candidates.length === 0) return '';
 
@@ -56,11 +66,12 @@ export function buildCoreDigest(
 }
 
 /** 面板展开时按需拉取的明细（不走模型上下文，只给页面看）。 */
-export function buildDetail({ memory, graph, taskManager }: DetailDeps): Record<string, unknown> {
+export function buildDetail({ memory, taskManager }: DetailDeps): Record<string, unknown> {
   const now = Date.now();
 
   const memories = memory
     .all()
+    .filter((fact) => fact.deletedAt === undefined)
     .slice()
     .sort((a, b) => b.recordedAt - a.recordedAt)
     .slice(0, 50)
@@ -68,6 +79,8 @@ export function buildDetail({ memory, graph, taskManager }: DetailDeps): Record<
       id: fact.id,
       subject: fact.subject,
       source: fact.source,
+      // 主题归属必须透传到页面，否则界面上看不到、也没法判断该挂哪
+      topicIds: fact.topicIds,
       content: fact.content.length > 200 ? `${fact.content.slice(0, 200)}…` : fact.content,
       chars: fact.content.length,
       validFrom: fact.validFrom,
@@ -76,17 +89,11 @@ export function buildDetail({ memory, graph, taskManager }: DetailDeps): Record<
       tags: fact.tags,
       importance: fact.importance,
       activation: Number(fact.activation.toFixed(2)),
-      current: isCurrent(fact, now),
+      current: isCurrent(fact, now) && fact.mergedInto === undefined,
+      mergedInto: fact.mergedInto,
+      recordedAt: fact.recordedAt,
+      revisedAt: fact.revisedAt,
     }));
-
-  const schemas = graph.all().map((schema) => ({
-    id: schema.id,
-    label: schema.label,
-    members: schema.members.size,
-    polarity: schema.polarity,
-    updatedAt: schema.updatedAt,
-    neighbors: graph.neighbors(schema.id).length,
-  }));
 
   const tasks = taskManager
     .all()
@@ -108,13 +115,9 @@ export function buildDetail({ memory, graph, taskManager }: DetailDeps): Record<
   return {
     tasks,
     memories,
-    schemas,
-    communities: graph.summarize(),
-    hierarchy: graph.hierarchy(),
     counts: {
       tasks: tasks.filter((task) => task.status !== 'COMPLETED').length,
       memories: memories.length,
-      schemas: schemas.length,
     },
     updatedAt: now,
   };

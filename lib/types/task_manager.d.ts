@@ -15,6 +15,21 @@ export interface LongTask {
     lastUpdatedAt: number;
     /** 线索：每次更新追加一条。 */
     context: string[];
+    /** 任务开始时间（用户可自定义），毫秒。 */
+    startAt?: number;
+    /** 兼容字段：不再作为截止时间使用（任务改为提醒式）。 */
+    endAt?: number;
+    /** 手动排序号，小的在前。 */
+    order?: number;
+    /** 是否与相邻任务并行推进。 */
+    parallel?: boolean;
+    /**
+     * 归属主题（多对多）。空 = 未归类。
+     *
+     * 任务不再是独立台账，而是主题下的「进行中事项」——
+     * 打开某主题就能看到它有哪些事没做完。
+     */
+    topicIds?: string[];
 }
 export interface DueTask extends LongTask {
     /** 距上次更新已经过去多久（毫秒）。 */
@@ -46,7 +61,19 @@ export declare class LongHorizonTaskManager {
     /** 启动时恢复。文件不存在视为空台账；损坏的 JSON 直接抛错，不静默吞掉。 */
     load(): Promise<this>;
     /** 创建任务并落盘。 */
-    create_task(description: string): Promise<LongTask>;
+    create_task(description: string, span?: {
+        startAt?: number;
+        endAt?: number;
+        order?: number;
+        parallel?: boolean;
+        topicIds?: string[];
+    }): Promise<LongTask>;
+    /** 调整排序号或并行标记（不改状态）。 */
+    set_meta(id: string, meta: {
+        order?: number;
+        parallel?: boolean;
+        topicIds?: string[];
+    }): Promise<LongTask | undefined>;
     /** 更新进度：状态必填，线索可追加。 */
     update_task_progress(id: string, newStatus: LongTaskStatus, newContext?: string | readonly string[]): Promise<LongTask>;
     /** 删除任务并落盘，返回是否真的删掉了。 */

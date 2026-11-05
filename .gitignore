@@ -11,6 +11,10 @@ cognition-state.json.tmp
 tasks.json
 tasks.json.tmp
 .dsh-eval-*.json
+.dsh-compat-*
+.cognition-token
+cognition-token.txt
+*.corrupt-*
 
 # 研究/抓取的第三方资料
 _research/
@@ -20,3 +24,4 @@ _research/
 *.log
 .DS_Store
 Thumbs.db
+*.sha256
