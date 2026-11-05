@@ -649,6 +649,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/persona-cross-disciplinary.md](docs/persona-cross-disciplinary.md) | **Persona 跨学科扫描**：心理学/神经科学/语言学/HCI/哲学/游戏 NPC，能用/不能用总表 + 20 个项目对比 |
 | [docs/persona-format-and-style-metrics.md](docs/persona-format-and-style-metrics.md) | **Persona 格式与中文风格度量**：Character Card V2 完整字段表、MaiBot expression/turn_trigger 源码拆解、`cognition-persona.json` 正式 JSON Schema、26 项中文风格指纹与可运行 JS、expression 表生命周期、竞品对比 |
 | [docs/checkpoint-2026-11-05.md](docs/checkpoint-2026-11-05.md) | **存档：2026-11-05**：完成事项、设计决策、还差什么、自我学习研究结论、下次第一件事 |
+| [docs/self-learning-agent-landscape.md](docs/self-learning-agent-landscape.md) | **自我学习 Agent 2026 全景**：四层框架、三个综述、SEAgent/Mem2Evolve/CPE、热门项目、能用/不能用、我们的位置 |
 | [docs/vision-and-roadmap.md](docs/vision-and-roadmap.md) | **愿景与路线图**：五个张力、四层能力、六个阶段、北极星指标 |
 | [docs/research-bm25-retrieval.md](docs/research-bm25-retrieval.md) | BM25 / IDF / 中文分词：实测 MRR、参数网格搜索、显著性检验（含可复现基准 `docs/bench-bm25/`） |
 | [docs/research-negex-and-ranking.md](docs/research-negex-and-ranking.md) | NegEx 完整规则表（16 伪否定 / 15 后置否定 / 终止词）、中文否定 12 条规则、双重否定统计、多信号排序（RRF / Generative Agents 对比） |
