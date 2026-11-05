@@ -3,6 +3,7 @@
 > 2026-11-05
 > 目的：为认知引擎的 Persona 层做跨学科取经——心理学、神经科学、语言学、HCI、哲学、游戏 NPC。
 > 判断标准只有一条：**能不能变成这个零依赖、纯 JSON、中文长期助手插件里的代码或规则。**
+> 心理学 / 神经科学 / 语言学的逐条证据、关键数字与出处链接，见 [persona-cross-disciplinary-research.md](persona-cross-disciplinary-research.md)（本文件的深挖版）。
 
 ---
 
@@ -26,14 +27,17 @@
 | 项 | 内容 |
 |---|---|
 | 五个维度 | Openness / Conscientiousness / Extraversion / Agreeableness / Neuroticism |
-| BFI-2 | 60 题，每维 3 个 facet，共 15 facet（Soto & John, 2017） |
+| BFI-2 | 60 题、5 域、15 facet（每域 3 facet × 4 题）；领域 α = .83–.90，平均 .87（Soto & John, 2017） |
+| 测量性质 | **自评问卷，不是文本分类器**——不能从聊天推断 BFI-2 分数 |
 | 能不能代码化 | **部分**：5 个 0–1 的 trait 可以做**审计目标**；60 题问卷太重，不进产品 |
 | 对我们的用法 | `persona.traits` 只放 5 个维度，用于「风格指纹」的目标值，不注入 |
 | 不能用的部分 | 不要把 60 题量表塞进插件；不要指望 trait 分数能稳定预测行为 |
 
 **关键限制（person-situation debate）**：
-Mischel (1968) 指出，行为在**情境之间**的变异往往大于**人与人之间**的差异（相关系数常在 0.3 左右）。
-Tett & Burnett (2003) 的**特质激活理论**进一步说：特质只有在**情境线索激活**时才会表现出来。
+Mischel (1968) 指出，行为在**情境之间**的变异往往大于**人与人之间**的差异（跨情境相关通常只有 **.20–.30**，即「personality coefficient」）。
+Fleeson (2001) 的经验采样进一步显示：个体内变异很大，但**中心倾向几乎完全稳定**，且「变异程度」本身也是稳定的个体差异。
+Tett & Burnett (2003) 的**特质激活理论**进一步说：特质只有在**情境线索激活**时才会表现；情境线索分五类——demand / distracter / constraint / releaser / facilitator。
+Tett, Toich & Ozkum (2021) 综述 75 项研究、262 个调节效应，约 **60% 显著**——有支持，但远非「每个特质在每个情境都成立」。
 
 > **对我们的直接启示**：
 > 光写「你要直接」没用——必须写「**当用户在催进度时**，直接给结论」。
@@ -88,7 +92,8 @@ McAdams 把人格分三层：
 ### 2.2 巩固与再巩固
 
 - **Consolidation**：睡眠期间海马体 → 新皮层，短时记忆变长期。
-- **Reconsolidation**：每次回忆都会**改写**记忆，不是读取原文件。
+- **Reconsolidation**：再激活后一段时间内，记忆会进入可改写状态（Nader et al. 2000 在大鼠杏仁核上证明；在激活后 1 天或 14 天注射 anisomycin 均致遗忘，6 小时后无效）。
+  **但有边界条件——「每次回忆必改写」是过度简化。** 工程上：`recall` 只读；只有 `reflect` / 巩固任务写新版本，保留 before/after hash。
 
 **能用的**：
 - 「睡眠巩固」→ 空闲时批量反思、合并、去重（我们已有反思，但没定时）
@@ -100,9 +105,9 @@ McAdams 把人格分三层：
 
 | 模型 | 结论 | 我们 |
 |---|---|---|
-| Ebbinghaus 指数 | 早期拟合好 | 已弃用 |
-| **幂律**（Wixted & Ebbesen 1991；Rubin & Wenzel 1996） | 长期拟合更好 | ✅ 已用 |
-| 干扰理论 | 旧记忆被新记忆干扰 | 对应 `supersedes` |
+| Ebbinghaus 经典曲线 | 20 分钟保留约 58%、1 天 34%、1 个月 21%（1885 原始数据） | 只作参照 |
+| **幂律**（Wixted & Ebbesen 1991；Rubin & Wenzel 1996） | 长期拟合更好（`R = a·t^-b`） | ✅ 已用 |
+| 干扰理论（Bjork 2003） | 旧记忆被新记忆干扰 | 对应 `supersedes` |
 
 **关键**：衰减只影响**排序**，不影响「真假」；不要用衰减触发删除。
 
@@ -132,6 +137,7 @@ Miller (1956) 的 7±2 常被误用；Cowan (2001) 更严格的说法是 **4±1 
 
 **中文证据**：
 - Bei Yu (2012) 用 **35 个中文虚词**做作者识别：小说 90%、散文 85%、博客 68%。
+- 赵冈 (1970) 用「的 / 了 / 在 / 儿 / 著」五个字研究《红楼梦》前后作者差异——中文虚词/助词确实能区分作者。
 - 说明虚词是稳定风格特征，但**体裁干扰很大**——必须同体裁比较。
 
 ### 3.2 语域理论（Halliday）
@@ -146,6 +152,7 @@ Miller (1956) 的 7±2 常被误用；Cowan (2001) 更严格的说法是 **4±1 
 ### 3.3 语言风格匹配（LSM）
 
 Niederhoffer & Pennebaker (2002)：对话双方会在虚词使用上趋同，且趋同度与关系质量相关。
+Ireland & Pennebaker (2010)：1,744 名大学生自动匹配作文题风格；**74 名参与者无法有意提高 function-word matching**——说明 LSM 是自动、隐性的，不能写成「请模仿用户」的硬规则。
 
 **能用的**：`human` 块的风格与 agent 回复做**适度匹配**，不是完全模仿。
 **不能用的**：把 LSM 当「像人」的硬指标——它受话题、长度、语言影响很大。
@@ -278,6 +285,10 @@ Mehrabian & Russell (1974)：Pleasure / Arousal / Dominance 三维连续空间�
 
 ## 七、专业项目 / 论文对比
 
+> 更完整的 4 张总表（商业产品 / 开源框架 / 中文项目 / 评测研究）、证据分级（S/A/B/C/D/E）、
+> 7 个审计方向、人格 Git 空白、7 条伪需求、借 3 避 3、纯 JSON 数据布局与 8–12 周 MVP 路线，
+> 见 [research-persona-memory-landscape.md](research-persona-memory-landscape.md)。
+
 ### 7.1 产品
 
 | 项目 | 人格表示 | 记忆 | 证据等级 | 我们能借什么 | 不能借什么 |
@@ -307,13 +318,87 @@ Mehrabian & Russell (1974)：Pleasure / Arousal / Dominance 三维连续空间�
 | **PersonaAgent** | 每用户 system prompt | episodic + semantic | 论文 | — | ⚠️ | persona 作为记忆↔行动中介 |
 | **Anchor** | core + mutable_seed | 3 种记忆设置 | 2,008 对话 | CC BY-NC | ✅ 可借 | 四轴审计、7 类轨迹题 |
 
-### 7.3 这个领域的真实空白
+### 7.3 人格连续性审计：不止 Anchor（2026 新发现）
 
-1. **没有产品做「人格版本管理 + diff + 回滚」**——我们 `revision + history` 是差异化。
-2. **没有产品做「人格连续性审计」**——Anchor 是唯一系统做评测的，但不是产品。
-3. **没有产品做「人格 + 记忆 + 行动」闭环**——PersonaAgent 是研究原型。
-4. **没有中文长期助手人格基准**——CharacterEval 是角色扮演，不是长期助手。
-5. **大量产品是营销 > 技术**——Replika/Character.AI 没有公开的技术论文。
+| 方向 | 代表 | 做法与关键结果 |
+|---|---|---|
+| **伴侣长程连续性** | **ANCHOR**（arXiv 2607.28818） | 2,008 对话 / 27 personas / 9 schedules / 3 memory settings / 4 models；Identity Probe（102 题密封问卷 + turn-level）+ Trajectory Probe（110 题 / 35 banks）；trajectory 44.4%、user-state 近随机；没有设置能稳定解决 |
+| **多轮审讯一致性** | **PICon**（arXiv 2603.25620） | internal consistency（无自相矛盾）/ external consistency（符合现实）/ retest consistency（重复测试稳定）；7 组 persona agents + 63 真人 |
+| **生产黑箱漂移检测** | **Nautilus Compass**（arXiv 2605.09863） | prompt 文本余弦 + 加权 top-k mean；索引时不调用 LLM；Merkle 链审计日志；ROC AUC 0.83；MIT 代码 |
+| **白盒内部监测** | **Anthropic persona vectors**（arXiv 2507.21509） | 从模型激活提取 persona vector，监控/抑制漂移；需要模型权重，插件用不了 |
+| **对话指令稳定性** | **Li et al., COLM 2024**（arXiv 2402.10962） | 8 轮内出现 instruction drift；注意力衰减是原因之一 |
+| **长 Agent 会话漂移** | **ContextEcho**（arXiv 2605.24279） | 25 项 identity probe；57 段真实长 coding sessions；漂移跨供应商、出现很早；compaction 不能可靠重置 |
+| **人格状态鲁棒性** | **CORE / PERSIST**（arXiv 2609.12373） | turn-local evidence 与 persistent persona-state revision 分开；PERSIST 覆盖 ambiguity/conflict/social influence |
+| **身份漂移治理** | **Layered Mutability**（arXiv 2604.14717） | 五层可变性；浅层回退后 identity hysteresis **0.68**——回退 prompt ≠ 回退行为 |
+
+### 7.4 人格版本管理：几乎空白
+
+| 项目 | 做了什么 | 局限 |
+|---|---|---|
+| **Personas（.NET 10，MIT）** | 最接近「人格 Git」的真实工具：`persona build` 生成 versioned persona pack；`pack-diff` 输出 changelog；`export/install`；`identity approve/reject` | 面向**代码评审人格**，不是伴侣/个人助理 |
+| **Emergi-PersonaOS**（arXiv 2609.27417） | 三层人格（dispositional / characteristic adaptations / narrative）；change attribution、meaning-making、behavioral testing；version records + 可拒绝候选 | 论文 prototype，无公开产品 |
+| **Layered Mutability**（arXiv 2604.14717） | self-narrative 层可读、可 diff、可 revert；governance load / hysteresis 公式 | 概念框架 + 初步实验 |
+| **SillyTavern V3** | `character_version` / `creation_date` / `modification_date` | 只是元数据，没有历史/diff/回滚 |
+| **Letta AgentFile (.af)** | 快照/可移植格式 | 不是 diff/rollback 引擎 |
+
+**结论**：**没有面向伴侣/个人助理的「人格 Git」**——这是最大的真实空白。我们的 `revision + history + 快照` 是差异化。
+
+### 7.5 人格 + 记忆 + 行动闭环
+
+| 项目 | 闭环方式 | 缺什么 |
+|---|---|---|
+| **PersonaAgent**（ACL 2026） | persona（system prompt）作中介：episodic+semantic memory → action → action 结果 refine memory；test-time 用模拟交互优化 persona prompt | persona 只是 prompt，无版本/审计；评测是任务偏好，不是陪伴连续性 |
+| **Emergi-PersonaOS**（arXiv 2609.27417） | 三层人格 + 检索记忆 + 当前关系/事件 → persona state → actions/replies；长期记录经验并评估 revision candidates | 论文 prototype，无公开代码/产品 |
+| **Generative Agents** | memory stream → reflection → planning → action | 没有人格对象；面向模拟 |
+| **Letta / MemGPT** | memory blocks + tools/action | persona 只是 block；无版本/审计 |
+| **OpenHanako / MaiBot / 千雪** | 产品级：人格 + 记忆 + 主动发言/工具/定时任务 | 无公开评测；人格演化不可审计 |
+
+**真实空白**：**行动结果如何改变人格，没有运行时审计。**
+
+### 7.6 中文场景：有论文，没工业级开源
+
+| 工作 | 场景 | 关键点 |
+|---|---|---|
+| **CharacterEval**（ACL 2024） | 中文角色扮演 | 1,785 段多轮对话 / 23,020 样本 / 77 角色；13 指标 / 4 维度 |
+| **DuLeMon / PLATO-LTM**（ACL 2022 Findings，百度） | 中文长程人格对话 | **27,501 段中文多轮对话**；同时建模用户与 bot 的 persona；Persona Extractor + Long-Term Memory |
+| **Mem-PAL / PAL-Bench**（AAAI 2026 Oral） | 中文个性化服务助手 | 首个中文多 session 用户日志+对话数据集；H²Memory 分层异构记忆 |
+| **RECALLbot**（CHI 2026，浙大） | 中文社交陪伴 | **Me Memory（AI 自身成长/日记）+ We Memory（与用户共建）**双记忆 |
+| **ThinkPersona**（ACL 2026，浙大） | 中文忠实角色扮演 | 从访谈视频构建人物画像图谱；先推理再回答；长对话更稳定 |
+
+**结论**：中文**有**长期人格论文，但**没有工业级开源中文伴侣公开人格连续性评测**——这是机会。
+
+### 7.7 真实空白 + 伪需求
+
+**真空白**：
+1. **人格 Git**（版本/diff/回滚）
+2. **生产级人格连续性审计**（实时、黑箱、可解释）
+3. **人格状态作为一等公民**（immutable/stable/plastic + 变更审批）
+4. **Me Memory vs We Memory 分离**（AI 自身经历 vs 与用户共建）
+5. **action → persona feedback**（行动如何改变人格）
+6. **中文工业级长期助手人格**
+
+**伪需求**：
+1. 无限记忆 / 记住一切（Pi 只记长期稳定事实，Mem0 的 90% token 节省来自压缩）
+2. 人格卡字段越多越强（V3 新增主要是表现力）
+3. 单一质量分（ANCHOR 明确反对单一 trust score）
+4. 全自动人格演化（Layered Mutability 的 hysteresis 0.68）
+5. 关系等级 / 好感度数值
+6. 多 Agent 群聊人格（个人插件是复杂度灾难）
+7. 「本地优先 = 零依赖」（OpenHanako 本地但 Electron+SQLite）
+
+### 7.8 借 3 个 / 避开 3 个
+
+**借**：
+1. **MaiBot 的人格 JSON + 记忆纠错回滚**——字段分组（personality/behavior_style/reply_style）+「生成计划→人工确认→执行→可回滚」
+2. **Memobase 的 Profile + Event Timeline + Pi 的稳定事实筛选**——只记 lastingly true，不记一次性事件
+3. **ANCHOR / PICON 的连续性审计**——双轴（enactment + trajectory）、密封问卷、反事实轨迹题、多 evaluator
+
+**避开**：
+1. **Letta / MemGPT / Zep / Graphiti 的重运行时**——只借概念（block 四元组、core/recall/archival、valid_at/invalid_at、provenance）
+2. **Character.AI / Replika / 星野 / 筑梦岛 / Pi 的黑箱记忆营销**——没有可核验技术文档
+3. **「人格 = 一段 system prompt」和「单一总分」**——人格要分层 + 版本快照 + 分维度审计
+
+**额外两个坑**：SillyTavern 是 **AGPL-3.0**，不要直接搬代码；OpenHanako 是 **Electron + better-sqlite3**，不是零依赖。
 
 ---
 
@@ -351,35 +436,67 @@ Mehrabian & Russell (1974)：Pleasure / Arousal / Dominance 三维连续空间�
 
 ## 九、对 Persona 设计的具体修改
 
-基于以上扫描，在现有 schema 上做 4 个调整：
+基于以上扫描，在现有 schema 上做 **6 个字段级调整**，外加 2 个可选概念：
 
-### 9.1 加 `scene` 分桶（来自语域理论）
+### 9.1 `persona.value` 改成四段式
 
-风格指纹按场景分桶：`technical / casual / emotional`。
-只比较同桶；跨桶差异不报漂移。
+```text
+我是小认，一个直接、务实的长期协作助手。
+风格：处理任务时先给结论再给理由；闲聊时短句、少铺垫；不确定时直接说“没把握”。
+价值观：准确优先于讨好；透明优先于拟人；用户自主优先于陪伴感。
+边界：不编造事实；不替用户做不可逆决定；不模拟排他性亲密。
+```
 
-### 9.2 加 `mutable.chapter`（来自 McAdams）
+**身份 1 句 + 风格 3 条 if-then + 价值观 3 条 trade-off + 边界 3 条**，总规则 ≤5 条。
+依据：Trait Activation Theory（光写形容词没用，要写「当 X 时做 Y」）+ Schwartz（价值观是取舍，不是标签）。
+
+### 9.2 `traits` 固定 5 维 + `traitsMeta`
+
+- 固定 5 维（directness / warmth / verbosity / humor / formality），只做**审计目标**，不注入。
+- 值只用 **0.2 / 0.5 / 0.8** 三档，不写 0.85 这种伪精度。
+- 加 `traitsMeta`：`model`（style/big5）、`source`（user/default）、`confidence`、`reviewedAt`。
+- **不要把 Big Five 与「直接/温暖/话少」混在同一个 `traits` 里**——前者是人格构念，后者是风格维度。
+
+### 9.3 `human.facts` 只放语义事实
+
+- 只放 **semantic facts**（稳定事实/偏好），不放临时情绪、依赖线索、一次性事件。
+- 每条加 `source`、`confidence`、`lastConfirmedAt`。
+- 细节留在 `memory` 里按需召回，`human` 只放 3–5 条「始终需要知道」的。
+- 依据：Pi 的「只记 lastingly true」+ Memobase 的 Profile/Event 分离。
+
+### 9.4 新增 `meta.narrative`（非注入，≤300 字）
 
 ```json
-"mutable": {
-  "activeFocus": ["认知引擎升级"],
-  "currentProjects": ["Persona 层"],
-  "chapter": "正在把认知引擎从记忆插件做成长期搭档"
+"narrative": {
+  "origin": "为长期协作而做的本地认知助手",
+  "chapter": "正在把记忆插件做成可审计的长期搭档",
+  "continuity": "直接、准确、不替用户做不可逆决定"
 }
 ```
 
-每季度更新一次，不常改。
+只把 `chapter` 一句话拼进 `persona.value`（如果预算允许）；不要三段全注入。
+依据：McAdams 的叙事认同——人格是故事骨架，不是形容词列表。
 
-### 9.3 加 `publicValue`（来自 OpenHanako，可选）
+### 9.5 新增 `audit` + `history.changeKind`
 
-对外/陌生会话用一份更保守的人格描述；默认空，等于用主 `value`。
+```json
+"audit": {
+  "styleBaseline": { "technical": {}, "casual": {}, "emotional": {} },
+  "drift": { "threshold": 0.65, "consecutiveWindows": 3 },
+  "lsm9": {},
+  "dependencyRisk": { "hits": 0, "lastCheckedAt": 0 }
+}
+```
 
-### 9.4 加 `commitments` 的显式追踪（来自言语行为理论）
+`history` 每条加 `changeKind`：`style / value / boundary / narrative / fact`。
+依据：语域分桶（Halliday/Biber）+ LSM + SDT 依赖风险 + 人格审计。
 
-`human` / `memory` 里记录 agent 对用户做过的承诺，带 `validTo`。
-过期或无法履行的承诺要被识别出来，不能装作没说过。
+### 9.6 可选：`publicValue` + `commitments`
 
-### 9.5 不加的东西
+- `persona.publicValue`：对外/陌生会话的更保守人格；默认空，等于主 `value`（借 OpenHanako）。
+- `commitments`：`human` / `memory` 里记录 agent 对用户的承诺，带 `validTo`；过期或无法履行的要识别（借言语行为理论）。
+
+### 9.7 不加的东西
 
 - ❌ OCC 22 情绪 / PAD 连续状态：表演成分大，收益不明
 - ❌ 60 题 BFI-2 / 57 题 PVQ：太重
@@ -388,10 +505,25 @@ Mehrabian & Russell (1974)：Pleasure / Arousal / Dominance 三维连续空间�
 
 ---
 
+## 九点五、证据薄弱 / 未找到（明确标注）
+
+1. **没有公开的「中文长期助手 Persona」评测基准**——CharacterEval 是角色扮演，Anchor 是英文对话。
+2. **没有 BFI-2 中文长期助手常模**。
+3. **没有中文 LSM 公开常模**。
+4. **没有按年龄/地域可用的语气词、儿化、叠词量化基线**——只有方言学定性描述（南多北少、北京儿化、陕北重叠）。
+5. **「每次回忆都会改写」是过度简化**——Nader 2000 的再巩固有边界条件（1 天/14 天有效，6 小时无效）。
+6. **「人格 prompt 长期稳定」缺直接 RCT**——现有多为 Anchor / Assistant Axis / 角色扮演证据。
+7. **Replika / Character.AI / Talkie / 星野 / 筑梦岛 / Pi 均无公开技术论文或架构文档**——只能当产品 UX 参考，不能当技术依据。
+
+---
+
 ## 十、结论
 
 > **跨学科给的是「设计原则 + 审计指标」，不是「功能」。**
 > 真正能代码化的只有少数：5 个 trait、3–5 条价值观、26 项风格指标、commitment 追踪、`revision + history`。
+>
+> 专业项目里，**记忆层最成熟但都是重依赖；人格层最薄弱；人格连续性审计刚起步；人格 Git 几乎空白。**
+> 这正好是我们的位置：**中文、零依赖、可审计的长期人格 + 记忆**。
 >
 > 其余的（Big Five 问卷、OCC/PAD、NPC 戏剧）都是**看起来很美、用起来很重**的东西——**明确不做**。
 
