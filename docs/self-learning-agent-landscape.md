@@ -68,7 +68,24 @@
 
 ## 二、2026 年最热的项目（按类型）
 
-> 星标数来自公开排行榜，**仅作热度参考，可能被刷/虚高**；证据等级见括号。
+> 星标数来自第三方排行榜抓取（2026-11-05），**数值明显偏高，仅作热度参考**；证据等级见括号。
+
+### 2.0 热度榜 Top 10（AI_Agents 分类）
+
+| # | 项目 | 星标 | 一句话 |
+|---|---|---|---|
+| 1 | **rea** | 432k | 用 agent 逆向工程一切（从 App 行为到原生二进制） |
+| 2 | **superpowers** | 312k | Agentic skills 框架 + 开发方法论 |
+| 3 | **hermes-agent** | 260k | "The agent that grows with you" |
+| 4 | **firecrawl** | 198k | 给 agent 提供网页数据 |
+| 5 | **AutoGPT** | 187k | 第一代自主 agent |
+| 6 | **ponytail** | 184k | "让 AI 像最懒的资深开发"——少写代码 |
+| 7 | **agency-agents** | 166k | 一整套「AI  agency」角色包 |
+| 8 | **dify** | 160k | Agentic workflow + RAG 平台 |
+| 9 | **langflow** | 156k | 可视化 agent/workflow |
+| 10 | **langchain** | 149k | Agent engineering platform |
+
+**判断**：热度榜前 10 里，**真正做「学习」的只有 hermes-agent（自称）和 superpowers（技能框架）**；其余是编排、数据、开发方法论。**热度 ≠ 学习能力。**
 
 ### 2.1 常驻 / 主动型 Agent
 
@@ -118,7 +135,10 @@ LangGraph、CrewAI、OpenAI Agents SDK、AutoGen、Dify、Langflow、LangChain�
   - **Curriculum Generator**：自动生成由易到难的任务
   - **GRPO**：对成功轨迹做强化学习，对失败动作做对抗模仿
   - **Specialist → Generalist**：多个专家 agent 的经验整合成一个通用 agent
-- **结果**：在 5 个专业软件（OSWorld / ScienceBoard / AndroidWorld）上超过 UI-TARS。
+- **结果**：在 5 个 OSWorld 专业软件上，UI-TARS 从 **11.3% → 34.5%**（+23.2pp）；specialist RL 32.2%、generalist RL 30.6%。
+- **World State Model 细节**：Qwen2.5-VL 微调，输入完整轨迹，输出每步 `aT`（正确）或 `aF`（失败/冗余）；在 AgentRewardBench 上比基线精度 **+7.5%**。
+- **Curriculum Generator 细节**：LLM + 持续更新的「软件指南书」记忆 U；U 由状态变化描述 C 和轨迹判断 J 更新，再生成更难的下一阶段任务。
+- **RL 细节**：失败动作用对抗模仿（负 log-ratio），成功动作用 GRPO；reward = 动作类型匹配 + 距离（click L1 / drag IoU / type BLEU）。
 - **我们能借**：**「逐步世界状态评估」** → 映射到我们的 `appliedGood/appliedBad`；**训练部分用不了**。
 
 ### 3.2 Mem2Evolve（ACL 2026）——经验与资产共同进化
@@ -145,7 +165,7 @@ LangGraph、CrewAI、OpenAI Agents SDK、AutoGen、Dify、Langflow、LangChain�
 |---|---|
 | **AgencyBench**（ACL 2026） | 6 能力 / 32 场景 / 138 任务；平均 90 次工具调用、100 万 token、数小时；闭源 48.4% vs 开源 32.1% |
 | **Agentic RL Survey**（2509.02547） | POMDP 框架；能力分为 planning / tool use / memory / reasoning / self-improvement / perception |
-| **Learning What to Remember and What to Internalize**（2608.01234） | 自适应记忆-参数协调：什么该记、什么该内化 |
+| **Learning What to Remember and What to Internalize**（2608.01234，COVE） | 两条演化通道：**harness-based**（外部记忆/技能，快）vs **parameter-based**（权重，深）；COVE 用 task-aware routing + stage-aware scheduling + knowledge optimization 协调两者 |
 | **Darwin-Claw**（2610.23574） | 环境自适应经验巩固，递归自我演化 |
 | **MemEvolve**（2512.18746） | 记忆系统的元演化 |
 | **Co-Evolution in Agentic Systems**（2608.10299） | 超越人类设计的自导向演化 |
