@@ -644,6 +644,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | 文档 | 内容 |
 |---|---|
 | [docs/persona-research.md](docs/persona-research.md) | **Persona 层精读**：Letta block 结构、Anchor 人格卡与探针、Assistant Axis 漂移、MaiBot 三分法、SillyTavern 字段、`cognition-persona.json` schema |
+| [docs/research-persona-hci-philosophy-npc.md](docs/research-persona-hci-philosophy-npc.md) | **HCI / 哲学 / 游戏 NPC 深挖**：CASA、拟人化实证、信任三维、恐怖谷、人格一致性倒 U、Locke/Parfit、Sartre、言语行为、Sims/OCC/PAD/Façade、操纵 vs 服务 |
 | [docs/research-persona-memory-landscape.md](docs/research-persona-memory-landscape.md) | **专业项目/论文横向对比**：4 张总表（商业/开源/中文/评测）、证据分级 S–E、7 个审计方向、人格 Git 空白、7 条伪需求、借 3 避 3、8–12 周 MVP |
 | [docs/persona-cross-disciplinary.md](docs/persona-cross-disciplinary.md) | **Persona 跨学科扫描**：心理学/神经科学/语言学/HCI/哲学/游戏 NPC，能用/不能用总表 + 20 个项目对比 |
 | [docs/persona-format-and-style-metrics.md](docs/persona-format-and-style-metrics.md) | **Persona 格式与中文风格度量**：Character Card V2 完整字段表、MaiBot expression/turn_trigger 源码拆解、`cognition-persona.json` 正式 JSON Schema、26 项中文风格指纹与可运行 JS、expression 表生命周期、竞品对比 |
