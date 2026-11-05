@@ -23,6 +23,15 @@ export declare function dataDir(): string;
 /** 数据文件的默认路径（在 dataDir 下）。 */
 export declare function resolveDataFile(name: string): string;
 /**
+ * 展开路径开头的 `~`（用户主目录）。
+ *
+ * 配置文件里写 `~/...` 很自然，但 `path.resolve()` 不展开它——会解析成
+ * `<进程 cwd>/~/...`，于是「换个工作区就读不到旧数据」。用户配置的路径必须先过这道。
+ */
+export declare function expandHome(input: string): string;
+/** 把用户配置里的路径收敛成绝对路径：先展开 `~`，相对路径仍按进程 cwd 解析。 */
+export declare function resolveUserPath(input: string): string;
+/**
  * 一次性迁移：把旧位置的数据搬到 dataDir。
  *
  * 只在目标文件不存在时搬，**绝不覆盖**已有数据。

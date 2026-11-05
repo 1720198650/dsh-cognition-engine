@@ -18,9 +18,9 @@
 
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { cosine, tokenize } from './memory.ts';
-import { resolveDataFile } from './util.ts';
+import { resolveDataFile, resolveUserPath } from './util.ts';
 
 /* ------------------------------------------------------------------ */
 /* 类型                                                                 */
@@ -90,7 +90,7 @@ export class TopicStore {
   constructor(options: TopicStoreOptions = {}) {
     this.filePath = options.filePath === undefined
       ? resolveDataFile('cognition-topics.json')
-      : resolve(options.filePath);
+      : resolveUserPath(options.filePath);
     this.snapshotDir = join(dirname(this.filePath), '.snapshots', 'topics');
     this.clock = options.now ?? (() => Date.now());
     this.maxTopics = Math.max(1, options.maxTopics ?? 50);

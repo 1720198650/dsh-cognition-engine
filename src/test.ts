@@ -1,4 +1,4 @@
-import { rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 /**
  * src/test.ts — 单元测试（Mock 测试，无网络、无数据库）
  *
@@ -8,14 +8,16 @@ import { rmSync } from 'node:fs';
 
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { TemporalMemoryStore, bm25Score, buildBm25Stats, contentHash, cosine, isCurrent, lcsSimilarity, textSimilarity, tokenize } from './memory.ts';
 import { GapStore } from './gaps.ts';
 import { PlaybookStore } from './playbook.ts';
 import { TopicStore } from './topics.ts';
 import { buildDistillPrompt, parseDistillResult } from './distill.ts';
-import { resolveInPackage, packageRoot } from './util.ts';
+import { dataDir, expandHome, packageRoot, resolveDataFile, resolveUserPath } from './util.ts';
+import { JsonStateStore } from './persist.ts';
 import {
   DialecticalReflectionEngine,
   MockDialecticalLLM,
@@ -24,6 +26,9 @@ import {
 } from './reflection.ts';
 import { ProactiveGate } from './proactive.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
+
+/** 测试产物一律写系统临时目录：不能在插件包根/工作目录留垃圾，否则又会诱发「清理仓库时误删」。 */
+const TEST_TMP = mkdtempSync(join(tmpdir(), 'dsh-cognition-test-'));
 
 let passed = 0;
 const failures: Array<{ name: string; error: unknown }> = [];
@@ -289,10 +294,46 @@ async function main(): Promise<void> {
 
   /* ---------------------------------------------------------------- */
   /* ---------------------------------------------------------------- */
-  await test('默认落盘路径在插件包内，不使用进程 cwd', () => {
-    const p = resolveInPackage('cognition-state.json');
-    assert.ok(p.startsWith(packageRoot), '应位于插件包根目录下');
+  await test('默认落盘路径在用户数据目录，不在插件包内', () => {
+    const p = resolveDataFile('cognition-state.json');
+    assert.ok(p.startsWith(dataDir()), '应位于用户数据目录下');
+    assert.ok(!p.startsWith(packageRoot), '不应位于插件包根目录下（用户数据不能放代码目录）');
     assert.ok(!p.includes('node_modules'), '不应落到依赖目录');
+  });
+
+  await test('配置路径：~ 展开到主目录，不解析成 cwd 下的字面 ~ 目录', () => {
+    assert.equal(expandHome('~/x'), join(homedir(), 'x'));
+    assert.equal(expandHome('~'), homedir());
+    assert.equal(expandHome('rel/x'), 'rel/x');
+    assert.ok(resolveUserPath('~/x').startsWith(homedir()), '展开后的绝对路径应在主目录下');
+    assert.ok(!resolveUserPath('~/x').includes('~'), '不应残留字面 ~');
+  });
+
+  await test('checksum 过期但 JSON 有效：按数据恢复，不隔离成空库', async () => {
+    const file = join(TEST_TMP, 'stale-checksum.json');
+    const first = new JsonStateStore<{ n: number }>({
+      filePath: file,
+      debounceMs: 0,
+      serialize: () => ({ n: 1 }),
+      restore: () => undefined,
+    });
+    await first.flush();
+    // 模拟「rename 数据后、写 .sha256 前」崩溃：侧车还是旧值
+    writeFileSync(`${file}.sha256`, 'stale-hash', 'utf8');
+    let restored = { n: 0 };
+    const second = new JsonStateStore<{ n: number }>({
+      filePath: file,
+      debounceMs: 0,
+      serialize: () => restored,
+      restore: (data) => {
+        restored = data;
+      },
+    });
+    assert.equal(await second.load(), true, 'JSON 有效时不应隔离成空库');
+    assert.deepEqual(restored, { n: 1 }, '应按数据内容恢复');
+    assert.ok(second.warning.includes('校验和'), second.warning);
+    await rm(file, { force: true });
+    await rm(`${file}.sha256`, { force: true });
   });
 
   section('[6] 辩证反思：三次串行调用');
@@ -502,7 +543,7 @@ async function main(): Promise<void> {
   section('[11] 长程任务台账');
 
   await test('创建 / 更新 / 待办 / 催办 / 重启恢复', async () => {
-    const file = resolve('.dsh-cognition-test-tasks.json');
+    const file = join(TEST_TMP, 'cognition-test-tasks.json');
     await rm(file, { force: true });
 
     let now = 1_000;
@@ -539,7 +580,7 @@ async function main(): Promise<void> {
   /* ---------------------------------------------------------------- */
   section('[11] 准则本：确定性合并与渲染');
 
-  const pbFile = resolve(packageRoot, '_research', 'test-playbook.json');
+  const pbFile = join(TEST_TMP, 'test-playbook.json');
   const newPlaybook = (): PlaybookStore =>
     new PlaybookStore({ filePath: pbFile, now: () => 1_000_000, validateSourceIds: () => [] });
 
@@ -866,7 +907,7 @@ async function main(): Promise<void> {
   /* ---------------------------------------------------------------- */
   section('[14] 主题注册表：人定的适用范围键');
 
-  const topicFile = resolve(packageRoot, '_research', 'test-topics.json');
+  const topicFile = join(TEST_TMP, 'test-topics.json');
   const newTopics = (): TopicStore => new TopicStore({ filePath: topicFile, now: () => 1_000_000 });
 
   await test('主题：新增 / 重名拒绝 / 空名拒绝', () => {
@@ -922,7 +963,7 @@ async function main(): Promise<void> {
 
 
   await test('任务可挂主题，成为该主题的进行中事项', async () => {
-    const file = resolve(packageRoot, '_research', 'test-task-topic.json');
+    const file = join(TEST_TMP, 'test-task-topic.json');
     // 先清掉上一轮残留，否则 pending 数量会累积
     rmSync(file, { force: true });
     const manager = new LongHorizonTaskManager({ filePath: file, now: () => 1_000_000 });
@@ -940,7 +981,7 @@ async function main(): Promise<void> {
   });
 
   await test('任务重启后保留 topicIds / 排序 / 并行（回归）', async () => {
-    const file = resolve(packageRoot, '_research', 'test-task-persist.json');
+    const file = join(TEST_TMP, 'test-task-persist.json');
     await rm(file, { force: true });
     const a = new LongHorizonTaskManager({ filePath: file, now: () => 1_000_000 });
     await a.load();
@@ -1186,7 +1227,7 @@ async function main(): Promise<void> {
   });
 
   await test('知识缺口：登记、去重、解决', () => {
-    const file = resolve('.dsh-gap-test.json');
+    const file = join(TEST_TMP, 'gap-test.json');
     rmSync(file, { force: true });
     const store = new GapStore({ filePath: file, now: () => 1_000_000 });
     const a = store.add({ text: '不清楚 DSH 插件的 client 端 slot 有哪些', context: '做界面时卡住' });
@@ -1209,7 +1250,7 @@ async function main(): Promise<void> {
   });
 
   await test('知识缺口：注入清单有序且超预算时截断', () => {
-    const file = resolve('.dsh-gap-test2.json');
+    const file = join(TEST_TMP, 'gap-test2.json');
     rmSync(file, { force: true });
     const store = new GapStore({ filePath: file, now: () => 1_000_000 });
     assert.equal(store.renderSection(), '', '没有缺口时不渲染');
@@ -1324,7 +1365,7 @@ async function main(): Promise<void> {
     store.ingest({ subject: '文档整理', content: '文档整理一格一照', source: 'user', tags: [] });
     const hits = store.recall('发版流程要做什么', { limit: 1 });
     assert.equal(hits[0]?.fact.subject, '发布流程', `应命中发布流程，实得 ${hits[0]?.fact.subject}`);
-    rmSync(resolve('.dsh-bm25-test.json'), { force: true });
+    rmSync(join(TEST_TMP, 'bm25-test.json'), { force: true });
   });
 
   await test('否定识别：伪否定词不算否定（非常/未来/别人/特别）', () => {
@@ -1392,3 +1433,6 @@ async function main(): Promise<void> {
 }
 
 await main();
+
+// 测试产物全部在系统临时目录，跑完即删，不在仓库留垃圾
+rmSync(TEST_TMP, { recursive: true, force: true });

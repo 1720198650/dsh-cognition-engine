@@ -14,9 +14,9 @@
 
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { cosine, lcsSimilarity, normalizeForCompare, textSimilarity, tokenize } from './memory.ts';
-import { resolveDataFile } from './util.ts';
+import { resolveDataFile, resolveUserPath } from './util.ts';
 
 /* ------------------------------------------------------------------ */
 /* 类型                                                                 */
@@ -216,7 +216,7 @@ export interface PlaybookOptions {
   isSourceAlive?: (id: string) => boolean;
   filePath?: string;
   now?: () => number;
-  /** 注入预算（字符）。默认 600。 */
+  /** 注入预算（字符）。默认 700。 */
   maxChars?: number;
   /** 条目数上限。默认 12。 */
   maxEntries?: number;
@@ -493,7 +493,7 @@ export class PlaybookStore {
   constructor(options: PlaybookOptions = {}) {
     this.filePath = options.filePath === undefined
       ? resolveDataFile('cognition-playbook.json')
-      : resolve(options.filePath);
+      : resolveUserPath(options.filePath);
     this.snapshotDir = join(dirname(this.filePath), '.snapshots', 'playbook');
     this.clock = options.now ?? (() => Date.now());
     this.maxChars = Math.max(200, options.maxChars ?? 700);

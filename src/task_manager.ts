@@ -6,8 +6,8 @@
  */
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { resolveDataFile } from './util.ts';
+import { dirname } from 'node:path';
+import { resolveDataFile, resolveUserPath } from './util.ts';
 
 export type LongTaskStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
 
@@ -43,7 +43,7 @@ export interface DueTask extends LongTask {
 }
 
 export interface TaskManagerOptions {
-  /** tasks.json 的位置，默认 <cwd>/tasks.json。 */
+  /** tasks.json 的位置，默认 `~/.dsh/cognition-engine/tasks.json`。 */
   filePath?: string;
   now?: () => number;
   /** 多久没更新就算需要催办，默认 6 小时。 */
@@ -76,7 +76,7 @@ export class LongHorizonTaskManager {
   private writeChain: Promise<void> = Promise.resolve();
 
   constructor(options: TaskManagerOptions = {}) {
-    this.filePath = options.filePath === undefined ? resolveDataFile('tasks.json') : resolve(options.filePath);
+    this.filePath = options.filePath === undefined ? resolveDataFile('tasks.json') : resolveUserPath(options.filePath);
     this.clock = options.now ?? (() => Date.now());
     this.heartbeatMs = options.heartbeatMs ?? 6 * 60 * 60 * 1000;
     this.readImpl = options.readFileImpl ?? readFile;

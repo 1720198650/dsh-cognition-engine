@@ -40,7 +40,13 @@ export declare class JsonStateStore<T> {
     /** 检测到的并发写入告警；空串表示没有。 */
     get warning(): string;
     clearWarning(): void;
-    /** 启动时恢复；文件不存在返回 false。损坏的文件会备份后按空库启动，绝不阻断加载。 */
+    /**
+     * 启动时恢复；文件不存在返回 false。损坏的文件会备份后按空库启动，绝不阻断加载。
+     *
+     * 顺序刻意是「先解析数据、再比校验和」：flush()/restoreSnapshot() 先 rename 数据、
+     * 再写 .sha256，两步之间崩溃会留下「数据新、侧车旧」。这时数据本身是好的，
+     * 不能因为侧车过期就把好档隔离成空库——只重写校验和并记一条告警。
+     */
     load(): Promise<boolean>;
     /** 同步恢复，用于插件加载阶段——避免工具在异步恢复完成前读到空库。 */
     loadSync(): boolean;

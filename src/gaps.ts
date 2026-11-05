@@ -16,8 +16,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { resolveDataFile } from './util.ts';
+import { dirname } from 'node:path';
+import { resolveDataFile, resolveUserPath } from './util.ts';
 
 export interface CognitionGap {
   id: string;
@@ -52,7 +52,7 @@ export class GapStore {
   private dirty = false;
 
   constructor(options: GapOptions = {}) {
-    this.filePath = options.filePath === undefined ? resolveDataFile('cognition-gaps.json') : resolve(options.filePath);
+    this.filePath = options.filePath === undefined ? resolveDataFile('cognition-gaps.json') : resolveUserPath(options.filePath);
     this.clock = options.now ?? (() => Date.now());
   }
 
