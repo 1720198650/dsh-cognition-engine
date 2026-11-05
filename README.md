@@ -651,7 +651,8 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/checkpoint-2026-11-05.md](docs/checkpoint-2026-11-05.md) | **存档：2026-11-05**：完成事项、设计决策、还差什么、自我学习研究结论、下次第一件事 |
 | [docs/research-self-evolving-papers.md](docs/research-self-evolving-papers.md) |
 | [docs/research-cpe-mechanism.md](docs/research-cpe-mechanism.md) |
-| [docs/research-learning-budget.md](docs/research-learning-budget.md) | **学习预算设计**：W=clamp(ceil(N×1%),4,12)、修旧/学新/预留分配、5 条停止信号、shadow 试运行、8 类不学清单、伪代码 + 8 条验收 |
+| [docs/research-learning-budget.md](docs/research-learning-budget.md) |
+| [docs/research-docs-link-check.md](docs/research-docs-link-check.md) | **文档一致性检查**：47 处相对链接全有效；无逐行重复（最大重合 6.2%）；4 组主题重叠待收敛 | **学习预算设计**：W=clamp(ceil(N×1%),4,12)、修旧/学新/预留分配、5 条停止信号、shadow 试运行、8 类不学清单、伪代码 + 8 条验收 |
 | [docs/research-memobase-update-policy.md](docs/research-memobase-update-policy.md) | **Memobase 更新策略**：`update_description` 是自然语言指令（不是枚举）、覆盖/保留最早两种官方示例、validate_mode vs strict_mode | **CPE 机制拆解**：能力侵蚀的形式化（`L_<t(R_t) > L_<t(R_{t-1})`）、曲率机理、`Ω` 正则、四通道；以及我们的纯 JSON 版（回归集 + 变更闸门） |
 | [docs/research-agent-skills-spec.md](docs/research-agent-skills-spec.md) | **Agent Skills 规范核验**：`name` 必须 ASCII 小写且与目录同名（中文只能进 description）、description 1–1024、三级披露 token 预算、validate 用法 |
 | [docs/research-memobase-profile-model.md](docs/research-memobase-profile-model.md) | **Memobase 画像模型**：两层 topic→sub_topics、slot 白名单、**`profile_delta` 必填**、`update_description` 更新策略 | **自我进化论文精读**：SEAgent(11.3%→34.5%) / Mem2Evolve(+18.53%) / CPE(能力侵蚀 41.8%→52.8%) / COVE 双通道 + 三套 taxonomy |
