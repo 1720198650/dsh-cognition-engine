@@ -15,6 +15,8 @@ import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 
 import { GapStore } from './gaps.ts';
+import { PlaybookEventLog } from './events.ts';
+import { InjectionLog, classifyFeedback } from './injection_log.ts';
 import { TemporalMemoryStore } from './memory.ts';
 import type { TemporalFact } from './memory.ts';
 import { JsonStateStore } from './persist.ts';
@@ -332,6 +334,14 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
   // 知识缺口：模型卡壳时登记，下次针对性补（P6 学习闭环）
   const gaps = new GapStore();
+
+  // 准则事件日志（轻量事件溯源）：只追加，不改主存储
+  const ruleEvents = new PlaybookEventLog();
+  // 注入快照：记录每轮注入了哪些准则，用于把用户反馈回写到准则
+  const injectionLog = new InjectionLog();
+  // 会话标识：同一进程内用启动时间戳区分；轮次自增
+  const currentSessionId = `s${Date.now().toString(36)}`;
+  let turnCounter = 0;
   const memory = new TemporalMemoryStore({
     halfLifeMs: config.decayHalfLifeHours * HOUR_MS,
     onEvent: (event) => audit.append(event),
@@ -682,8 +692,17 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     const gapText = gaps.renderSection();
     const withGaps = (text: string): string => (gapText.length === 0 ? text : `${text}\n\n${gapText}`);
 
+    const detailed = playbook.renderDetailed(undefined, undefined, (id) => topics.get(id)?.name);
     const section = playbook.renderSection(undefined, (id) => topics.get(id)?.name);
-    if (section.length > 0) return { text: withGaps(section), source: 'playbook' };
+    if (section.length > 0) {
+      // 记录本轮注入了哪些准则——用户下一轮的反应要回写到这些条目上
+      try {
+        injectionLog.record(currentSessionId, ++turnCounter, detailed.ruleIds, section.length);
+      } catch {
+        /* 记录失败不影响注入 */
+      }
+      return { text: withGaps(section), source: 'playbook' };
+    }
 
     const digest = buildCoreDigest(memory);
     if (digest.length > 0) {
@@ -691,6 +710,44 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     }
     if (gapText.length > 0) return { text: gapText, source: 'playbook' };
     return { text: '', source: 'none' };
+  };
+
+  /**
+   * 把用户反馈回写到上一轮注入的准则。
+   *
+   * 为什么需要这个：整个「学习」链条原本是断的——
+   * 模型使用准则 → 没人记录用得对不对 → 蒸馏时模型自己评自己。
+   *
+   * 判定用规则而不是 LLM：每轮调 LLM 成本太高；正则覆盖明确的纠正/确认，
+   * 剩下的靠其他信号补（比如用户直接改代码）。
+   *
+   * **单次纠正不降级**：累计 appliedBad ≥ 3 且 > appliedGood 才进入 disputed
+   * （ReasoningBoost 的结论：判官只有 72.7% 准确，70–90% 噪声下性能不敏感）。
+   */
+  const recordFeedback = (message: string): { kind: string; scored: string[] } => {
+    const kind = classifyFeedback(message);
+    if (kind === 'neutral') return { kind, scored: [] };
+    const latest = injectionLog.latest(currentSessionId);
+    if (latest === undefined) return { kind, scored: [] };
+    const ids = injectionLog.markVerdict(latest.sessionId, latest.turn, kind);
+    if (ids.length === 0) return { kind, scored: [] };
+    const usageKind = kind === 'correction' ? 'appliedBad' : 'appliedGood';
+    for (const id of ids) {
+      try {
+        playbook.markUsage(id, usageKind, `${kind}: ${message.slice(0, 40)}`);
+        ruleEvents.append({
+          type: 'RuleUsageRecorded',
+          ruleId: id,
+          usage: usageKind,
+          trace: `${kind}: ${message.slice(0, 40)}`,
+          by: 'system',
+        });
+      } catch {
+        /* 单条失败不影响其余 */
+      }
+    }
+    void playbook.flush();
+    return { kind, scored: ids };
   };
 
   /**
@@ -852,6 +909,30 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       },
       { method: 'POST' },
     );
+
+    // 注入快照：最近 N 轮注入了哪些准则
+    route('/cognition-engine/injection/recent', (url) => {
+      const limit = Number(url.searchParams.get('limit') ?? '10');
+      return { recent: injectionLog.recent(Number.isFinite(limit) ? limit : 10), stats: injectionLog.statistics() };
+    });
+
+    // 反馈回写：把一个用户回复判成纠正/确认，回写到上一轮注入的准则
+    route(
+      '/cognition-engine/feedback',
+      (url) => {
+        const message = url.searchParams.get('message') ?? '';
+        if (message.trim().length === 0) throw new Error('message 不能为空');
+        return recordFeedback(message);
+      },
+      { method: 'POST' },
+    );
+
+    // 准则事件日志：全部 / 单条准则 / 统计
+    route('/cognition-engine/events', (url) => {
+      const ruleId = url.searchParams.get('ruleId');
+      if (ruleId !== null && ruleId.length > 0) return { ruleId, events: ruleEvents.forRule(ruleId) };
+      return { stats: ruleEvents.stats(), recent: ruleEvents.all().slice(-20) };
+    });
 
     route('/cognition-engine/state', () => snapshot());
     // 读取记忆默认开放（令牌文件本就可被同机进程读取，锁读取只增加摩擦）；
@@ -1250,9 +1331,15 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         const action = url.searchParams.get('action') ?? '';
         let ok = false;
         switch (action) {
-          case 'accept': ok = playbook.accept(id); break;
+          case 'accept':
+            ok = playbook.accept(id);
+            if (ok) ruleEvents.append({ type: 'RuleAccepted', ruleId: id, by: 'user' });
+            break;
           case 'reject': ok = playbook.reject(id); break;
-          case 'retire': ok = playbook.retire(id, '手动停用'); break;
+          case 'retire':
+            ok = playbook.retire(id, '手动停用');
+            if (ok) ruleEvents.append({ type: 'RuleRetired', ruleId: id, reason: '手动停用', by: 'user' });
+            break;
           case 'revive': ok = playbook.revive(id); break;
           case 'revise': ok = playbook.revise(id, url.searchParams.get('content') ?? ''); break;
           case 'extend': {
@@ -1263,7 +1350,10 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           case 'helpful': ok = playbook.mark(id, 'helpful'); break;
           case 'harmful': ok = playbook.mark(id, 'harmful'); break;
           // 永久删除（任意状态）。停用只是不注入，删除是当它没存在过。
-          case 'delete': ok = playbook.remove(id); break;
+          case 'delete':
+            ok = playbook.remove(id);
+            if (ok) ruleEvents.append({ type: 'RuleRetired', ruleId: id, reason: '人工删除', by: 'user' });
+            break;
           // 人工标记冲突对：自动检测不可靠时用这个
           case 'markConflict': {
             const otherId = url.searchParams.get('otherId') ?? '';
@@ -1277,7 +1367,10 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
             break;
           }
           // 立墓碑：这条本来就错了（区别于被更好的取代）
-          case 'revoke': ok = playbook.revoke(id, url.searchParams.get('reason') ?? '人工撤销'); break;
+          case 'revoke':
+            ok = playbook.revoke(id, url.searchParams.get('reason') ?? '人工撤销');
+            if (ok) ruleEvents.append({ type: 'RuleRevoked', ruleId: id, reason: url.searchParams.get('reason') ?? '人工撤销', by: 'user' });
+            break;
           // 分项使用打标：applied / appliedGood / appliedBad / missed / userCorrected
           case 'usage': {
             const kind = url.searchParams.get('kind') ?? '';

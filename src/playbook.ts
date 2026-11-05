@@ -1281,11 +1281,11 @@ export class PlaybookStore {
     now: number = this.clock(),
     budget?: number,
     topicName?: (id: string) => string | undefined,
-  ): { text: string; omitted: number } {
+  ): { text: string; omitted: number; ruleIds: string[] } {
     const maxChars = Math.max(120, Math.round(budget ?? this.maxChars));
     // 证据链断裂的条目不注入——但不是删除，前提恢复后它会自动回来
     const active = this.active(now).filter((entry) => entry.evidence?.status !== 'orphaned');
-    if (active.length === 0) return { text: '', omitted: 0 };
+    if (active.length === 0) return { text: '', omitted: 0, ruleIds: [] };
 
     const score = (entry: PlaybookEntry): number => this.effectiveScore(entry);
     // 用主题分组：每个条目挂在它的第一个主题下；没有主题的进「未归类」
@@ -1301,6 +1301,8 @@ export class PlaybookStore {
     }
 
     const blocks: string[] = [];
+    // 记录**实际注入**的准则 id——注入快照要用它回写反馈
+    const emittedIds: string[] = [];
     let used = 0;
     let total = 0;
 
@@ -1334,12 +1336,14 @@ export class PlaybookStore {
           if (lines.length === 0) {
             const trimmed = line.length > 80 ? `${line.slice(0, 77)}…` : line;
             lines.push(trimmed);
+            emittedIds.push(entry.id);
             blockChars += trimmed.length + 1;
             total += 1;
           }
           break;
         }
         lines.push(line);
+        emittedIds.push(entry.id);
         blockChars += line.length + 1;
         total += 1;
       }
@@ -1352,7 +1356,7 @@ export class PlaybookStore {
     // 按**实际渲染出来的行数**算省略，不能按 total——被整组丢弃的条目已计过 total，
     // 那样会算成 omitted=0，用户看到「少了条目」却没有任何提示。
     const emitted = blocks.reduce((sum, block) => sum + (block.match(/^- \[ctxt/gm)?.length ?? 0), 0);
-    return { text: blocks.join('\n\n'), omitted: Math.max(0, active.length - emitted) };
+    return { text: blocks.join('\n\n'), omitted: Math.max(0, active.length - emitted), ruleIds: emittedIds };
   }
 
   /**
