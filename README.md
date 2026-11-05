@@ -644,6 +644,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | 文档 | 内容 |
 |---|---|
 | [docs/persona-research.md](docs/persona-research.md) | **Persona 层精读**：Letta block 结构、Anchor 人格卡与探针、Assistant Axis 漂移、MaiBot 三分法、SillyTavern 字段、`cognition-persona.json` schema |
+| [docs/persona-cross-disciplinary.md](docs/persona-cross-disciplinary.md) | **Persona 跨学科扫描**：心理学/神经科学/语言学/HCI/哲学/游戏 NPC，能用/不能用总表 + 20 个项目对比 |
 | [docs/persona-format-and-style-metrics.md](docs/persona-format-and-style-metrics.md) | **Persona 格式与中文风格度量**：Character Card V2 完整字段表、MaiBot expression/turn_trigger 源码拆解、`cognition-persona.json` 正式 JSON Schema、26 项中文风格指纹与可运行 JS、expression 表生命周期、竞品对比 |
 | [docs/checkpoint-2026-11-05.md](docs/checkpoint-2026-11-05.md) | **存档：2026-11-05**：完成事项、设计决策、还差什么、自我学习研究结论、下次第一件事 |
 | [docs/vision-and-roadmap.md](docs/vision-and-roadmap.md) | **愿景与路线图**：五个张力、四层能力、六个阶段、北极星指标 |

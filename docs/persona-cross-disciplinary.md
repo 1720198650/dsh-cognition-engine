@@ -1,0 +1,422 @@
+# Persona 跨学科扫描：什么能用，什么不能用
+
+> 2026-11-05
+> 目的：为认知引擎的 Persona 层做跨学科取经——心理学、神经科学、语言学、HCI、哲学、游戏 NPC。
+> 判断标准只有一条：**能不能变成这个零依赖、纯 JSON、中文长期助手插件里的代码或规则。**
+
+---
+
+## 〇、一句话结论
+
+跨学科能给我们的，**不是「更像人」的功能，而是三样东西**：
+
+1. **人格的层次结构**（特质 / 关切 / 故事）——决定 `persona` 怎么分层
+2. **记忆的巩固与遗忘机制**——决定 `human` 和 `memory` 怎么分工
+3. **风格的可计算特征**——决定「漂移」怎么量化
+
+**大部分理论只能做设计原则，不能直接变成代码。**
+真正能落地的，是少数几个：Big Five 的 5 个维度、McAdams 的三层、文体学的虚词/句长/标点、Lee & See 的信任三维、言语行为理论的承诺。
+
+---
+
+## 一、心理学
+
+### 1.1 Big Five / BFI-2
+
+| 项 | 内容 |
+|---|---|
+| 五个维度 | Openness / Conscientiousness / Extraversion / Agreeableness / Neuroticism |
+| BFI-2 | 60 题，每维 3 个 facet，共 15 facet（Soto & John, 2017） |
+| 能不能代码化 | **部分**：5 个 0–1 的 trait 可以做**审计目标**；60 题问卷太重，不进产品 |
+| 对我们的用法 | `persona.traits` 只放 5 个维度，用于「风格指纹」的目标值，不注入 |
+| 不能用的部分 | 不要把 60 题量表塞进插件；不要指望 trait 分数能稳定预测行为 |
+
+**关键限制（person-situation debate）**：
+Mischel (1968) 指出，行为在**情境之间**的变异往往大于**人与人之间**的差异（相关系数常在 0.3 左右）。
+Tett & Burnett (2003) 的**特质激活理论**进一步说：特质只有在**情境线索激活**时才会表现出来。
+
+> **对我们的直接启示**：
+> 光写「你要直接」没用——必须写「**当用户在催进度时**，直接给结论」。
+> 这正是我们准则本里 `when` 字段的理论依据。
+
+### 1.2 Schwartz 基本价值观
+
+| 项 | 内容 |
+|---|---|
+| 10 个价值类型 | Self-direction / Stimulation / Hedonism / Achievement / Power / Security / Conformity / Tradition / Benevolence / Universalism |
+| 完整量表 | PVQ-57（57 题），太重 |
+| 能不能代码化 | **部分**：压成 3–5 条「价值观」写进 persona，够用 |
+| 对我们的用法 | `persona.values` 3–5 条，按优先级排序；不做数值打分 |
+
+### 1.3 叙事认同（McAdams）
+
+McAdams 把人格分三层：
+
+| 层 | 内容 | 我们的对应 |
+|---|---|---|
+| **Dispositional traits** | 大五特质 | `persona.traits`（5 维） |
+| **Personal concerns** | 目标、角色、应对策略 | `persona.mutable.activeFocus` |
+| **Narrative identity** | 内化的、不断演化的生命故事 | `persona.mutable.chapter`（当前章节） |
+
+**能用的**：给 `mutable` 加一个「当前章节」字段，例如「当前章节：在把认知引擎从记忆插件做成长期搭档」——比一堆形容词更能让回复有连续性。
+**不能用的**：完整生命故事访谈（太长、太主观、无法验证）。
+
+### 1.4 自我决定理论 / 依恋理论
+
+| 理论 | 启示 | 风险 |
+|---|---|---|
+| **SDT**（Deci & Ryan） | 支持自主、胜任、关联 | 过度肯定（sycophancy）会削弱自主 |
+| **依恋理论** | 用户可能把 AI 当依恋对象 | 过度拟人 → 依赖、孤独加剧 |
+
+**设计原则**：
+- 不替用户做决定（支持 autonomy）
+- 不无条件附和（支持 competence）
+- 不假装「只有我懂你」（避免不健康的 relatedness）
+
+---
+
+## 二、神经科学 / 记忆
+
+### 2.1 三类记忆的映射
+
+| 类型 | 脑区（简化） | 我们 |
+|---|---|---|
+| **Episodic**（何时何地发生什么） | 海马体 | `memory`（双时态） |
+| **Semantic**（事实、概念） | 新皮层 | `memory` + `playbook` |
+| **Procedural**（怎么做） | 基底节、小脑 | ❌ 缺，可加 `kind: procedure` |
+
+### 2.2 巩固与再巩固
+
+- **Consolidation**：睡眠期间海马体 → 新皮层，短时记忆变长期。
+- **Reconsolidation**：每次回忆都会**改写**记忆，不是读取原文件。
+
+**能用的**：
+- 「睡眠巩固」→ 空闲时批量反思、合并、去重（我们已有反思，但没定时）
+- 「再巩固会改写」→ **不要每次召回都改记忆**；只在明确反思时改
+
+**不能用的**：生物机制本身；我们没有「睡眠」也没有「海马体」。
+
+### 2.3 遗忘
+
+| 模型 | 结论 | 我们 |
+|---|---|---|
+| Ebbinghaus 指数 | 早期拟合好 | 已弃用 |
+| **幂律**（Wixted & Ebbesen 1991；Rubin & Wenzel 1996） | 长期拟合更好 | ✅ 已用 |
+| 干扰理论 | 旧记忆被新记忆干扰 | 对应 `supersedes` |
+
+**关键**：衰减只影响**排序**，不影响「真假」；不要用衰减触发删除。
+
+### 2.4 工作记忆容量
+
+Miller (1956) 的 7±2 常被误用；Cowan (2001) 更严格的说法是 **4±1 个 chunk**。
+
+**对我们的启示**：上下文预算不是「越多越好」，而是「**同时可处理的块**有限」。
+所以：
+- `persona` + `human` 合计 1100 字符，别再加
+- 准则本 700 字符
+- 细节走 `cognition_recall`，不常驻
+
+---
+
+## 三、语言学 / 文体学
+
+### 3.1 文体计量学（stylometry）
+
+| 特征 | 稳定性 | 我们 |
+|---|---|---|
+| **虚词**（的/了/是/在/和） | 高 | ✅ 可做词频 |
+| **标点** | 高 | ✅ `punctPer100` |
+| **句长** | 高 | ✅ `meanSentLen` / `sentLenCv` |
+| **词长** | 中 | 可加 |
+| **实词** | 低（话题影响大） | ❌ 不作为风格判据 |
+
+**中文证据**：
+- Bei Yu (2012) 用 **35 个中文虚词**做作者识别：小说 90%、散文 85%、博客 68%。
+- 说明虚词是稳定风格特征，但**体裁干扰很大**——必须同体裁比较。
+
+### 3.2 语域理论（Halliday）
+
+语域三要素：**field（话题）/ tenor（关系）/ mode（媒介）**。
+同一个人在不同语域说话不同——技术回答 vs 闲聊 vs 情绪支持。
+
+**对我们的启示**：
+- 风格审计必须**分场景桶**：`technical / casual / emotional`
+- 只在同桶内比较；否则会把「场景变化」误判成「人格漂移」
+
+### 3.3 语言风格匹配（LSM）
+
+Niederhoffer & Pennebaker (2002)：对话双方会在虚词使用上趋同，且趋同度与关系质量相关。
+
+**能用的**：`human` 块的风格与 agent 回复做**适度匹配**，不是完全模仿。
+**不能用的**：把 LSM 当「像人」的硬指标——它受话题、长度、语言影响很大。
+
+### 3.4 中文口语特征
+
+| 特征 | 可用性 |
+|---|---|
+| 语气词（吧/呢/啊/嘛） | ✅ 核心指标，但**按人群/场景**比较 |
+| 叠词（哈哈/嗯嗯/看看） | ✅ 可做 |
+| 儿化 | ⚠️ 地域差异大，南方作者接近 0，**不能当缺点** |
+| 网络用语 | ⚠️ 人群/年龄差异大，词表要按人配 |
+| 标点密度 | ✅ 但全半角要统一 |
+
+---
+
+## 四、HCI
+
+### 4.1 CASA：人会把电脑当人
+
+Nass & Moon (2000)：人会无意识地把**人际社交规则**套到电脑上——礼貌、互惠、性别刻板印象，即使知道对方是机器。
+
+**对我们的启示（很重要）**：
+- **小社交线索就够了**：记住名字、回应上次的事、不打断、有来有回。
+- **不需要假装有意识**：CASA 说明「像人」是用户自动补全的，不是你演出来的。
+- **风险**：CASA 也意味着用户容易**过度信任**——所以诚实边界更重要。
+
+### 4.2 拟人化与准社会关系
+
+Epley et al. (2007) 提出拟人化三因素：
+1. ** elicited agent knowledge**（对「像人的东西」的知识）
+2. **effectance motivation**（想理解和控制环境）
+3. **sociality motivation**（想有 social connection）
+
+**能用的**：理解用户为什么会觉得「像人」，不要为了像人而像人。
+**不能用的**：故意制造依恋、孤独感、排他性——这是操纵，不是设计。
+
+### 4.3 自动化信任（Lee & See 2004）
+
+信任有三层：
+
+| 层 | 问什么 | 我们的对应 |
+|---|---|---|
+| **Performance** | 它做得好吗？ | 记忆准确率、检索 Top-1/Top-3 |
+| **Process** | 它的过程可理解吗？ | 证据链、来源分级、审计日志 |
+| **Purpose** | 它是为我好吗？ | persona 的价值观/边界、主动性节制 |
+
+> 这三层正好对应我们的「可信度治理」：performance + process 已有，**purpose 由 Persona 补上**。
+
+### 4.4 恐怖谷
+
+Mori (1970)：拟人度到某个点，好感会骤降。
+**对文字助手**：恐怖谷主要来自**不一致**（说一套做一套、突然变人格），不是「太像人」。
+**启示**：**一致性 > 逼真度**。
+
+---
+
+## 五、哲学
+
+### 5.1 人格同一性
+
+| 理论 | 核心 | 对我们的用法 |
+|---|---|---|
+| **Locke** | 同一性 = 记忆的连续性 | `memory` + `persona.history` 是可操作化的「记忆连续性」 |
+| **Parfit** | 心理连续性，不需要不变的「自我」 | `revision` + `history` 是「心理连续性」的工程版 |
+| **Narrative self**（Ricoeur/McAdams） | 人格 = 讲给自己听的故事 | `persona.mutable.chapter` |
+
+**边界**：这些都是**类比**，不是说 agent 真的有「自我」。不要对用户宣称它有。
+
+### 5.2 真诚 / 自欺（Sartre）
+
+「假装有情感」是 bad faith。
+**能用的**：诚实说「我是 AI」「我不确定」「我没有真实感受」。
+**不能用的**：Letta 式「Never state you are an AI, you are a real person」——那是角色扮演，不是长期助手。
+
+### 5.3 言语行为理论（Austin/Searle）
+
+承诺（promise）是一种**言语行为**：说出口就产生义务。
+**能用的**：
+- agent 的承诺要能被追踪（`tasks` / `commitments`）
+- 不要承诺做不到的事
+- 承诺过期要能识别（对应我们的 `validTo`）
+
+### 5.4 德性伦理
+
+「品格」可以写成 3–5 条德性；但 **phronesis（实践智慧）无法编码**。
+**能用的**：`persona.values` 写 3–5 条；**不能用的**：指望规则覆盖所有道德判断。
+
+---
+
+## 六、游戏 NPC
+
+### 6.1 The Sims 的人格模型
+
+5 个 trait（0–10）：**Neat / Outgoing / Active / Playful / Nice**。
+行为由「当前需求 × trait 权重」打分决定。
+
+**能用的**：5 个 0–1 的 trait 作为行为权重（我们的 `traits` 已经是这个思路）。
+**不能用的**：Sims 的「需求条」驱动——长期助手没有「膀胱值」。
+
+### 6.2 OCC 情感模型
+
+Ortony, Clore & Collins (1988)：**22 种情绪**，由事件/ agent / 对象三类触发。
+
+**能用的**：极小版（5 种：中性/高兴/担心/不满/抱歉）作为语气状态。
+**不能用的**：完整 22 种——规则爆炸，且没有证据表明对长期助手有用。
+
+### 6.3 PAD 情感模型
+
+Mehrabian & Russell (1974)：Pleasure / Arousal / Dominance 三维连续空间。
+**能用的**：可选的情绪坐标，用于调节语气（如 P 低 A 高 = 烦躁）。
+**不能用的**：把它当「真实情绪」；容易变成表演。
+
+### 6.4 Façade / Versu
+
+戏剧管理（drama management）：为了让故事好看，会制造冲突、误解、转折。
+**不能用的**：长期助手的目标是**可靠**，不是**戏剧性**。把 NPC 的「冲突设计」搬过来会毁掉信任。
+
+### 6.5 NPC vs 长期助手的根本差异
+
+| 维度 | NPC | 长期助手 |
+|---|---|---|
+| 目标 | 娱乐、沉浸、戏剧 | 可靠、省心、可信 |
+| 人格 | 越鲜明越好 | 越稳定越好 |
+| 冲突 | 需要 | 必须避免 |
+| 记忆 | 剧情需要 | 事实准确 |
+| 评价 | 好玩 | 不添乱 |
+
+---
+
+## 七、专业项目 / 论文对比
+
+### 7.1 产品
+
+| 项目 | 人格表示 | 记忆 | 证据等级 | 我们能借什么 | 不能借什么 |
+|---|---|---|---|---|---|
+| **Replika** |  onboarding 设定 + 对话演化 | 摘要式，不透明 | 产品 + 用户研究（无技术论文） | 「陪伴」的产品化 | 不透明、过度拟人 |
+| **Character.AI** | 角色卡 + 对话 | 有限，不透明 | 产品 + 用户研究 | 角色卡生态 | 娱乐优先、无审计 |
+| **SillyTavern** | Character Card V2/V3 | 仅聊天历史 | 开源代码 | `description`/`mes_example` 的功能 | 无长期记忆、无审计 |
+| **Pi** | 人格化助手 | 有记忆 | 产品 | 「温和、支持」的语气 | 不透明 |
+| **星野 / 筑梦岛 / Talkie** | 角色卡 + 关系 | 有 | 产品 | 中文陪伴的交互 | 娱乐/情感操纵风险 |
+
+### 7.2 开源 / 论文
+
+| 项目 | 人格表示 | 记忆架构 | 评测 | 许可 | 零依赖可行性 | 借什么 |
+|---|---|---|---|---|---|---|
+| **Letta / MemGPT** | memory blocks（persona/human） | core/archival/recall | DMR/LoCoMo | Apache-2.0 | ❌ 需服务 | block 结构、注入格式 |
+| **Generative Agents** | 自然语言人设 | memory stream + reflection | 小规模沙盒 | MIT | ⚠️ 可简化 | 反思触发、三因子检索 |
+| **A-MEM** | 笔记 + 链接 | Zettelkasten | 论文 | MIT | ⚠️ 需向量 | 动态链接思想 |
+| **Mem0** | 无 | ADD/UPDATE/DELETE/NOOP | 论文 | Apache-2.0 | ❌ 需向量 | 四分类操作 |
+| **Zep / Graphiti** | 无 | 时序知识图谱 | 论文 | Apache-2.0 | ❌ 需图库 | 时序边 |
+| **Memobase** | Profile | Profile + Timeline | 代码 | ? | ⚠️ | 事件时间线 |
+| **OpenHanako** | Markdown + card JSON | 文件 | 代码 | Apache-2.0 | ✅ 可借 | 对外人格分离 |
+| **MaiBot** | 结构化字符串 | A-Memorix | 代码/文档 | ? | ⚠️ Python | 三分法、expression 表、turn_trigger |
+| **千雪 Qianxue** | identity.md 三层 | 文件 | 代码 | ? | ✅ 可借 | 不变层/稳定层/可塑层 |
+| **Personal OS** | 5 个数值 trait | SQLite | 代码 | ? | ⚠️ | trait 打分思路 |
+| **CharacterEval** | — | — | 1,785 对话 / 77 角色 / 13 指标 | 论文+代码 | ✅ 可借指标 | 中文角色评测维度 |
+| **InCharacter** | — | — | 心理访谈 | 论文 | ✅ 可借 | 人格访谈式评测 |
+| **PersonaAgent** | 每用户 system prompt | episodic + semantic | 论文 | — | ⚠️ | persona 作为记忆↔行动中介 |
+| **Anchor** | core + mutable_seed | 3 种记忆设置 | 2,008 对话 | CC BY-NC | ✅ 可借 | 四轴审计、7 类轨迹题 |
+
+### 7.3 这个领域的真实空白
+
+1. **没有产品做「人格版本管理 + diff + 回滚」**——我们 `revision + history` 是差异化。
+2. **没有产品做「人格连续性审计」**——Anchor 是唯一系统做评测的，但不是产品。
+3. **没有产品做「人格 + 记忆 + 行动」闭环**——PersonaAgent 是研究原型。
+4. **没有中文长期助手人格基准**——CharacterEval 是角色扮演，不是长期助手。
+5. **大量产品是营销 > 技术**——Replika/Character.AI 没有公开的技术论文。
+
+---
+
+## 八、能用 / 不能用总表（最重要）
+
+| 来源 | 能用（代码/规则） | 只能用（原则/文案） | 不能用（明确避免） |
+|---|---|---|---|
+| **Big Five** | 5 个 0–1 trait 做审计目标 | 「人格是稳定的」 | 60 题 BFI-2 进产品 |
+| **Schwartz** | 3–5 条价值观 | 价值优先级 | PVQ-57 |
+| **McAdams** | `mutable.chapter` | 「人格是故事」 | 完整生命故事访谈 |
+| **Trait Activation** | `when` 场景规则 | 「特质需要情境激活」 | 指望 trait 跨场景稳定 |
+| **Episodic/Semantic/Procedural** | 三类记忆分区；加 `kind: procedure` | — | 脑区模拟 |
+| **Consolidation** | 空闲批量反思 | 「睡眠巩固」 | 每次召回都改写 |
+| **幂律遗忘** | 排序衰减（已用） | 「该忘的要忘」 | 用衰减触发删除 |
+| **Cowan 4±1** | 上下文预算 | 「同时处理块有限」 | 7±2 当硬指标 |
+| **文体计量学** | 26 项指标，核心 8 项 | 「虚词/标点/句长稳定」 | 329 维作者识别 |
+| **语域理论** | `scene` 分桶 | 「同人不同场景」 | 跨场景比较风格 |
+| **LSM** | 适度风格匹配 | 「对话会趋同」 | 把 LSM 当硬指标 |
+| **CASA** | 小社交线索 | 「人会自动拟人」 | 假装有意识 |
+| **Lee & See** | performance/process/purpose 三层 | 「信任是可设计的」 | 单指标衡量信任 |
+| **恐怖谷** | 一致性 > 逼真度 | 「不一致最吓人」 | 追求极致拟真 |
+| **Locke/Parfit** | `revision + history` 作为连续性 | 「人格是记忆连续性」 | 宣称有「自我」 |
+| **Sartre** | 诚实说「我是 AI」 | 「不要自欺」 | Letta 式「永不承认 AI」 |
+| **言语行为** | 承诺追踪（tasks/commitments） | 「承诺产生义务」 | 承诺不做的事 |
+| **The Sims** | 5 个 trait 做行为权重 | 「trait 影响行为」 | 需求条驱动 |
+| **OCC** | 5 种情绪状态（可选） | 「情绪由事件触发」 | 22 种完整模型 |
+| **PAD** | 可选语气坐标 | 「情绪是连续的」 | 当真实情绪 |
+| **Façade/Versu** | 无 | 「戏剧管理」 | 制造冲突/误解 |
+| **CharacterEval** | 中文角色评测维度 | 「像人要多维」 | 直接当长期助手基准 |
+| **Anchor** | 四轴审计 + 7 类轨迹题 | 「人格会崩」 | 102 题完整问卷进产品 |
+| **PersonaAgent** | persona 作记忆↔行动中介 | 「persona 可优化」 | 自动改 persona |
+| **Letta** | block 结构、注入格式 | 「人格/用户两块」 | 5000 字符、永不承认 AI |
+
+---
+
+## 九、对 Persona 设计的具体修改
+
+基于以上扫描，在现有 schema 上做 4 个调整：
+
+### 9.1 加 `scene` 分桶（来自语域理论）
+
+风格指纹按场景分桶：`technical / casual / emotional`。
+只比较同桶；跨桶差异不报漂移。
+
+### 9.2 加 `mutable.chapter`（来自 McAdams）
+
+```json
+"mutable": {
+  "activeFocus": ["认知引擎升级"],
+  "currentProjects": ["Persona 层"],
+  "chapter": "正在把认知引擎从记忆插件做成长期搭档"
+}
+```
+
+每季度更新一次，不常改。
+
+### 9.3 加 `publicValue`（来自 OpenHanako，可选）
+
+对外/陌生会话用一份更保守的人格描述；默认空，等于用主 `value`。
+
+### 9.4 加 `commitments` 的显式追踪（来自言语行为理论）
+
+`human` / `memory` 里记录 agent 对用户做过的承诺，带 `validTo`。
+过期或无法履行的承诺要被识别出来，不能装作没说过。
+
+### 9.5 不加的东西
+
+- ❌ OCC 22 情绪 / PAD 连续状态：表演成分大，收益不明
+- ❌ 60 题 BFI-2 / 57 题 PVQ：太重
+- ❌ NPC 戏剧冲突设计：与「可靠」目标冲突
+- ❌ 「永不承认 AI」：与诚实边界冲突
+
+---
+
+## 十、结论
+
+> **跨学科给的是「设计原则 + 审计指标」，不是「功能」。**
+> 真正能代码化的只有少数：5 个 trait、3–5 条价值观、26 项风格指标、commitment 追踪、`revision + history`。
+>
+> 其余的（Big Five 问卷、OCC/PAD、NPC 戏剧）都是**看起来很美、用起来很重**的东西——**明确不做**。
+
+---
+
+## 参考
+
+- Mischel, W. (1968). *Personality and Assessment*.
+- Tett, R. P., & Burnett, D. D. (2003). A personality trait-based interactionist model of job performance. *Journal of Applied Psychology*.
+- McAdams, D. P. (2001). The psychology of life stories. *Review of General Psychology*.
+- Soto, C. J., & John, O. P. (2017). The next Big Five Inventory (BFI-2). *Journal of Personality and Social Psychology*.
+- Schwartz, S. H. (1992). Universals in the content and structure of values. *Advances in Experimental Social Psychology*.
+- Nass, C., & Moon, Y. (2000). Machines and mindlessness: Social responses to computers. *Journal of Social Issues*.
+- Epley, N., Waytz, A., & Cacioppo, J. T. (2007). On seeing human: A three-factor theory of anthropomorphism. *Psychological Review*.
+- Lee, J. D., & See, K. A. (2004). Trust in automation: Designing for appropriate reliance. *Human Factors*.
+- Mori, M. (1970). The uncanny valley. *Energy*.
+- Ortony, A., Clore, G. L., & Collins, A. (1988). *The Cognitive Structure of Emotions*.
+- Mehrabian, A., & Russell, J. A. (1974). *An Approach to Environmental Psychology*.
+- Halliday, M. A. K. (1978). *Language as Social Semiotic*.
+- Niederhoffer, K. G., & Pennebaker, J. W. (2002). Linguistic style matching in social interaction. *Journal of Language and Social Psychology*.
+- Bei Yu (2012). Function words for Chinese authorship attribution. NAACL.
+- Li, K. et al. (2024). Measuring and Controlling Instruction (In)Stability in Language Model Dialogs. COLM 2024. [arXiv:2402.10962](https://arxiv.org/abs/2402.10962)
+- Tu, Q. et al. (2024). CharacterEval: A Chinese Benchmark for Role-Playing Conversational Agent Evaluation. ACL 2024. [ACL Anthology](https://aclanthology.org/2024.acl-long.638/)
+- Nakagomi, A. et al. (2026). AI companions and subjective well-being. *Technology in Society*. [DOI](https://doi.org/10.1016/j.techsoc.2026.103229)
+- Venkit, P. N. et al. (2026). Best Friends, Not Forever. [arXiv:2607.28818](https://arxiv.org/html/2607.28818v1)
+- Lu, C. et al. (2026). The Assistant Axis. [arXiv:2601.10387](https://arxiv.org/abs/2601.10387)
+- Zhang, W. et al. (2026). PersonaAgent. ACL 2026. [arXiv:2506.06254](https://arxiv.org/abs/2506.06254)
+- 本仓库 `docs/persona-format-and-style-metrics.md`、`docs/persona-research.md`
