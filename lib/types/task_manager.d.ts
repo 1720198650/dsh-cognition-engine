@@ -36,7 +36,7 @@ export interface DueTask extends LongTask {
     overdueMs: number;
 }
 export interface TaskManagerOptions {
-    /** tasks.json 的位置，默认 <cwd>/tasks.json。 */
+    /** tasks.json 的位置，默认 `~/.dsh/cognition-engine/tasks.json`。 */
     filePath?: string;
     now?: () => number;
     /** 多久没更新就算需要催办，默认 6 小时。 */

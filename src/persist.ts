@@ -17,8 +17,8 @@
 import { copyFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { readFileSync, renameSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { basename, dirname, join, resolve } from 'node:path';
-import { resolveDataFile } from './util.ts';
+import { basename, dirname, join } from 'node:path';
+import { resolveDataFile, resolveUserPath } from './util.ts';
 
 /** 同时保留的快照份数。 */
 const MAX_SNAPSHOTS = 5;
@@ -58,7 +58,7 @@ export class JsonStateStore<T> {
   private storageWarning = '';
 
   constructor(options: JsonStoreOptions<T>) {
-    this.filePath = options.filePath === undefined ? resolveDataFile('cognition-state.json') : resolve(options.filePath);
+    this.filePath = options.filePath === undefined ? resolveDataFile('cognition-state.json') : resolveUserPath(options.filePath);
     this.checksumPath = `${this.filePath}.sha256`;
     this.lockPath = `${this.filePath}.lock`;
     this.snapshotDir = join(dirname(this.filePath), '.snapshots');
@@ -80,22 +80,37 @@ export class JsonStateStore<T> {
     this.storageWarning = '';
   }
 
-  /** 启动时恢复；文件不存在返回 false。损坏的文件会备份后按空库启动，绝不阻断加载。 */
+  /**
+   * 启动时恢复；文件不存在返回 false。损坏的文件会备份后按空库启动，绝不阻断加载。
+   *
+   * 顺序刻意是「先解析数据、再比校验和」：flush()/restoreSnapshot() 先 rename 数据、
+   * 再写 .sha256，两步之间崩溃会留下「数据新、侧车旧」。这时数据本身是好的，
+   * 不能因为侧车过期就把好档隔离成空库——只重写校验和并记一条告警。
+   */
   async load(): Promise<boolean> {
+    let raw: string;
     try {
-      const raw = await readFile(this.filePath, 'utf8');
-      if (!(await this.verifyChecksum(raw))) {
-        this.quarantine();
-        return false;
-      }
-      this.restore(JSON.parse(raw) as T);
-      await this.rememberDiskMtime();
-      return true;
+      raw = await readFile(this.filePath, 'utf8');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
       this.quarantine();
       return false;
     }
+    let data: T;
+    try {
+      data = JSON.parse(raw) as T;
+    } catch {
+      this.quarantine();
+      return false;
+    }
+    if (!(await this.verifyChecksum(raw))) {
+      this.storageWarning =
+        '校验和与数据不一致（可能是上次写入中途退出）；已按数据内容恢复并重写校验和。';
+      await writeFile(this.checksumPath, sha256(raw), 'utf8').catch(() => undefined);
+    }
+    this.restore(data);
+    await this.rememberDiskMtime();
+    return true;
   }
 
   /** 同步恢复，用于插件加载阶段——避免工具在异步恢复完成前读到空库。 */

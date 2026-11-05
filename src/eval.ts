@@ -16,9 +16,10 @@
  * 本文件不注册任何工具，不进入模型上下文，运行它本身不消耗 token。
  */
 
-import { readFileSync, existsSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { rm, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 import { TemporalMemoryStore } from './memory.ts';
 import { DialecticalReflectionEngine, MockDialecticalLLM, extractContradictions } from './reflection.ts';
@@ -31,6 +32,9 @@ import { apply, persistReflection } from './index.ts';
 const ROOT = resolve(import.meta.dirname ?? '.', '..');
 const CASES_FILE = resolve(ROOT, 'evals/cases.json');
 const BASELINE_FILE = resolve(ROOT, 'evals/baseline.json');
+
+/** 评测产物写系统临时目录：不再往仓库根目录写 .dsh-eval-* / .dsh-compat-*。 */
+const SCRATCH = mkdtempSync(join(tmpdir(), 'dsh-cognition-eval-'));
 
 const BUDGET = { schemaTokens: 1400, toolOutputTokens: 600 };
 
@@ -164,7 +168,7 @@ const checkers: Record<string, (params: Params, expect: Params) => Promise<void>
    *   3) 空准则本必须渲染为空串（否则「有/无」无法区分）
    */
   'playbook.gate': (p, e) => {
-    const store = new PlaybookStore({ filePath: resolve(ROOT, '.dsh-eval-playbook.json'), now: () => 1_000 });
+    const store = new PlaybookStore({ filePath: join(SCRATCH, 'eval-playbook.json'), now: () => 1_000 });
 
     // 1) 套话：模拟「换成任何项目都成立」的候选，必须全被拒
     if (Array.isArray(p.cliches)) {
@@ -224,7 +228,7 @@ const checkers: Record<string, (params: Params, expect: Params) => Promise<void>
   },
 
   'task.persist': async (p, e) => {
-    const file = resolve(ROOT, '.dsh-eval-tasks.json');
+    const file = join(SCRATCH, 'eval-tasks.json');
     await rm(file, { force: true });
     const manager = new LongHorizonTaskManager({ filePath: file, now: () => 1000 });
     await manager.load();
@@ -253,8 +257,8 @@ interface CostRow {
 
 async function measureCost(): Promise<{ schemas: CostRow[]; outputs: CostRow[]; schemaTokens: number; maxOutputTokens: number }> {
   // 先清掉上一轮可能残留的状态文件，避免旧数据把输出体量撑大
-  await rm(resolve(ROOT, '.dsh-eval-runtime-tasks.json'), { force: true });
-  await rm(resolve(ROOT, '.dsh-eval-state.json'), { force: true });
+  await rm(join(SCRATCH, 'runtime-tasks.json'), { force: true });
+  await rm(join(SCRATCH, 'state.json'), { force: true });
 
   const captured: Array<Record<string, unknown> & { name: string }> = [];
   const fakeTools = {
@@ -265,8 +269,8 @@ async function measureCost(): Promise<{ schemas: CostRow[]; outputs: CostRow[]; 
   };
   const ctx = { get: (key: string) => (key === 'tools' ? fakeTools : undefined), logger: {} };
   const dispose = apply(ctx as never, {
-    tasksFile: resolve(ROOT, '.dsh-eval-runtime-tasks.json'),
-    stateFile: resolve(ROOT, '.dsh-eval-state.json'),
+    tasksFile: join(SCRATCH, 'runtime-tasks.json'),
+    stateFile: join(SCRATCH, 'state.json'),
     // 成本测量要真实跑一遍 cognition_reflect；引擎默认关闭，这里显式开本地占位。
     reflectionMode: 'local',
   });
@@ -302,8 +306,8 @@ async function measureCost(): Promise<{ schemas: CostRow[]; outputs: CostRow[]; 
   }
 
   if (typeof dispose === 'function') dispose();
-  await rm(resolve(ROOT, '.dsh-eval-runtime-tasks.json'), { force: true });
-  await rm(resolve(ROOT, '.dsh-eval-state.json'), { force: true });
+  await rm(join(SCRATCH, 'runtime-tasks.json'), { force: true });
+  await rm(join(SCRATCH, 'state.json'), { force: true });
 
   return {
     schemas,
@@ -370,8 +374,8 @@ function checkPackaging(): PackCheck[] {
 /** 模拟三类真实冲突：工具重名、没有 webServer、没有事件与 effect 能力。 */
 function checkCompatibility(): PackCheck[] {
   const checks: PackCheck[] = [];
-  const tasks = resolve(ROOT, '.dsh-compat-tasks.json');
-  const state = resolve(ROOT, '.dsh-compat-state.json');
+  const tasks = join(SCRATCH, 'compat-tasks.json');
+  const state = join(SCRATCH, 'compat-state.json');
 
   // 1) 与其他插件工具重名：注册抛错时，其余工具仍应注册成功
   const registered: string[] = [];
@@ -426,7 +430,7 @@ function checkCompatibility(): PackCheck[] {
 
   // 4) 落盘文件损坏：备份后空库启动，不能抛错
   let threwCorrupt = false;
-  const corrupt = resolve(ROOT, '.dsh-compat-corrupt.json');
+  const corrupt = join(SCRATCH, 'compat-corrupt.json');
   try {
     writeFileSync(corrupt, '{ 这不是合法 JSON', 'utf8');
     const dispose = apply(
@@ -483,7 +487,7 @@ function checkCompatibility(): PackCheck[] {
   // 而面板的「注入来源」却按准则本判断，于是面板报「正在注入准则本」、
   // 模型实际只看到记忆摘要——显示与实际不一致，而单测全绿。
   {
-    const injectPlaybook = resolve(ROOT, '.dsh-compat-inject-playbook.json');
+    const injectPlaybook = join(SCRATCH, 'compat-inject-playbook.json');
     writeFileSync(
       injectPlaybook,
       JSON.stringify({
@@ -545,7 +549,7 @@ function checkCompatibility(): PackCheck[] {
     });
 
     // 准则本为空时必须回退，不能注入空串占位
-    const emptyPlaybook = resolve(ROOT, '.dsh-compat-inject-empty.json');
+    const emptyPlaybook = join(SCRATCH, 'compat-inject-empty.json');
     writeFileSync(emptyPlaybook, JSON.stringify({ version: 1, revision: 0, updatedAt: 0, entries: [] }), 'utf8');
     let capturedEmpty: (() => string) | undefined;
     try {
@@ -586,14 +590,7 @@ function checkCompatibility(): PackCheck[] {
     }
   }
 
-  // 清扫：损坏文件会被隔离成 *.corrupt-<ts>，不清会越积越多
-  try {
-    for (const name of readdirSync(ROOT)) {
-      if (name.startsWith('.dsh-compat-')) rmSync(resolve(ROOT, name), { force: true });
-    }
-  } catch {
-    /* 清扫失败不影响评测结论 */
-  }
+  // 兼容性自检的产物全在 SCRATCH（系统临时目录）里，随评测结束统一清理（见文件末尾）
 
   return checks;
 }
@@ -747,3 +744,14 @@ if (updateBaseline || previous === null) {
 
 console.log(allPassed ? '\n评测通过' : '\n评测未通过');
 if (!allPassed) process.exitCode = 1;
+
+// 评测产物全部在系统临时目录；正常结束删一次，再兜底到进程退出时删一次
+// （插件里还有 debounce 定时器，可能在结束瞬间回写、把目录重新建出来）
+rmSync(SCRATCH, { recursive: true, force: true });
+process.on('exit', () => {
+  try {
+    rmSync(SCRATCH, { recursive: true, force: true });
+  } catch {
+    /* 进程退出时删不掉也不影响评测结论 */
+  }
+});

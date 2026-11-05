@@ -39,6 +39,23 @@ export function resolveDataFile(name: string): string {
   return join(dataDir(), name);
 }
 
+/**
+ * 展开路径开头的 `~`（用户主目录）。
+ *
+ * 配置文件里写 `~/...` 很自然，但 `path.resolve()` 不展开它——会解析成
+ * `<进程 cwd>/~/...`，于是「换个工作区就读不到旧数据」。用户配置的路径必须先过这道。
+ */
+export function expandHome(input: string): string {
+  if (input === '~') return homedir();
+  if (input.startsWith('~/') || input.startsWith('~\\')) return join(homedir(), input.slice(2));
+  return input;
+}
+
+/** 把用户配置里的路径收敛成绝对路径：先展开 `~`，相对路径仍按进程 cwd 解析。 */
+export function resolveUserPath(input: string): string {
+  return resolve(expandHome(input));
+}
+
 /** 需要从旧位置（插件包根目录）迁走的文件。 */
 const LEGACY_DATA_FILES = [
   'cognition-state.json',

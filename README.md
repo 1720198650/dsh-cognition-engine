@@ -162,11 +162,11 @@ dsh plugin --profile desktop add .
 - **结构化反思（反思引擎）**：THESIS → ANTITHESIS（矛盾/证据成对）→ SYNTHESIS，三步严格串行。
   **默认关闭**，开启后可选「本地占位」或「真实模型」，选择持久化。
   单独做它，是因为普通对话里 AI 天然顺着你说；反思引擎**强制它先反驳自己**。
-- **准则本（Playbook）**：把记忆蒸馏成一页常驻上下文的工作准则，注入预算 600 字符。
+- **准则本（Playbook）**：把记忆蒸馏成一页常驻上下文的工作准则，注入预算 700 字符。
   条目形如 `[ctxt-00001] helpful=2 harmful=0 :: 正文`，模型可点名引用，计数能回写。
 - **半自动蒸馏**：反思引擎从记忆里提炼候选，确定性代码做去重 / 长度 / 来源 / 套话 / 私有性校验，
   候选进待审队列，**人工确认后才生效**。
-- **超预算不静默丢**：注入超过 600 字符时显示「另有 N 条准则因预算省略」，低分条目被截掉时你能看见
+- **超预算不静默丢**：注入超过 700 字符时显示「另有 N 条准则因预算省略」，低分条目被截掉时你能看见
 - **准则有有效期**：阶段性约定可设 `validTo`，过期自动停止注入并单独分组复核。
   **这是与同类插件最大的区别**：它们让 AI 记住经验，我们让 AI 知道经验什么时候该作废。
 - **准则冲突检测**：新准则与现有准则疑似矛盾时打 `conflictWith` 标记，不自动合并，交人工裁决。
@@ -302,7 +302,7 @@ userCorrected   用户明确纠正
 | --- | --- | --- |
 | 内容 | 你说过的原话、事实、决策 | 从这些材料里提炼出的**可执行约定** |
 | 形态 | 一条一整句，可能几十条 | 一页 6–12 条，每条 12–80 字 |
-| 进入上下文 | 只注入前几条摘要 | **每轮都注入**（600 字符预算） |
+| 进入上下文 | 只注入前几条摘要 | **每轮都注入**（700 字符预算） |
 | 过期 | 有 validTo，但默认长期 | **阶段性准则可设有效期，过期自动停用** |
 
 举个真实例子。你的记忆库里躺着这些材料：
@@ -369,7 +369,7 @@ mem-16 「npm 发布时本机 registry 指向淘宝镜像，必须显式加 --re
         overlapThreshold: 0.42         # 重叠聚类阈值
         communityThreshold: 0.3        # 社区连边阈值
         maxClusterSize: 8              # 单簇上限
-        tasksFile: ./tasks.json
+        tasksFile: ~/.dsh/cognition-engine/tasks.json
         stateFile: ~/.dsh/cognition-engine/cognition-state.json
         heartbeatHours: 6              # 多久没更新算超时
         patrolIntervalHours: 3         # 后台巡视间隔
@@ -378,6 +378,9 @@ mem-16 「npm 发布时本机 registry 指向淘宝镜像，必须显式加 --re
         # llmProvider: deepseek
         # llmModel: deepseek-chat
 ```
+
+> 路径开头的 `~` 会展开到用户主目录；相对路径按进程 cwd 解析（换工作区会指向不同文件），
+> 所以配置里建议一律写 `~/...` 或绝对路径。
 
 ---
 
@@ -393,7 +396,7 @@ mem-16 「npm 发布时本机 registry 指向淘宝镜像，必须显式加 --re
 - **设置**：记忆准入规则开关、记忆归并与导入导出、三类删除、反思引擎三态、记忆读取锁、备份与审计
 
 页面上所有数据走 HTTP，**不进入模型上下文，不消耗 token**。
-只有「准则」页签里的条目会被注入上下文（600 字符预算）。
+只有「准则」页签里的条目会被注入上下文（700 字符预算）。
 
 
 ## 数据与隐私
@@ -403,7 +406,7 @@ mem-16 「npm 发布时本机 registry 指向淘宝镜像，必须显式加 --re
 | 落盘位置 | `~/.dsh/cognition-engine/`（可用环境变量 `DSH_COGNITION_DATA_DIR` 覆盖） |
 | 落盘文件 | `cognition-state.json`（记忆）、`tasks.json`（待办）、`cognition-playbook.json`（准则）、`cognition-topics.json`（主题）、`cognition-audit.jsonl`（审计）、`.snapshots/`（快照） |
 | HTTP | `GET /cognition-engine/state`（仅计数）、`GET /cognition-engine/detail`（含正文）、`GET /cognition-engine/playbook`、`POST /cognition-engine/{clear,model,lock,playbook/*,snapshot/*}` |
-| 记忆读取锁 | 开启后 `detail` 与三个 `POST` 要求 `x-cognition-token`；`state` 始终公开（只有计数） |
+| 记忆读取锁 | 开启后 `detail` 与全部 `POST` 都要求 `x-cognition-token`；`state` 始终公开（只有计数） |
 | 外部请求 | 默认零外部请求；只有打开真模型时才会调用宿主配置的模型服务 |
 
 > ⚠️ 不设 `lockToken` 且未上锁时，本机任意进程都能读取记忆正文。多人或多程序共用一台机器时请先上锁。
@@ -642,6 +645,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 |---|---|
 | [docs/research-bm25-retrieval.md](docs/research-bm25-retrieval.md) | BM25 / IDF / 中文分词：实测 MRR、参数网格搜索、显著性检验（含可复现基准 `docs/bench-bm25/`） |
 | [docs/research-negex-and-ranking.md](docs/research-negex-and-ranking.md) | NegEx 完整规则表（16 伪否定 / 15 后置否定 / 终止词）、中文否定 12 条规则、双重否定统计、多信号排序（RRF / Generative Agents 对比） |
+| [docs/research-super-agent-and-persona.md](docs/research-super-agent-and-persona.md) | Super-agent 项目清单 + 人格块设计 + 「自我学习」四层辨析（L1 上下文 / L2 记忆 / L3 工具自造 / L4 权重更新） |
 | [docs/research-frozen-weight-learning.md](docs/research-frozen-weight-learning.md) | 冻结权重下的学习与遗忘：ExpeL / Voyager / AWM / Reflexion / ReasoningBank / ACE / PATH-Bench / Oblivion 的机制与数字 |
 | [docs/research-philosophy-engineering.md](docs/research-philosophy-engineering.md) | 哲学工程化项目逐项核实：GRACE / SCL / LeAP / ITEM / HADES / cognee，**含两个被证伪的引用** |
 | [docs/topic-research.md](docs/topic-research.md) / [topic-research-oss.md](docs/topic-research-oss.md) | 为什么删掉自动聚类：论文证据 + 开源项目对比 |

@@ -12,12 +12,12 @@
         maxClusterSize: 8
         # 是否把跨会话摘要注入系统提示；填 false 则只在调用 cognition_context 时给你
         # injectMemory: true
-        # 落盘位置：留空则用插件目录下的默认文件名（跨机器/跨平台可用）
-        # tasksFile: ./tasks.json
+        # 落盘位置：留空则用 ~/.dsh/cognition-engine/ 下的默认文件名（推荐，跨机器/跨工作区可用）
+        # 路径开头的 ~ 会展开到用户主目录；相对路径按进程 cwd 解析，不建议使用
+        # tasksFile: ~/.dsh/cognition-engine/tasks.json
         # 记忆落盘位置
-        # stateFile: ./cognition-state.json
-        # 访问口令。默认（不写）会自动生成到 .cognition-token 并启用保护；
-        # 显式写空串 '' 则完全关闭保护（同机任何程序都能读记忆正文）
+        # stateFile: ~/.dsh/cognition-engine/cognition-state.json
+        # 访问口令。默认（不写）不启用保护；显式配一个口令才上锁（同机其他程序就挡在门外）
         # lockToken: 换成一个你自己的口令
         # 真模型：不填则跟随当前默认模型
         # llmProvider: deepseek

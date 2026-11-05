@@ -141,7 +141,7 @@ export interface CognitionConfig {
   maxClusterSize?: number;
   /** 是否把跨会话摘要注入系统提示。默认 true；false 时只能靠 cognition_context 手动取。 */
   injectMemory?: boolean;
-  /** 准则本注入预算（字符），默认 600。 */
+  /** 准则本注入预算（字符），默认 700。 */
   playbookChars?: number;
   /** 准则本条目上限，默认 12。 */
   playbookMaxEntries?: number;
@@ -167,13 +167,18 @@ export interface CognitionConfig {
   idleThresholdMinutes?: number;
   /** 主动发言默认只记录不发送。 */
   recordOnly?: boolean;
-  /** tasks.json 路径，默认 <cwd>/tasks.json。 */
+  /**
+   * tasks.json 路径。默认 `~/.dsh/cognition-engine/tasks.json`。
+   *
+   * 支持 `~`（展开到用户主目录）；相对路径按进程 cwd 解析，跨工作区/跨机器不可靠，
+   * 不建议在配置里用相对路径。
+   */
   tasksFile?: string;
-  /** 记忆的落盘路径，默认 <cwd>/cognition-state.json。 */
+  /** 记忆的落盘路径，默认 `~/.dsh/cognition-engine/cognition-state.json`。 */
   stateFile?: string;
-  /** 准则本的落盘路径，默认插件目录下的 cognition-playbook.json。 */
+  /** 准则本的落盘路径，默认 `~/.dsh/cognition-engine/cognition-playbook.json`。 */
   playbookFile?: string;
-  /** 主题注册表的落盘路径，默认插件目录下的 cognition-topics.json。 */
+  /** 主题注册表的落盘路径，默认 `~/.dsh/cognition-engine/cognition-topics.json`。 */
   topicsFile?: string;
   /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
   lockToken?: string;

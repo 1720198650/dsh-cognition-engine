@@ -187,7 +187,7 @@ export interface PlaybookOptions {
     isSourceAlive?: (id: string) => boolean;
     filePath?: string;
     now?: () => number;
-    /** 注入预算（字符）。默认 600。 */
+    /** 注入预算（字符）。默认 700。 */
     maxChars?: number;
     /** 条目数上限。默认 12。 */
     maxEntries?: number;
