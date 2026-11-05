@@ -660,6 +660,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/research-agent-projects-deep-read.md](docs/research-agent-projects-deep-read.md) | **19 个 Agent 项目精读**：只有 8 个有运行时学习机制、L4 为 0；编排≠学习；Super-agent 的 P50/P95 不是 SLA；star 可信度提醒 |
 | [docs/research-learning-theory-deep-read.md](docs/research-learning-theory-deep-read.md) | **学习理论深读**：控制论/神经科学/心理学/教育学/经济学/进化生物学/安全对齐，7 条设计准则（含字段与验收） |
 | [docs/self-learning-agent-landscape.md](docs/self-learning-agent-landscape.md) | **自我学习 Agent 2026 全景**：四层框架、三个综述、SEAgent/Mem2Evolve/CPE、热门项目、能用/不能用、我们的位置 |
+| [docs/upgrade-plan-v3.md](docs/upgrade-plan-v3.md) | **升级方案 v3.0（执行版）**：四个支柱、十个阶段、数据布局、风险对策、五个里程碑、不做清单 |
 | [docs/vision-and-roadmap.md](docs/vision-and-roadmap.md) | **愿景与路线图**：五个张力、四层能力、六个阶段、北极星指标 |
 | [docs/research-bm25-retrieval.md](docs/research-bm25-retrieval.md) | BM25 / IDF / 中文分词：实测 MRR、参数网格搜索、显著性检验（含可复现基准 `docs/bench-bm25/`） |
 | [docs/research-negex-and-ranking.md](docs/research-negex-and-ranking.md) | NegEx 完整规则表（16 伪否定 / 15 后置否定 / 终止词）、中文否定 12 条规则、双重否定统计、多信号排序（RRF / Generative Agents 对比） |
