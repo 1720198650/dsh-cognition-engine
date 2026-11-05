@@ -253,6 +253,72 @@ L1 上下文     ← few-shot / prompt                        ✅ 已用
 
 ---
 
+## 六点五、七条设计准则（理论组精读）
+
+> 完整版见 `_research/learning-theory-deep-read.md`（347 行，A–G 28 条理论 + 7 条准则，每条都有字段与验收）。这里只列可落地的部分。
+
+### 准则 1：学习控制器——死区 + 迟滞 + CUSUM
+
+- **不要**「发现错误 → 立刻改规则」；延迟反馈会振荡。
+- 字段：`setpoint / deadband / hysteresis{on,off} / consecutive_windows / max_delta_per_cycle / cooldown_days / max_changes_per_cycle`。
+- 流程：每天算一次指标；`|error| ≤ deadband` 不动作；连续 2 窗口越过 `on` 才提案；一次最多改 1 条、幅度 ≤10%；7 天内不重复改同一条；反向越界自动回滚。
+- **验收**：同一规则 30 天改动 ≤2 次；无「改完立刻改回」。
+
+### 准则 2：双存储 + 慢晋升 + 交错重放
+
+- 事件日志（快、追加、可追溯）+ 规则（慢、带证据、可废弃）。
+- 字段：`episodic[]{sessionId,ts,subject,text,outcome,evidenceIds}` + `rules[]{status,evidenceIds,distinctSessions,hitCount,failCount,confidence,validFrom,validTo}`。
+- 晋升：`distinctSessions ≥3 && hitCount ≥3 && failCount ≤1 && 无未解决冲突 && 人工确认`。
+- 每次 consolidation 必须交错重放 ≥20 条旧案例，防止只学新。
+- **验收**：任一 active 规则可追溯到 ≥3 条事件；旧规则被覆盖前有 `validTo`。
+
+### 准则 3：再巩固式修订——冲突先挂起，不覆盖
+
+- 新证据与 active 规则冲突 → 不直接改；创建 `conflict`，规则标 `disputed`，7 天内复审。
+- 只有「最近 30 天使用过 + 明确预测误差」才允许进入修订；旧规则需 ≥2 个独立会话的新证据。
+- 修订生成新版本，旧版本保留 `validTo` + `rollbackTo`。
+- **验收**：100% 的 active 规则修改有 `changeReason` 和 `evidenceIds`；任意版本可回滚。
+
+### 准则 4：间隔复习 + 主动提取 + 形成性反馈
+
+- 间隔序列 `[1,3,7,16,35,75]` 天；复习时用**没见过的场景**让 Agent 先作答，再看评分。
+- 反馈必须写 `level: task|process|self` + `nextAction` + `evidence`；自我层表扬不进入分数。
+- **验收**：复习不是「重读规则」；`lapseCount ≥3` 转 deprecated_candidate。
+
+### 准则 5：探索预算 + 边际收益停止 + shadow
+
+- 字段：`learning_budget{period,total_actions,explore_share,max_new_rules,min_expected_uses,min_marginal_gain}` + `shadow[]{runs,wins,losses,status}`。
+- 每周新规则 ≤3；每条先在 shadow 跑 10 次，胜率 >55% 且无安全违规才晋升；边际收益 <阈值即停止。
+- **验收**：每周有「不学清单」；没有未经 shadow 直接生效的新规则。
+
+### 准则 6：候选-验证-保留——冻结留出集 + 反指标 + 多样性
+
+- 候选生成阶段**不得读取** `holdout`；选择时主指标提升 ≥5%，且任一反指标恶化 ≤2%。
+- 至少保留 2 个不同 `strategyTag` 的候选；失败候选进 `archive` 不删除。
+- 晋升后 `probation` 20 次；失败率超基线 +10% 或反指标越界自动回滚。
+- **验收**：任何 active 规则都通过过留出集；每月重跑 100 条旧任务回归集。
+
+### 准则 7：安全闸门——不自我评分、审计链、谄媚检测、能力回归
+
+- `self_eval_forbidden: true`；`human_gate` 覆盖 active 规则变更和用户可见行为；`max_changes_per_day: 3`；`kill_switch`。
+- 审计日志用哈希链追加（`seq/prevHash/hash/actor/action/beforeHash/afterHash/reason/evidenceIds`）。
+- 每月跑 100 题能力回归 + 50 事实题 + 20 错误前提题；`agreement_with_false_premise >10%` 或回归分数下降 >5% → 冻结学习 + 回滚 + incident。
+- **验收**：没有「模型给自己打分 → 直接晋升」的路径；kill switch 一键停学。
+
+---
+
+## 六点六、项目组精读的五个修正
+
+> 完整版见 `_research/agent-projects-deep-read.md`（318 行，19 个项目逐项判定）。
+
+1. **Mem0 V3 不是 ADD/UPDATE/DELETE/NOOP**：V3 是 **ADD-only** 抽取/累积；旧论文的四分类不是当前实现。借它的 `user_id/agent_id/run_id` 三轴作用域 + `metadata` + `expiration_date` + `immutable`。
+2. **Super-agent 的 P50/P95 不是 SLA**：约 300 条合成消息（约 20 条工作请求）×5 次重复；原文明确「不衡量单个任务的实际执行能力」；**Watchdog 是文章层设计，原型 `main` 源码树里没有**。
+3. **CrewAI 是唯一有 `train()` 的框架**：人工反馈 → `suggestions/quality/final_summary` → `.pkl` → 追加到 prompt；只是 **L2 提示级**，不是权重更新，`.pkl` 也不能移植到纯 JSON。
+4. **Agent Skills 规范细节**：`name` ≤64 字符（小写/数字/连字符，与父目录同名）、`description` ≤1024 字符；三级渐进披露（metadata ≈100 tokens / body <5000 tokens / resources 按需）；skill-creator 流程：2–3 个真实 prompt → with/without 对照 → 客观断言 → `pass rate/耗时/token` → description 用 20 条触发 query、60/40 分割、最多 5 轮。
+5. **19 个项目里只有 8 个有运行时学习机制**：CrewAI、MaiBot、OpenHanako、Letta、Mem0、Graphiti、Memobase、A-MEM；**L4 权重更新 0 个**。编排 ≠ 学习，自愈 ≠ 学习，记忆 ≠ 能力。
+
+---
+
 ## 七、如果要把「学习」再推进一步：四个动作
 
 ### 动作 1：接上真实反馈回路（半天，最高优先级）
