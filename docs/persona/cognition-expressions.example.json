@@ -1,0 +1,27 @@
+{
+  "schema": "cognition.expressions",
+  "version": 1,
+  "updatedAt": 1793790459061,
+  "items": [
+    {
+      "id": "expr_1793790459061_a1b2",
+      "situation": "被问到不确定的事",
+      "style": "先承认不确定，再说去确认",
+      "examples": ["这个我没把握，先查一下再回你。"],
+      "scope": "global",
+      "source": { "kind": "user", "refs": ["msg_hash_1", "msg_hash_2"] },
+      "status": "active",
+      "score": 0.72,
+      "hits": 4,
+      "uses": 3,
+      "good": 2,
+      "bad": 0,
+      "createdAt": 1793790459061,
+      "lastSeenAt": 1793790459061,
+      "lastUsedAt": 1793790459061,
+      "ttlDays": 90,
+      "tags": ["口语", "谨慎"],
+      "dedupeKey": "sha256:normalized_style_hash"
+    }
+  ]
+}

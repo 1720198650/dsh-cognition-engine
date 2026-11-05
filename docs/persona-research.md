@@ -3,6 +3,7 @@
 > 2026-11-05
 > 目标：为认知引擎设计 Persona 层（`persona` + `human` 两块），要求零依赖、纯 JSON、可审计。
 > 方法：精读 6 个来源的**原始结构**，不是看二手解读。
+> 更深一层的格式/风格度量见 [persona-format-and-style-metrics.md](persona-format-and-style-metrics.md)（含 CCv2 字段表、26 项中文风格指标、expression 表、竞品对比）。
 
 ---
 

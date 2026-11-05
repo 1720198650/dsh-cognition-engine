@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cognition-persona.schema.json",
+  "title": "cognition-persona.json",
+  "type": "object",
+  "required": ["schema", "version", "revision", "updatedAt", "blocks"],
+  "properties": {
+    "schema": { "const": "cognition.persona" },
+    "version": { "const": 1 },
+    "revision": { "type": "integer", "minimum": 1 },
+    "updatedAt": { "type": "integer", "minimum": 0 },
+    "budget": {
+      "type": "object",
+      "properties": {
+        "persona": { "type": "integer", "minimum": 100, "maximum": 800, "default": 600 },
+        "human": { "type": "integer", "minimum": 100, "maximum": 700, "default": 500 },
+        "total": { "type": "integer", "minimum": 200, "maximum": 1500, "default": 1100 }
+      },
+      "additionalProperties": false
+    },
+    "meta": {
+      "type": "object",
+      "properties": {
+        "notes": { "type": "string", "maxLength": 500 },
+        "tags": { "type": "array", "maxItems": 10, "items": { "type": "string", "maxLength": 20 } }
+      },
+      "additionalProperties": false
+    },
+    "blocks": {
+      "type": "object",
+      "required": ["persona", "human"],
+      "additionalProperties": false,
+      "properties": {
+        "persona": { "$ref": "#/$defs/block" },
+        "human": { "$ref": "#/$defs/block" }
+      }
+    }
+  },
+  "$defs": {
+    "block": {
+      "type": "object",
+      "required": ["label", "limit", "value"],
+      "properties": {
+        "label": { "enum": ["persona", "human"] },
+        "displayName": { "type": "string", "maxLength": 20 },
+        "limit": { "type": "integer", "minimum": 100, "maximum": 800 },
+        "readOnly": { "type": "boolean", "default": false },
+        "value": { "type": "string", "maxLength": 800 },
+        "examples": { "type": "array", "maxItems": 2, "items": { "type": "string", "maxLength": 60 } },
+        "traits": {
+          "type": "object",
+          "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "lockedPhrases": {
+          "type": "array",
+          "maxItems": 5,
+          "items": { "type": "string", "maxLength": 30 }
+        },
+        "facts": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "required": ["key", "value"],
+            "properties": {
+              "key": { "type": "string", "maxLength": 12 },
+              "value": { "type": "string", "maxLength": 60 },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "interactionStyle": {
+          "type": "object",
+          "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "history": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "required": ["at", "by", "op", "afterHash"],
+            "properties": {
+              "at": { "type": "integer" },
+              "by": { "enum": ["user", "agent", "system"] },
+              "op": { "enum": ["create", "replace", "reset"] },
+              "beforeHash": { "type": "string" },
+              "afterHash": { "type": "string" },
+              "reason": { "type": "string", "maxLength": 200 }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

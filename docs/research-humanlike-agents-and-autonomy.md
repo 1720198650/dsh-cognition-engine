@@ -12,7 +12,7 @@
 
 | # | 机制 | 作用 | 代表实现 |
 |---|---|---|---|
-| 1 | **人设卡（persona）** | 决定语气、句长、口癖、边界。同一个模型换人设 = 换一个人 | MaiBot 的角色卡、Letta 的 persona block |
+| 1 | **人设卡（persona）** | 决定语气、句长、口癖、边界。同一个模型换人设 = 换一个人 | MaiBot 的人设库（`maibot.personality` JSON）、Letta 的 persona block |
 | 2 | **关于你的记忆** | 记住名字、偏好、旧事，在合适的时候提起来 | MaiBot A-Memorix、Letta human block |
 | 3 | **发言时机** | 不该说时闭嘴，该说时短说。**这比内容更像人** | MaiBot `turn_trigger`、`focus` 模式 |
 | 4 | **风格模仿** | 学群友的新词、黑话、句式，再复用 | MaiBot `expression_learner.py` |
