@@ -9,10 +9,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { TemporalMemoryStore, bm25Score, buildBm25Stats, contentHash, cosine, isCurrent, lcsSimilarity, textSimilarity, tokenize } from './memory.ts';
 import { GapStore } from './gaps.ts';
+import { PlaybookEventLog } from './events.ts';
+import { InjectionLog, TurnFeedbackTracker, classifyFeedback, extractUserText } from './injection_log.ts';
 import { PlaybookStore } from './playbook.ts';
 import { TopicStore } from './topics.ts';
 import { buildDistillPrompt, parseDistillResult } from './distill.ts';
@@ -1417,6 +1419,153 @@ async function main(): Promise<void> {
     const legacy = pb.addManual({ content: '第三条准则用来测试老计数是否有上限', section: '约定' });
     for (let i = 0; i < 20; i += 1) pb.mark(legacy.entry!.id, 'helpful');
     assert.ok(pb.effectiveScore(pb.get(legacy.entry!.id)!) < 15, '老计数应被 clamp 住，不能无界增长');
+  });
+
+  await test('反馈识别：纠正 / 确认 / 中性', () => {
+    assert.equal(classifyFeedback('不对，发版流程少了一步'), 'correction');
+    assert.equal(classifyFeedback('错了！'), 'correction');
+    assert.equal(classifyFeedback('重新来一遍'), 'correction');
+    // 用户最常给的就是这两个字，没有标点
+    assert.equal(classifyFeedback('不对'), 'correction');
+    assert.equal(classifyFeedback('对，就是这样'), 'confirmation');
+    assert.equal(classifyFeedback('没错'), 'confirmation');
+    assert.equal(classifyFeedback('继续'), 'confirmation');
+    // 「好的 / 继续做 X」是同意下一步动作，不是确认「准则用对了」——
+    // v1 把它们算确认，会直接抬高 appliedGood 把证据链洗白。
+    assert.equal(classifyFeedback('好的，继续'), 'neutral', '「好的」不该算确认');
+    assert.equal(classifyFeedback('继续做文档整理'), 'neutral', '下指令不该算确认');
+    assert.equal(classifyFeedback('今天我们做文档整理'), 'neutral');
+    assert.equal(classifyFeedback(''), 'neutral');
+  });
+
+  await test('用户消息取文本：只拼 text 块、坏输入不抛错', () => {
+    assert.equal(
+      extractUserText({
+        role: 'user',
+        content: [
+          { type: 'text', text: '你好' },
+          { type: 'image', attachment: { attachmentId: 'a' } },
+          { type: 'text', text: '再见' },
+        ],
+      }),
+      '你好\n再见',
+    );
+    assert.equal(extractUserText({ role: 'user', content: '纯字符串' }), '纯字符串');
+    assert.equal(extractUserText(null), '');
+    assert.equal(extractUserText(undefined), '');
+    assert.equal(extractUserText({ role: 'user' }), '');
+  });
+
+  await test('注入快照：记录、回写、幂等', () => {
+    const file = resolve('.dsh-inj-test.jsonl');
+    rmSync(file, { force: true });
+    const log = new InjectionLog({ filePath: file, now: () => 1000 });
+    log.record('s1', 1, ['ctxt-00001', 'ctxt-00002'], 300);
+    log.record('s1', 2, ['ctxt-00003'], 200);
+    assert.equal(log.statistics().pending, 2);
+    // 回写第 1 轮
+    const ids = log.markVerdict('s1', 1, 'correction');
+    assert.deepEqual(ids, ['ctxt-00001', 'ctxt-00002']);
+    assert.equal(log.statistics().corrected, 1);
+    // 重复回写幂等
+    assert.deepEqual(log.markVerdict('s1', 1, 'correction'), []);
+    // 中性不回写，且同样幂等（否则同一轮会被反复追加中性行）
+    assert.deepEqual(log.markVerdict('s1', 2, 'neutral'), []);
+    assert.deepEqual(log.markVerdict('s1', 2, 'neutral'), []);
+    rmSync(file, { force: true });
+  });
+
+  await test('注入快照：v1 旧行被忽略、只认 v2', () => {
+    const file = resolve('.dsh-inj-legacy.jsonl');
+    rmSync(file, { force: true });
+    // v1（无 v 字段）是「面板轮询 + 真实轮次」混在一起的，无法区分，只能不认
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({ at: 1, sessionId: 'old', turn: 1, ruleIds: ['ctxt-00001'], chars: 100, verdict: 'pending' }),
+        JSON.stringify({ at: 2, sessionId: 'old', turn: 2, ruleIds: ['ctxt-00001'], chars: 100, verdict: 'pending' }),
+        JSON.stringify({ v: 2, at: 3, sessionId: 's1', turn: 1, ruleIds: ['ctxt-00002'], chars: 90, verdict: 'pending' }),
+      ].join('\n') + '\n',
+      'utf8',
+    );
+    const log = new InjectionLog({ filePath: file });
+    const stats = log.statistics();
+    assert.equal(stats.total, 1, '只应读到 v2 那一行');
+    assert.equal(stats.legacyRows, 2, '旧行数要能报出来，方便解释面板数字变小');
+    assert.equal(log.latest()?.sessionId, 's1');
+    rmSync(file, { force: true });
+  });
+
+  await test('轮次跟踪：用下一轮的用户反应给上一轮打分', () => {
+    const file = resolve('.dsh-turn-test.jsonl');
+    rmSync(file, { force: true });
+    const log = new InjectionLog({ filePath: file, now: () => 1000 });
+    let budget = { ruleIds: ['ctxt-00001'], chars: 400 };
+    const scored: Array<{ kind: string; ids: string[]; reaction: string }> = [];
+    const tracker = new TurnFeedbackTracker(log, {
+      injection: () => budget,
+      onFeedback: (kind, ids, reaction) => scored.push({ kind, ids: [...ids], reaction }),
+    });
+
+    // 第 1 轮：没有上一轮可判，只落自己的行
+    tracker.beginTurn('s1', 1);
+    tracker.appendUserText('s1', '帮我整理文档整理');
+    tracker.endTurn('s1');
+    assert.equal(scored.length, 0, '第 1 轮没有上一轮可判');
+    assert.equal(log.statistics().total, 1, '第 1 轮自身应落一行');
+
+    // 第 2 轮：用户说「不对」→ 打第 1 轮注入的准则
+    budget = { ruleIds: ['ctxt-00001', 'ctxt-00003'], chars: 420 };
+    tracker.beginTurn('s1', 2);
+    // 一条用户消息可能被拆成多个事件
+    tracker.appendUserText('s1', '不对，');
+    tracker.appendUserText('s1', '这个流程错了');
+    tracker.endTurn('s1');
+    assert.equal(scored.length, 1);
+    assert.equal(scored[0]?.kind, 'correction');
+    assert.deepEqual(scored[0]?.ids, ['ctxt-00001'], '应打第 1 轮注入的准则，不是当前轮');
+    assert.equal(scored[0]?.reaction, '不对，这个流程错了');
+
+    // 第 3 轮：中性 → 落行但不回写
+    tracker.beginTurn('s1', 3);
+    tracker.appendUserText('s1', '再帮我看看另一个文件夹');
+    tracker.endTurn('s1');
+    assert.equal(scored.length, 1, '中性不该回写');
+    const stats = log.statistics();
+    assert.equal(stats.total, 3, '三轮各一行');
+    assert.equal(stats.corrected, 1);
+    assert.equal(stats.pending, 1, '只有最后一轮还等着打');
+
+    // 重复结束同一轮不能重复落行
+    tracker.endTurn('s1');
+    assert.equal(log.statistics().total, 3, '同一轮重复 end 不该多写');
+
+    // 确认信号打第 3 轮
+    tracker.beginTurn('s1', 4);
+    tracker.appendUserText('s1', '没错，就是这样');
+    tracker.endTurn('s1');
+    assert.equal(scored.length, 2);
+    assert.equal(scored[1]?.kind, 'confirmation');
+    assert.deepEqual(scored[1]?.ids, ['ctxt-00001', 'ctxt-00003']);
+    rmSync(file, { force: true });
+  });
+
+  await test('事件日志：追加、seq 连续、重新加载续接', () => {
+    const file = resolve('.dsh-events-test.jsonl');
+    rmSync(file, { force: true });
+    const log = new PlaybookEventLog({ filePath: file, now: () => 2000 });
+    const a = log.append({ type: 'RuleProposed', ruleId: 'ctxt-00001', content: '测试准则内容要够长', by: 'distiller' });
+    const b = log.append({ type: 'RuleAccepted', ruleId: 'ctxt-00001', by: 'user' });
+    assert.equal(a.seq, 1);
+    assert.equal(b.seq, 2);
+    assert.equal(log.stats().total, 2);
+    // 重新加载：seq 续接
+    const log2 = new PlaybookEventLog({ filePath: file });
+    assert.equal(log2.stats().total, 2);
+    assert.equal(log2.append({ type: 'RuleRetired', ruleId: 'ctxt-00001', reason: '测试', by: 'user' }).seq, 3);
+    // 按准则查
+    assert.equal(log2.forRule('ctxt-00001').length, 3);
+    rmSync(file, { force: true });
   });
   /* ---------------------------------------------------------------- */
   console.log('');

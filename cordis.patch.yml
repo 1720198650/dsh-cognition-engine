@@ -26,3 +26,7 @@
         patrolIntervalHours: 3
         idleThresholdMinutes: 5
         recordOnly: true
+        # 自动反馈闭环：用宿主真实轮次记录「这轮注入了哪些准则」，
+        # 下一轮再按用户这句话是纠正还是确认回写 appliedBad / appliedGood。
+        # 默认开启；怀疑正则误判在污染准则证据时才填 false。
+        # autoFeedback: true

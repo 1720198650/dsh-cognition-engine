@@ -15,6 +15,9 @@ import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 
 import { GapStore } from './gaps.ts';
+import { PlaybookEventLog } from './events.ts';
+import { InjectionLog, TurnFeedbackTracker, classifyFeedback, extractUserText } from './injection_log.ts';
+import type { FeedbackKind } from './injection_log.ts';
 import { TemporalMemoryStore } from './memory.ts';
 import type { TemporalFact } from './memory.ts';
 import { JsonStateStore } from './persist.ts';
@@ -146,6 +149,14 @@ export interface CognitionConfig {
   /** 准则本条目上限，默认 12。 */
   playbookMaxEntries?: number;
   /**
+   * 是否开启自动反馈闭环：用宿主的真实轮次（session/event）记录每轮注入了哪些准则，
+   * 并在下一轮用「用户这句话是纠正还是确认」回写 appliedBad / appliedGood。
+   *
+   * 默认开启。关掉后注入快照与自动回写都停止，只剩手动 `/cognition-engine/feedback`。
+   * 关掉的理由只有一个：怀疑正则误判在污染准则证据时，先停下来观察。
+   */
+  autoFeedback?: boolean;
+  /**
    * 巡逻发现逾期任务时，是否自动调用模型做一次三段式复盘。
    *
    * 默认关闭：一次完整复盘 = 3 次模型调用 ≈ 3100 tokens，每 3 小时可能触发一次。
@@ -242,6 +253,7 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     injectMemory: config.injectMemory !== false,
     playbookChars: Math.max(200, Math.round(numberOr(config.playbookChars, 700))),
     playbookMaxEntries: Math.max(1, Math.round(numberOr(config.playbookMaxEntries, 12))),
+    autoFeedback: config.autoFeedback !== false,
     autoReflect: config.autoReflect === true,
     reflectionEffort: config.reflectionEffort ?? '',
     heartbeatHours: Math.max(0.01, numberOr(config.heartbeatHours, 6)),
@@ -332,6 +344,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
   // 知识缺口：模型卡壳时登记，下次针对性补（P6 学习闭环）
   const gaps = new GapStore();
+
+  // 准则事件日志（轻量事件溯源）：只追加，不改主存储
+  const ruleEvents = new PlaybookEventLog();
+  // 注入快照：记录每轮注入了哪些准则，用于把用户反馈回写到准则。
+  // v2 起只由真实轮次（session/event）写入——渲染函数已纯化，面板轮询不再产生任何一行。
+  const injectionLog = new InjectionLog();
   const memory = new TemporalMemoryStore({
     halfLifeMs: config.decayHalfLifeHours * HOUR_MS,
     onEvent: (event) => audit.append(event),
@@ -673,25 +691,173 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
    * 而模型实际只看到记忆摘要。这类「显示与实际不一致」的 bug 单靠测试抓不到，
    * 只能靠两者同源来根治。
    *
+   * **这个函数必须是纯的**（v0.12.0 修的 bug）：
+   * 它有三个调用点——系统提示段（每个 step 都拼一次）、页面 `/state`（面板每 2 秒轮询）、
+   * `/injected` 路由。v0.11.0 在函数里顺手写注入快照，结果 88 分钟写了 2432 行，
+   * 全是轮询噪声，轮次号变成轮询计数器。现在记录只发生在 `session/event` 的轮次边界上。
+   *
    * 优先级：准则本 > 记忆摘要 > 不注入。两者不叠加——ACE 与 DC 都说明
    * 上下文越长越容易稀释信号。
    */
-  const buildInjectedContext = (): { text: string; source: 'playbook' | 'digest' | 'none' } => {
+  const renderInjectedContext = (): {
+    text: string;
+    source: 'playbook' | 'digest' | 'none';
+    /** 本轮实际写进提示的准则 id（给轮次跟踪用）。 */
+    ruleIds: string[];
+    /** 本轮注入的总字符数（含缺口段）。 */
+    chars: number;
+  } => {
     // 待补缺口很短（通常 0~3 行），接在准则本后面——
     // 它提醒模型「这些是你还不知道的」，避免在同一个地方反复卡壳。
     const gapText = gaps.renderSection();
     const withGaps = (text: string): string => (gapText.length === 0 ? text : `${text}\n\n${gapText}`);
 
+    const detailed = playbook.renderDetailed(undefined, undefined, (id) => topics.get(id)?.name);
     const section = playbook.renderSection(undefined, (id) => topics.get(id)?.name);
-    if (section.length > 0) return { text: withGaps(section), source: 'playbook' };
+    if (section.length > 0) {
+      // 只算，不写盘。写盘由 TurnFeedbackTracker 在轮次边界上做。
+      const text = withGaps(section);
+      return { text, source: 'playbook', ruleIds: [...detailed.ruleIds], chars: text.length };
+    }
 
     const digest = buildCoreDigest(memory);
     if (digest.length > 0) {
-      return { text: withGaps(`${digest}\n（需要细节时调用 cognition_recall。）`), source: 'digest' };
+      const text = withGaps(`${digest}\n（需要细节时调用 cognition_recall。）`);
+      return { text, source: 'digest', ruleIds: [], chars: text.length };
     }
-    if (gapText.length > 0) return { text: gapText, source: 'playbook' };
-    return { text: '', source: 'none' };
+    if (gapText.length > 0) return { text: gapText, source: 'playbook', ruleIds: [], chars: gapText.length };
+    return { text: '', source: 'none', ruleIds: [], chars: 0 };
   };
+
+  /**
+   * 把一次判定结果回写到**某一轮注入的准则**上。
+   *
+   * 为什么需要这个：整个「学习」链条原本是断的——
+   * 模型使用准则 → 没人记录用得对不对 → 蒸馏时模型自己评自己。
+   *
+   * 判定用规则而不是 LLM：每轮调 LLM 成本太高；正则覆盖明确的纠正/确认，
+   * 剩下的靠其他信号补（比如用户直接改代码）。
+   *
+   * **单次纠正不降级**：累计 appliedBad ≥ 3 且 > appliedGood 才进入 disputed
+   * （ReasoningBoost 的结论：判官只有 72.7% 准确，70–90% 噪声下性能不敏感）。
+   */
+  const applyFeedback = (kind: FeedbackKind, ids: string[], message: string): void => {
+    if (kind === 'neutral' || ids.length === 0) return;
+    const usageKind = kind === 'correction' ? 'appliedBad' : 'appliedGood';
+    const trace = `${kind}: ${message.slice(0, 40)}`;
+    for (const id of ids) {
+      try {
+        playbook.markUsage(id, usageKind, trace);
+        ruleEvents.append({ type: 'RuleUsageRecorded', ruleId: id, usage: usageKind, trace, by: 'system' });
+      } catch {
+        /* 单条失败不影响其余 */
+      }
+    }
+    void playbook.flush();
+  };
+
+  /**
+   * 手动回写（`POST /cognition-engine/feedback`）：不依赖轮次事件，直接打到最近一轮。
+   *
+   * 正常的自动闭环走 `session/event`；这个路由留给「事件没挂上」和手工排查两种场景。
+   */
+  const recordFeedback = (message: string): { kind: string; scored: string[] } => {
+    const kind = classifyFeedback(message);
+    if (kind === 'neutral') return { kind, scored: [] };
+    const latest = injectionLog.latest();
+    if (latest === undefined) return { kind, scored: [] };
+    const ids = injectionLog.markVerdict(latest.sessionId, latest.turn, kind);
+    applyFeedback(kind, ids, message);
+    return { kind, scored: ids };
+  };
+
+  // 自动反馈闭环：宿主轮次 → 注入快照 → 用户下一轮的反应 → 回写准则证据
+  const turnTracker = new TurnFeedbackTracker(injectionLog, {
+    injection: () => {
+      const rendered = renderInjectedContext();
+      return { ruleIds: rendered.ruleIds, chars: rendered.chars };
+    },
+    onFeedback: (kind, ids, reaction) => applyFeedback(kind, ids, reaction),
+  });
+  /** 是否真的收到过 session/event：面板用它区分「闭环在跑」和「事件没挂上」。 */
+  let turnTrackingSeen = false;
+  /** 子代理会话不参与打分：它们的「用户消息」是父代理的任务说明，不是人的反馈。 */
+  const subagentSessions = new Set<string>();
+
+  /**
+   * 挂上轮次事件。
+   *
+   * 为什么用 `session/event` 而不是 `agent/inbox/claimed`：
+   * - 它有 `session` 对象，能读到 `session.header.origin` 把子代理排除掉；
+   * - turn/start / turn/end / user/message 三类事件都在同一条流上，不用猜时序。
+   * 实测时序（session 日志）：turn/start → step/start → system/message →
+   * user/message ×N → … → turn/end。
+   */
+  const installTurnTracking = (): void => {
+    if (config.autoFeedback !== true) return;
+    const on = (ctx as { on?: (name: string, handler: (...args: never[]) => unknown) => unknown }).on;
+    if (typeof on !== 'function') {
+      ctx.logger?.warn?.('cognition-engine: 宿主没有事件订阅能力，自动反馈闭环未挂载');
+      return;
+    }
+
+    const noteSubagent = (info: unknown): void => {
+      const id = (info as { id?: unknown } | null | undefined)?.id;
+      if (typeof id !== 'string' || id.length === 0) return;
+      if (subagentSessions.size >= 500) subagentSessions.clear();
+      subagentSessions.add(id);
+    };
+
+    const handler = (session: unknown, event: unknown): void => {
+      // 监听器抛错会打到会话上：所有异常就地吞掉。
+      try {
+        const sessionId = (session as { id?: unknown } | null | undefined)?.id;
+        if (typeof sessionId !== 'string' || sessionId.length === 0) return;
+        turnTrackingSeen = true;
+        const header = (session as { header?: { origin?: unknown; delegationDepth?: unknown } } | null | undefined)
+          ?.header;
+        // 子代理会话不参与打分：它们的「用户消息」是父代理的任务说明，不是人的反馈。
+        // 两道判据都用上——origin 是显式标记，delegationDepth 是所有子会话都有的数值。
+        if (header?.origin === 'subagent' || subagentSessions.has(sessionId)) return;
+        if (typeof header?.delegationDepth === 'number' && header.delegationDepth > 0) return;
+
+        const type = (event as { type?: unknown } | null | undefined)?.type;
+        const data = (event as { data?: unknown } | null | undefined)?.data;
+        if (type === 'turn/start') {
+          const turn = Number((data as { turn?: unknown } | null | undefined)?.turn);
+          if (Number.isFinite(turn)) turnTracker.beginTurn(sessionId, turn);
+        } else if (type === 'user/message') {
+          turnTracker.appendUserText(sessionId, extractUserText(data));
+        } else if (type === 'turn/end') {
+          turnTracker.endTurn(sessionId);
+        }
+      } catch {
+        /* 事件处理失败不能影响会话 */
+      }
+    };
+
+    // 统一登记反注册：插件被停用/热重载时必须解绑。
+    // 宿主的 ctx.on 本身会随上下文销毁自动解绑，但这里显式登记一层——
+    // 否则热重载几次就会有多个监听器同时写同一个日志文件（重复行）。
+    const listen = (event: string, listener: (...args: any[]) => unknown): void => {
+      try {
+        const disposer = on.call(ctx, event, listener);
+        if (typeof disposer === 'function') disposers.push(disposer as () => void);
+      } catch (error) {
+        ctx.logger?.warn?.(`cognition-engine: 订阅 ${event} 失败 ${messageOf(error)}`);
+      }
+    };
+
+    listen('subagent/start', noteSubagent);
+    listen('subagent/end', noteSubagent);
+    listen('session/disposed', (session: unknown) => {
+      const id = (session as { id?: unknown } | null | undefined)?.id;
+      if (typeof id === 'string') turnTracker.forget(id);
+    });
+    listen('session/event', handler);
+    ctx.logger?.info?.('cognition-engine: 自动反馈闭环已挂载（session/event）');
+  };
+  installTurnTracking();
 
   /**
    * 记忆变了就重算准则的证据链。
@@ -743,7 +909,18 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       playbook: {
         ...playbook.stats(),
         /** 当前注入的是准则本、原始记忆摘要，还是都不注入（与注入段同源）。 */
-        injectSource: buildInjectedContext().source,
+        injectSource: renderInjectedContext().source,
+      },
+      /**
+       * 自动反馈闭环的体检数据。
+       *
+       * `tracking` 是关键：false 说明这个进程没收到过 session/event——
+       * 要么宿主没有事件能力，要么挂载点变了。观察期先看这一项。
+       */
+      feedback: {
+        enabled: config.autoFeedback === true,
+        tracking: turnTrackingSeen,
+        ...injectionLog.statistics(),
       },
       topics: topics.stats(),
       storageWarning: stateStore.warning,
@@ -852,6 +1029,30 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       },
       { method: 'POST' },
     );
+
+    // 注入快照：最近 N 轮注入了哪些准则
+    route('/cognition-engine/injection/recent', (url) => {
+      const limit = Number(url.searchParams.get('limit') ?? '10');
+      return { recent: injectionLog.recent(Number.isFinite(limit) ? limit : 10), stats: injectionLog.statistics() };
+    });
+
+    // 反馈回写：把一个用户回复判成纠正/确认，回写到上一轮注入的准则
+    route(
+      '/cognition-engine/feedback',
+      (url) => {
+        const message = url.searchParams.get('message') ?? '';
+        if (message.trim().length === 0) throw new Error('message 不能为空');
+        return recordFeedback(message);
+      },
+      { method: 'POST' },
+    );
+
+    // 准则事件日志：全部 / 单条准则 / 统计
+    route('/cognition-engine/events', (url) => {
+      const ruleId = url.searchParams.get('ruleId');
+      if (ruleId !== null && ruleId.length > 0) return { ruleId, events: ruleEvents.forRule(ruleId) };
+      return { stats: ruleEvents.stats(), recent: ruleEvents.all().slice(-20) };
+    });
 
     route('/cognition-engine/state', () => snapshot());
     // 读取记忆默认开放（令牌文件本就可被同机进程读取，锁读取只增加摩擦）；
@@ -1250,9 +1451,15 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         const action = url.searchParams.get('action') ?? '';
         let ok = false;
         switch (action) {
-          case 'accept': ok = playbook.accept(id); break;
+          case 'accept':
+            ok = playbook.accept(id);
+            if (ok) ruleEvents.append({ type: 'RuleAccepted', ruleId: id, by: 'user' });
+            break;
           case 'reject': ok = playbook.reject(id); break;
-          case 'retire': ok = playbook.retire(id, '手动停用'); break;
+          case 'retire':
+            ok = playbook.retire(id, '手动停用');
+            if (ok) ruleEvents.append({ type: 'RuleRetired', ruleId: id, reason: '手动停用', by: 'user' });
+            break;
           case 'revive': ok = playbook.revive(id); break;
           case 'revise': ok = playbook.revise(id, url.searchParams.get('content') ?? ''); break;
           case 'extend': {
@@ -1263,7 +1470,10 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           case 'helpful': ok = playbook.mark(id, 'helpful'); break;
           case 'harmful': ok = playbook.mark(id, 'harmful'); break;
           // 永久删除（任意状态）。停用只是不注入，删除是当它没存在过。
-          case 'delete': ok = playbook.remove(id); break;
+          case 'delete':
+            ok = playbook.remove(id);
+            if (ok) ruleEvents.append({ type: 'RuleRetired', ruleId: id, reason: '人工删除', by: 'user' });
+            break;
           // 人工标记冲突对：自动检测不可靠时用这个
           case 'markConflict': {
             const otherId = url.searchParams.get('otherId') ?? '';
@@ -1277,7 +1487,10 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
             break;
           }
           // 立墓碑：这条本来就错了（区别于被更好的取代）
-          case 'revoke': ok = playbook.revoke(id, url.searchParams.get('reason') ?? '人工撤销'); break;
+          case 'revoke':
+            ok = playbook.revoke(id, url.searchParams.get('reason') ?? '人工撤销');
+            if (ok) ruleEvents.append({ type: 'RuleRevoked', ruleId: id, reason: url.searchParams.get('reason') ?? '人工撤销', by: 'user' });
+            break;
           // 分项使用打标：applied / appliedGood / appliedBad / missed / userCorrected
           case 'usage': {
             const kind = url.searchParams.get('kind') ?? '';
@@ -1327,7 +1540,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
     // 当前实际注入到系统提示的内容（排查「面板说有、模型看不到」这类问题用）
     route('/cognition-engine/injected', () => {
-      const { text, source } = buildInjectedContext();
+      const { text, source } = renderInjectedContext();
       return { source, chars: text.length, text };
     });
 
@@ -1475,7 +1688,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
    * 把跨会话上下文挂进系统提示：有生效准则就注入准则本，否则回退到记忆摘要。
    *
    * 每次装配都会调用 text()，内容永远是最新的；两者都为空时返回空串——不占 token。
-   * 具体拼什么由 buildInjectedContext 决定，与面板的「注入来源」同源。
+   * 具体拼什么由 renderInjectedContext 决定，与面板的「注入来源」同源。
+   * text() 是纯的：装配多少次都不产生副作用（v0.11.0 在这里写日志，把注入表写成了轮询计数器）。
    */
   const systemPrompt = ctx.get?.('systemPrompt') as SystemPromptHost | undefined;
   if (config.injectMemory && systemPrompt !== undefined && typeof systemPrompt.section === 'function') {
@@ -1484,7 +1698,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         systemPrompt.section({
           name: 'cognition-engine-memory',
           order: 900,
-          text: () => buildInjectedContext().text,
+          text: () => renderInjectedContext().text,
         }),
       );
     } catch (error) {

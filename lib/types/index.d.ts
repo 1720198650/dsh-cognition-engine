@@ -47,6 +47,14 @@ export interface CognitionConfig {
     /** 准则本条目上限，默认 12。 */
     playbookMaxEntries?: number;
     /**
+     * 是否开启自动反馈闭环：用宿主的真实轮次（session/event）记录每轮注入了哪些准则，
+     * 并在下一轮用「用户这句话是纠正还是确认」回写 appliedBad / appliedGood。
+     *
+     * 默认开启。关掉后注入快照与自动回写都停止，只剩手动 `/cognition-engine/feedback`。
+     * 关掉的理由只有一个：怀疑正则误判在污染准则证据时，先停下来观察。
+     */
+    autoFeedback?: boolean;
+    /**
      * 巡逻发现逾期任务时，是否自动调用模型做一次三段式复盘。
      *
      * 默认关闭：一次完整复盘 = 3 次模型调用 ≈ 3100 tokens，每 3 小时可能触发一次。

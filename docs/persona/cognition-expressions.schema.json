@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cognition-expressions.schema.json",
+  "title": "cognition-expressions.json",
+  "type": "object",
+  "required": ["schema", "version", "updatedAt", "items"],
+  "properties": {
+    "schema": { "const": "cognition.expressions" },
+    "version": { "const": 1 },
+    "updatedAt": { "type": "integer", "minimum": 0 },
+    "items": {
+      "type": "array",
+      "maxItems": 500,
+      "items": { "$ref": "#/$defs/item" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "item": {
+      "type": "object",
+      "required": ["id", "situation", "style", "status", "score"],
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "situation": { "type": "string", "maxLength": 120 },
+        "style": { "type": "string", "maxLength": 80 },
+        "examples": { "type": "array", "maxItems": 2, "items": { "type": "string", "maxLength": 60 } },
+        "scope": { "type": "string", "default": "global", "maxLength": 80 },
+        "source": {
+          "type": "object",
+          "properties": {
+            "kind": { "enum": ["user", "agent", "manual"] },
+            "refs": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 64 } }
+          },
+          "additionalProperties": false
+        },
+        "status": { "enum": ["candidate", "active", "rejected", "retired"] },
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "hits": { "type": "integer", "minimum": 0, "default": 0 },
+        "uses": { "type": "integer", "minimum": 0, "default": 0 },
+        "good": { "type": "integer", "minimum": 0, "default": 0 },
+        "bad": { "type": "integer", "minimum": 0, "default": 0 },
+        "createdAt": { "type": "integer", "minimum": 0 },
+        "lastSeenAt": { "type": "integer", "minimum": 0 },
+        "lastUsedAt": { "type": "integer", "minimum": 0 },
+        "ttlDays": { "type": "integer", "minimum": 1, "maximum": 365, "default": 90 },
+        "tags": { "type": "array", "maxItems": 10, "items": { "type": "string", "maxLength": 20 } },
+        "dedupeKey": { "type": "string", "maxLength": 64 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

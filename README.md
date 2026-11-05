@@ -643,8 +643,29 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 
 | 文档 | 内容 |
 |---|---|
+| [docs/persona-research.md](docs/persona-research.md) | **Persona 层精读**：Letta block 结构、Anchor 人格卡与探针、Assistant Axis 漂移、MaiBot 三分法、SillyTavern 字段、`cognition-persona.json` schema |
+| [docs/research-persona-hci-philosophy-npc.md](docs/research-persona-hci-philosophy-npc.md) | **HCI / 哲学 / 游戏 NPC 深挖**：CASA、拟人化实证、信任三维、恐怖谷、人格一致性倒 U、Locke/Parfit、Sartre、言语行为、Sims/OCC/PAD/Façade、操纵 vs 服务 |
+| [docs/research-persona-memory-landscape.md](docs/research-persona-memory-landscape.md) | **专业项目/论文横向对比**：4 张总表（商业/开源/中文/评测）、证据分级 S–E、7 个审计方向、人格 Git 空白、7 条伪需求、借 3 避 3、8–12 周 MVP |
+| [docs/persona-cross-disciplinary.md](docs/persona-cross-disciplinary.md) | **Persona 跨学科扫描**：心理学/神经科学/语言学/HCI/哲学/游戏 NPC，能用/不能用总表 + 20 个项目对比 |
+| [docs/persona-format-and-style-metrics.md](docs/persona-format-and-style-metrics.md) | **Persona 格式与中文风格度量**：Character Card V2 完整字段表、MaiBot expression/turn_trigger 源码拆解、`cognition-persona.json` 正式 JSON Schema、26 项中文风格指纹与可运行 JS、expression 表生命周期、竞品对比 |
+| [docs/checkpoint-2026-11-05.md](docs/checkpoint-2026-11-05.md) | **存档：2026-11-05**：完成事项、设计决策、还差什么、自我学习研究结论、下次第一件事 |
+| [docs/research-self-evolving-papers.md](docs/research-self-evolving-papers.md) |
+| [docs/research-cpe-mechanism.md](docs/research-cpe-mechanism.md) |
+| [docs/research-event-sourcing.md](docs/research-event-sourcing.md) | **事件溯源深挖**：Fowler 原始定义三大能力（重建/时间查询/重放）、MS 的六条警告、8 种准则事件设计、与双时态的关系、**结论：先写事件别改存储** |
+| [docs/research-learning-budget.md](docs/research-learning-budget.md) |
+| [docs/research-docs-link-check.md](docs/research-docs-link-check.md) | **文档一致性检查**：47 处相对链接全有效；无逐行重复（最大重合 6.2%）；4 组主题重叠待收敛 | **学习预算设计**：W=clamp(ceil(N×1%),4,12)、修旧/学新/预留分配、5 条停止信号、shadow 试运行、8 类不学清单、伪代码 + 8 条验收 |
+| [docs/research-memobase-update-policy.md](docs/research-memobase-update-policy.md) | **Memobase 更新策略**：`update_description` 是自然语言指令（不是枚举）、覆盖/保留最早两种官方示例、validate_mode vs strict_mode | **CPE 机制拆解**：能力侵蚀的形式化（`L_<t(R_t) > L_<t(R_{t-1})`）、曲率机理、`Ω` 正则、四通道；以及我们的纯 JSON 版（回归集 + 变更闸门） |
+| [docs/research-agent-skills-spec.md](docs/research-agent-skills-spec.md) | **Agent Skills 规范核验**：`name` 必须 ASCII 小写且与目录同名（中文只能进 description）、description 1–1024、三级披露 token 预算、validate 用法 |
+| [docs/research-memobase-profile-model.md](docs/research-memobase-profile-model.md) | **Memobase 画像模型**：两层 topic→sub_topics、slot 白名单、**`profile_delta` 必填**、`update_description` 更新策略 | **自我进化论文精读**：SEAgent(11.3%→34.5%) / Mem2Evolve(+18.53%) / CPE(能力侵蚀 41.8%→52.8%) / COVE 双通道 + 三套 taxonomy |
+| [docs/research-agent-projects-deep-read.md](docs/research-agent-projects-deep-read.md) | **19 个 Agent 项目精读**：只有 8 个有运行时学习机制、L4 为 0；编排≠学习；Super-agent 的 P50/P95 不是 SLA；star 可信度提醒 |
+| [docs/research-learning-theory-deep-read.md](docs/research-learning-theory-deep-read.md) | **学习理论深读**：控制论/神经科学/心理学/教育学/经济学/进化生物学/安全对齐，7 条设计准则（含字段与验收） |
+| [docs/self-learning-agent-landscape.md](docs/self-learning-agent-landscape.md) | **自我学习 Agent 2026 全景**：四层框架、三个综述、SEAgent/Mem2Evolve/CPE、热门项目、能用/不能用、我们的位置 |
+| [docs/upgrade-plan-v3.md](docs/upgrade-plan-v3.md) | **升级方案 v3.0（执行版）**：四个支柱、十个阶段、数据布局、风险对策、五个里程碑、不做清单 |
+| [docs/vision-and-roadmap.md](docs/vision-and-roadmap.md) | **愿景与路线图**：五个张力、四层能力、六个阶段、北极星指标 |
 | [docs/research-bm25-retrieval.md](docs/research-bm25-retrieval.md) | BM25 / IDF / 中文分词：实测 MRR、参数网格搜索、显著性检验（含可复现基准 `docs/bench-bm25/`） |
 | [docs/research-negex-and-ranking.md](docs/research-negex-and-ranking.md) | NegEx 完整规则表（16 伪否定 / 15 后置否定 / 终止词）、中文否定 12 条规则、双重否定统计、多信号排序（RRF / Generative Agents 对比） |
+| [docs/research-humanlike-agents-and-autonomy.md](docs/research-humanlike-agents-and-autonomy.md) | 拟人化机制拆解（人设/记忆/时机/风格）、B 站自动化真实流水线、QQ bot 可控记忆四层、LLM 自主行动与学习论文清单 |
+| [docs/research-super-agent-and-persona.md](docs/research-super-agent-and-persona.md) | Super-agent 项目清单 + 人格块设计 + 「自我学习」四层辨析（L1 上下文 / L2 记忆 / L3 工具自造 / L4 权重更新） |
 | [docs/research-frozen-weight-learning.md](docs/research-frozen-weight-learning.md) | 冻结权重下的学习与遗忘：ExpeL / Voyager / AWM / Reflexion / ReasoningBank / ACE / PATH-Bench / Oblivion 的机制与数字 |
 | [docs/research-philosophy-engineering.md](docs/research-philosophy-engineering.md) | 哲学工程化项目逐项核实：GRACE / SCL / LeAP / ITEM / HADES / cognee，**含两个被证伪的引用** |
 | [docs/topic-research.md](docs/topic-research.md) / [topic-research-oss.md](docs/topic-research-oss.md) | 为什么删掉自动聚类：论文证据 + 开源项目对比 |

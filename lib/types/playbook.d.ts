@@ -445,6 +445,7 @@ export declare class PlaybookStore {
     renderDetailed(now?: number, budget?: number, topicName?: (id: string) => string | undefined): {
         text: string;
         omitted: number;
+        ruleIds: string[];
     };
     /**
      * 把渲染结果包成可注入的段落；空准则本返回空串，由调用方回退 digest。
