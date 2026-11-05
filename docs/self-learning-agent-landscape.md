@@ -319,6 +319,77 @@ L1 上下文     ← few-shot / prompt                        ✅ 已用
 
 ---
 
+## 六点七、CPE 的具体做法（论文原文级）
+
+> 完整版见 [research-cpe-mechanism.md](research-cpe-mechanism.md)。
+
+**形式化**：能力侵蚀的定义是 `L_<t(R_t) > L_<t(R_{t-1})`——为适应新任务做的更新，抬高了旧任务的风险。
+
+**局部机理（Proposition 1）**：
+```
+L_<t(R_{t-1} − η·g_t) − L_<t(R_{t-1}) = (η²/2)·g_tᵀ H_<t g_t + o(η²)
+```
+**侵蚀不取决于更新多大，取决于更新方向是否落在「旧任务敏感的方向」上。**
+
+**CPE 的解法**：`R_t^CPE ∈ argmin L_t(R) + λ·Ω_t(R, R_{t-1})`，`λ=0` 就是朴素演化。
+
+**四条通道的具体实现**：
+
+| 通道 | `Ω` 怎么做 |
+|---|---|
+| Workflow | EvoAgentX + seed workflow 的 **anchor 行为签名**（目标/输出约束/失败规避），无显式公式 |
+| Skill | 入库前**签名检查** + 语义合并 + **高效用技能保护**（容量 30，非 LFU 驱逐） |
+| Model | LoRA 上的**对角 Fisher / EWC 二次惩罚** `Ω = ½ Σ F_i(θ_i − θ_{t-1,i})²` |
+| Memory | **evidence-gated 保护**（高证据免改写/驱逐，低证据优先压缩） |
+
+**41.8% → 52.8% 的实验**：Table 1，workflow 通道，GPT-5.1 作 optimizer；在 complex 子集进化后测 **simple 子集的平均保留分**（complex 同时 23.9 → 33.4）。
+
+**我们的纯 JSON 版**（三通道可做，model 通道不行）：
+
+| 论文 | 我们 |
+|---|---|
+| `L_<t(R)` 保留风险 | **冻结的 50–100 条回归集通过率** |
+| `Ω_t` 保留正则（软） | **变更闸门**（硬）：过不了回归集就不许改 |
+| `λ` 稳定-可塑权衡 | `maxDrop` 阈值 |
+| `M_t` 保留度量 | 回归集覆盖广度 |
+
+**关键差别**：论文是软正则，我们是硬闸门。对小规模本地插件，硬闸门更简单也更安全。
+
+**两条可借的具体规则**：
+- **skill 通道**：技能卡**不允许硬删除**，只能 `retired`；退役前查最近 90 天是否被 `appliedGood` 过，有则需人工确认
+- **memory 通道**：`validTo` 一旦设置，**不能因「看起来没用了」自动提前**；衰减只影响排序，不影响真值
+
+---
+
+## 六点八、Memobase 的关键设计：`update_description`
+
+> 完整版见 [research-memobase-update-policy.md](research-memobase-update-policy.md)。
+
+**slot 更新策略不是枚举开关，是每个 slot 上的一段自然语言指令**：
+
+| 字段 | 管什么 |
+|---|---|
+| `description` | 这个 slot **该抽什么**、什么格式 |
+| `update_description` | **新旧值冲突时怎么办** |
+| 不写 `update_description` | **默认直接覆盖为新值** |
+
+**官方原文示例（保留最早）**：
+> `"Always keep the oldest start date. Do not update if a date already exists."`
+
+**两个独立开关**：
+
+| 开关 | 管什么 | 默认 |
+|---|---|---|
+| `profile_validate_mode` | **质量闸**：过滤低质量/无关信息 | 开 |
+| `profile_strict_mode` | **结构闸**：能否扩展未定义的子项 | 关（宽松） |
+
+**对我们的启示**：
+- 用 `updateDescription` 字段（自然语言）实现「覆盖/保留最早/累加」三种策略，而不是硬编码枚举
+- **`profile_delta` 必填**——每次改画像都要说清「哪个槽位从什么变成什么」，这是审计的最小单位
+- `strict_mode` 默认关，但**我们该默认开**——白名单 slot 是防止画像膨胀的关键
+
+---
+
 ## 七、如果要把「学习」再推进一步：四个动作
 
 ### 动作 1：接上真实反馈回路（半天，最高优先级）
