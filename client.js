@@ -1907,6 +1907,12 @@ window.__ModuleLoader__.load({
         width: '100%',
         boxSizing: 'border-box',
         color: 'var(--dsw-alias-label-primary)',
+        // 作为面板正文的根：必须自己撑满并负责滚动，
+        // 否则内容一长就把面板撑高、被外层 overflow:hidden 裁掉（滚不动）。
+        flex: '1 1 auto',
+        minHeight: 0,
+        overflowY: 'auto',
+        scrollbarGutter: 'stable',
       },
       title: { fontSize: 18, fontWeight: 600, margin: 0 },
       sub: { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-secondary)', margin: 0 },
