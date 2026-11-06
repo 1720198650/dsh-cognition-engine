@@ -318,6 +318,12 @@ window.__ModuleLoader__.load({
         boxShadow: 'none',
         fontSize: 11,
         color: 'var(--dsw-alias-label-secondary)',
+        // 它也是纵向 flex：必须自己占满剩余高度并把高度往下传，
+        // 否则里面的正文区拿不到可用高度，滚动条永远不出现。
+        display: 'flex',
+        flexDirection: 'column',
+        flex: '1 1 auto',
+        minHeight: 0,
         overflow: 'hidden',
       },
       tabs: {
