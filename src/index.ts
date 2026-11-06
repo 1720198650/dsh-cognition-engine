@@ -35,6 +35,7 @@ import { createTools } from './tools.ts';
 import { ProactiveGate } from './proactive.ts';
 import { ProactiveStore, scoreScan } from './proactive_scan.ts';
 import type { ScanSource } from './proactive_scan.ts';
+import { RecallLog, RetrievalEvalStore } from './retrieval.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
 import { AuditLog } from './audit.ts';
 import { PlaybookStore } from './playbook.ts';
@@ -410,6 +411,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const shadow = new ShadowStore();
   // 主动闸门（S7）：默认 P1 record-only，只记录「本来会提醒什么」
   const proactiveStore = new ProactiveStore();
+  // 检索度量（S8）：真实召回日志 + 人工标注的 Top-1/Top-3
+  const recallLog = new RecallLog();
+  const retrievalEval = new RetrievalEvalStore();
 
   // 准则事件日志（轻量事件溯源）：只追加，不改主存储
   const ruleEvents = new PlaybookEventLog();
@@ -1086,6 +1090,18 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         };
       })(),
       shadow: shadow.stats(),
+      retrieval: (() => {
+        const overview = recallLog.overview();
+        const evaluated = retrievalEval.evaluate(recallIdsOf);
+        return {
+          logged: overview.total,
+          zeroRate: overview.zeroRate,
+          cases: evaluated.cases,
+          top1: evaluated.top1,
+          top3: evaluated.top3,
+          status: evaluated.status,
+        };
+      })(),
       topics: topics.stats(),
       storageWarning: stateStore.warning,
       rules: memory.getRules(),
@@ -1172,6 +1188,14 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       phase: proactiveStore.phase,
     };
   };
+
+  /**
+   * 检索评测用的「现算召回」：必须用**当前**记忆库。
+   *
+   * 为什么不复用历史召回日志：日志里的库和现在不一样，
+   * 拿它算指标得到的是「过去的准确率」，回答不了「现在准不准」。
+   */
+  const recallIdsOf = (query: string): string[] => memory.recall(query, { mode: 'strict' }).map((hit) => hit.fact.id);
 
   // 宿主 → 页面 的数据桥：Client 半区 fetch('/cognition-engine/state')
   // 注意：不能放在 /api 前缀下——那条前缀归 API 网关所有，会先被它 401 掉。
@@ -2037,6 +2061,43 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       ok: proactiveStore.removeRule(url.searchParams.get('id') ?? ''),
     }), { method: 'POST' });
 
+    // 检索度量（S8）
+    /** 现算召回：评测必须用**当前**记忆库，不能拿历史日志（那时库里没这些条目）。 */
+    const recallResolver = recallIdsOf;
+    route('/cognition-engine/retrieval', () => ({
+      logs: { path: recallLog.path, ...recallLog.overview() },
+      eval: { path: retrievalEval.path, minCases: retrievalEval.minCasesRequired, ...retrievalEval.evaluate(recallResolver) },
+      saveError: recallLog.lastSaveError ?? retrievalEval.lastSaveError ?? null,
+    }));
+    route('/cognition-engine/retrieval/log', (url) => {
+      const limit = Number(url.searchParams.get('limit') ?? '20');
+      return { recent: recallLog.recent(Number.isFinite(limit) ? limit : 20) };
+    });
+    route('/cognition-engine/retrieval/candidates', (url) => {
+      const limit = Number(url.searchParams.get('limit') ?? '20');
+      // 给标注工作流用：最近真实查询里还没标过的，附上当时返回了什么
+      return { candidates: recallLog.unannotated(retrievalEval.annotatedQueries(), Number.isFinite(limit) ? limit : 20) };
+    });
+    route('/cognition-engine/retrieval/case', (url) => {
+      const expected = (url.searchParams.get('expected') ?? '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+      const note = url.searchParams.get('note');
+      return retrievalEval.addCase({
+        query: url.searchParams.get('query') ?? '',
+        expectedIds: expected,
+        expectEmpty: url.searchParams.get('expectEmpty') === 'true',
+        ...(note === null ? {} : { note }),
+        source: 'user',
+      });
+    }, { method: 'POST' });
+    route('/cognition-engine/retrieval/case/remove', (url) => ({
+      id: url.searchParams.get('id') ?? '',
+      ok: retrievalEval.removeCase(url.searchParams.get('id') ?? ''),
+    }), { method: 'POST' });
+    route('/cognition-engine/retrieval/evaluate', () => retrievalEval.evaluate(recallResolver), { method: 'POST' });
+
     // 八类不学：给候选做个检查（不改数据，只回答「该不该学」）
     route('/cognition-engine/learn/check', (url) => {
       const text = url.searchParams.get('text') ?? '';
@@ -2225,6 +2286,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     // 这两个之前漏传：导致「本地占位告警」从未出现、准则蒸馏不可用。
     currentReflectionMode: () => reflectionMode,
     distillPlaybook: runDistill,
+    // S8：每次真实召回都记一条（只记 id 与分数，不记正文）
+    onRecall: (info) => recallLog.record(info),
   });
   const [remember, recall, forget, reflect, state, cognitionContext, manageLongTask] = toolList;
 

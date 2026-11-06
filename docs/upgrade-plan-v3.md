@@ -854,6 +854,40 @@ BM25 研究的最后一条建议：
 - 有一张真实的「查询 → 应该命中什么」的表
 - 基线数据：Top-1 ≥80%、Top-3 ≥95%（Anchor 的轨迹准确率才 44.4%，我们目标已经很高）
 
+### 9.4 实现状态（2026-11-06）
+
+已实现 `src/retrieval.ts` + 6 个路由 + 3 组测试（总测试 132 → **135 条**）。
+
+| 能力 | 说明 |
+|---|---|
+| 召回日志（自动） | 每次 `cognition_recall` 记 `query / mode / top-5 id / 分数`，**不记记忆正文**（正文在 state 文件里，不必抄一份扩大隐私面） |
+| 标注集（人工） | `POST /retrieval/case?query=&expected=id1,id2`；也可标 `expectEmpty=true`（这查询本来就不该召回东西） |
+| 指标 | Top-1 / Top-3 准确率、零结果率、误召回清单（哪条查询没命中、期望什么、实际给什么） |
+| 标注工作流 | `GET /retrieval/candidates` 直接列「最近真实查询里还没标过的」，附当时返回了什么 |
+
+**一条硬规矩（写在代码注释里）**：**标注集不参与任何调参**。
+它只回答「现在准不准」。一旦拿它去调 BM25 的 k1/b，它就退化成训练集，
+下次报的数就没意义了。这也是为什么 `evaluate()` 每次都**现算**召回而不是读历史日志——
+日志里的库和现在不一样，读它得到的是「过去的准确率」，回答不了「现在准不准」。
+
+**真机验证**（用真实召回跑出来的）：
+
+```
+调一次 cognition_recall("npm 发布用哪个 registry")
+GET  /retrieval → logs.total=1, zeroRate=0, avgCount=3, byMode={strict:1}
+                 eval.status=insufficient, note="还没有标注…"
+POST /retrieval/case?query=npm 发布用哪个 registry&expected=mem-16-c72656
+POST /retrieval/evaluate → cases=1, top1=1, top3=1, status=insufficient,
+                           note="只有 1 条标注（建议 ≥20），数字仅供观察"
+```
+
+**注意最后一行**：Top-1 = 100% 但它仍然报 `insufficient`——1 条标注算出来的
+100% 不是「准确率」，只是「这 1 条对了」。**没有样本量就不给结论**，这条规则在
+S4 风格、S5 CPE、S8 检索三处都一致执行。
+
+**还没做**：UI（现在纯接口）；需要你（或我代你）标 20–50 条真实查询才有意义。
+`GET /retrieval/candidates` 会把待标注的都列好，标注是一条 curl 的事。
+
 ---
 
 ## 十、S9：分维度审计（3–5 天）

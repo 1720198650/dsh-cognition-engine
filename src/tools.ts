@@ -41,6 +41,13 @@ export interface ToolDeps {
   distillPlaybook?: (options: { maxCandidates?: number }) => Promise<Record<string, unknown>>;
   /** 读取当前反思引擎模式（off / local / real）。 */
   reflectionMode?: () => string;
+  /**
+   * 召回日志钩子（S8 检索度量）。
+   *
+   * 只传 query / mode / 返回的 id 与分数，**不传记忆正文**——
+   * 正文已经存在 state 文件里，日志再抄一份既浪费又扩大隐私面。
+   */
+  onRecall?: (info: { query: string; mode: string; ids: string[]; scores: number[]; count: number; rendered?: boolean }) => void;
 }
 
 type IngestInputLike = Parameters<TemporalMemoryStore['ingest']>[0];
@@ -176,8 +183,28 @@ export function createTools(deps: ToolDeps) {
         ...(agentId === undefined ? {} : { sessionId: agentId }),
       } as RecallOptionsLike;
 
-      if (input.render === true) return JSON.stringify(memory.render(query, options));
+      // S8 检索度量：记下这次召回（render 分支也一样要记，否则少一半样本）
+      const logRecall = (rows: Array<{ fact: { id: string }; score?: number }>, rendered: boolean): void => {
+        try {
+          deps.onRecall?.({
+            query,
+            mode: rawMode,
+            ids: rows.map((row) => row.fact.id),
+            scores: rows.map((row) => (typeof row.score === 'number' ? row.score : 0)),
+            count: rows.length,
+            ...(rendered ? { rendered: true } : {}),
+          });
+        } catch {
+          /* 记日志失败不影响召回 */
+        }
+      };
+
+      if (input.render === true) {
+        logRecall(memory.recall(query, options), true);
+        return JSON.stringify(memory.render(query, options));
+      }
       const hits = memory.recall(query, options);
+      logRecall(hits, false);
 
       // 顺藤摸瓜（expand）：把命中记忆的同主题其他记忆一并带出。
       // 联想模式（associative）自动带上这个扩展。

@@ -21,6 +21,7 @@ import { BudgetStore, computeQuota, isoWeekKey } from './budget.ts';
 import { ShadowStore } from './shadow.ts';
 import { classifyNotLearn, shouldReject } from './notlearn.ts';
 import { ProactiveStore, buildWouldDo, scoreScan } from './proactive_scan.ts';
+import { RecallLog, RetrievalEvalStore } from './retrieval.ts';
 import {
   StyleStore,
   analyzeTurn,
@@ -2291,6 +2292,77 @@ async function main(): Promise<void> {
     assert.equal(store.canSpeak(0.3).speak, false, 'P3 分数不够仍不发言');
     // 降级随时允许
     assert.equal(store.setPhase('P1').ok, true);
+    rmSync(file, { force: true });
+  });
+
+  section('[18] 检索度量（S8）');
+
+  await test('召回日志：零结果率、平均条数、按模式分桶、未标注筛选', () => {
+    const file = join(TEST_TMP, 'recall-log.jsonl');
+    rmSync(file, { force: true });
+    const log = new RecallLog({ filePath: file, now: () => 12_000 });
+    log.record({ query: '发版流程', mode: 'strict', ids: ['mem-1', 'mem-2'], scores: [0.9, 0.5] });
+    log.record({ query: '发版流程', mode: 'strict', ids: ['mem-1'], scores: [0.8] });
+    log.record({ query: '数据库选型', mode: 'strict', ids: [], scores: [], count: 0 });
+    const overview = log.overview();
+    assert.equal(overview.total, 3);
+    assert.equal(overview.zeroResult, 1);
+    assert.equal(overview.zeroRate, 0.333);
+    assert.equal(overview.avgCount, 1);
+    assert.equal(overview.byMode.strict, 3);
+
+    // 未标注：去重 + 排除已标
+    const un = log.unannotated(new Set(['数据库选型']), 10);
+    assert.equal(un.length, 1, '同一查询只出现一次，且排除已标注的');
+    assert.equal(un[0]?.query, '发版流程');
+    rmSync(file, { force: true });
+  });
+
+  await test('检索评测：Top-1/Top-3、expectEmpty、misses、样本不足报 insufficient', () => {
+    const file = join(TEST_TMP, 'retrieval-eval.json');
+    rmSync(file, { force: true });
+    const store = new RetrievalEvalStore({ filePath: file, now: () => 13_000, minCases: 4 });
+
+    assert.equal(store.addCase({ query: '没给期望' }).rejected !== undefined, true, '既没 expected 也没 expectEmpty 应拒绝');
+    store.addCase({ query: '发版流程', expectedIds: ['mem-1'] });
+    store.addCase({ query: '数据库选型', expectedIds: ['mem-2'] });
+    store.addCase({ query: '无关内容', expectEmpty: true });
+    store.addCase({ query: 'npm 发布', expectedIds: ['mem-3'] });
+
+    const fake = (q: string): string[] => {
+      if (q === '发版流程') return ['mem-1', 'mem-9'];
+      if (q === '数据库选型') return ['mem-9', 'mem-2']; // top1 错，top3 对
+      if (q === '无关内容') return [];
+      return ['mem-3'];
+    };
+    const m = store.evaluate(fake);
+    assert.equal(m.cases, 4);
+    assert.equal(m.top1, 0.75, '4 条里 top1 对 3 条');
+    assert.equal(m.top3, 1, '4 条 top3 全对');
+    assert.equal(m.status, 'yellow', 'Top-3 达标但 Top-1 不足 → yellow');
+    assert.equal(m.misses.length, 0, 'top3 全中，不该有 miss');
+
+    // 期望空但召回了东西 → 计 miss
+    store.addCase({ query: '瞎查', expectEmpty: true });
+    const withMiss = store.evaluate((q) => (q === '瞎查' ? ['mem-7'] : fake(q)));
+    assert.equal(withMiss.misses.some((x) => x.query === '瞎查'), true);
+
+    // 样本不足
+    const small = new RetrievalEvalStore({ filePath: join(TEST_TMP, 'retrieval-small.json'), minCases: 50 });
+    small.addCase({ query: 'a', expectedIds: ['x'] });
+    assert.equal(small.evaluate(() => ['x']).status, 'insufficient');
+    rmSync(file, { force: true });
+    rmSync(join(TEST_TMP, 'retrieval-small.json'), { force: true });
+  });
+
+  await test('检索评测：同一条查询重复标注只保留最新', () => {
+    const file = join(TEST_TMP, 'retrieval-dedupe.json');
+    rmSync(file, { force: true });
+    const store = new RetrievalEvalStore({ filePath: file, now: () => 14_000 });
+    store.addCase({ query: '发版流程', expectedIds: ['mem-1'] });
+    store.addCase({ query: '发版流程', expectedIds: ['mem-2'] });
+    assert.equal(store.cases().length, 1, '同一查询只保留一条');
+    assert.deepEqual(store.cases()[0]?.expectedIds, ['mem-2']);
     rmSync(file, { force: true });
   });
 

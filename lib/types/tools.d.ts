@@ -50,6 +50,20 @@ export interface ToolDeps {
     }) => Promise<Record<string, unknown>>;
     /** 读取当前反思引擎模式（off / local / real）。 */
     reflectionMode?: () => string;
+    /**
+     * 召回日志钩子（S8 检索度量）。
+     *
+     * 只传 query / mode / 返回的 id 与分数，**不传记忆正文**——
+     * 正文已经存在 state 文件里，日志再抄一份既浪费又扩大隐私面。
+     */
+    onRecall?: (info: {
+        query: string;
+        mode: string;
+        ids: string[];
+        scores: number[];
+        count: number;
+        rendered?: boolean;
+    }) => void;
 }
 export declare function createTools(deps: ToolDeps): readonly [{
     name: string;

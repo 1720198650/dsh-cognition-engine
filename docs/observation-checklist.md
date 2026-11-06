@@ -148,6 +148,7 @@ Invoke-WebRequest "http://127.0.0.1:3111/cognition-engine/events" -UseBasicParsi
 | 3 | S5 CPE 回归闸门 | ✅ 已实现（闸门接在准则 accept；证据门控防误退场；需你标 20–50 条用例才有意义） |
 | 4 | S6 学习预算 + shadow | ✅ 已实现（周配额 8；超预算自动转 shadow 试运行；八类不学分级过滤） |
 | 5 | S7 主动闸门 | ✅ 已实现（默认 P1 只记录不发言；P3 要 20 样本 + 70% 采纳率） |
+| 6 | S8 检索度量 | ✅ 已实现（自动召回日志 + 人工标注 Top-1/Top-3；标注集不参与调参） |
 
 **风格审计怎么用**：`GET /cognition-engine/style` 看 `sample.turns` 与 `comparison.status`。
 样本没到 60 轮 / 6000 字之前它只会回 `insufficient` —— 这不是坏了，是拒绝给假分数。
