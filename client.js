@@ -2218,6 +2218,7 @@ window.__ModuleLoader__.load({
         wouldDoHint: '现在只记录、不打扰你。想让我以后真的提醒，再单独开。',
         adopt: '好，我去处理',
         dismiss: '不用管',
+        syncHint: '（会同步改任务：处理→进行中，不用管→删除）',
         noWouldDo: '暂时没有要提醒的',
         retrieval: '记忆找得准不准',
         retrievalHint: '用你真问过的问题抽查：该找到的东西有没有找到。',
@@ -2535,6 +2536,9 @@ window.__ModuleLoader__.load({
                         { style: PS.rowFlex },
                         h('button', { type: 'button', style: PS.btn, disabled: busy, onClick: () => post('/cognition-engine/proactive/adopt?id=' + encodeURIComponent(item.id)) }, dict.adopt),
                         h('button', { type: 'button', style: PS.btn, disabled: busy, onClick: () => post('/cognition-engine/proactive/dismiss?id=' + encodeURIComponent(item.id)) }, dict.dismiss),
+                        item.kind === 'pending-due'
+                          ? h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, dict.syncHint)
+                          : null,
                       ),
                     ),
                   ),
