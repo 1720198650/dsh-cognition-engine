@@ -33,6 +33,8 @@ import { DialecticalReflectionEngine, MockDialecticalLLM, ReflectionWorker } fro
 import { assertObjectSchema, dataDir, messageOf, migrateLegacyData, parseMoment } from './util.ts';
 import { createTools } from './tools.ts';
 import { ProactiveGate } from './proactive.ts';
+import { ProactiveStore, scoreScan } from './proactive_scan.ts';
+import type { ScanSource } from './proactive_scan.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
 import { AuditLog } from './audit.ts';
 import { PlaybookStore } from './playbook.ts';
@@ -406,6 +408,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const budget = new BudgetStore();
   // shadow 试运行（S6）：先进 shadow 不进注入，够格再转正
   const shadow = new ShadowStore();
+  // 主动闸门（S7）：默认 P1 record-only，只记录「本来会提醒什么」
+  const proactiveStore = new ProactiveStore();
 
   // 准则事件日志（轻量事件溯源）：只追加，不改主存储
   const ruleEvents = new PlaybookEventLog();
@@ -870,6 +874,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
    * 风格指针对应的是「这一轮整体怎么说话」，所以按轮累加，`turn/end` 时一次性算完。
    */
   const assistantBuffers = new Map<string, { turn: number; text: string }>();
+  /** 最近一次用户轮次开始时间，用于主动闸门的「静默多久」信号。 */
+  let lastTurnAtMs = Date.now();
   /** 单轮参与统计的最大字符数：防止超长轮把内存和统计都拖歪。 */
   const MAX_STYLE_CHARS = 12000;
 
@@ -915,6 +921,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         if (type === 'turn/start') {
           const turn = Number((data as { turn?: unknown } | null | undefined)?.turn);
           if (Number.isFinite(turn)) turnTracker.beginTurn(sessionId, turn);
+          lastTurnAtMs = Date.now();
           assistantBuffers.delete(sessionId);
         } else if (type === 'user/message') {
           turnTracker.appendUserText(sessionId, extractUserText(data));
@@ -1010,8 +1017,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         due: taskManager.check_due_tasks().length,
       },
       proactive: {
-        pending: proactive.pending().length,
-        recordOnly: proactive.isRecordOnly,
+        pending: proactiveStore.pending().length,
+        recordOnly: proactiveStore.phase === 'P1',
+        phase: proactiveStore.phase,
+        adoptionRate: proactiveStore.adoptionRate(),
+        samples: proactiveStore.document.stats.adopted + proactiveStore.document.stats.dismissed,
+        rules: proactiveStore.document.rules.filter((rule) => rule.active).length,
       },
       model: (() => {
         const resolved = resolveModel();
@@ -1113,6 +1124,54 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       .map((entry) => ({ id: entry.id, score: textSimilarity(question, entry.content) }))
       .sort((a, b) => b.score - a.score)
       .map((item) => item.id);
+
+  /**
+   * 收一轮主动扫描的来源数据。全部是可观测计数，不做主观判断。
+   *
+   * 故意不在这里做任何模型调用：主动闸门每 patrolIntervalHours 跑一次，
+   * 一旦掺进 LLM，光是「观察」就变成持续烧 token。
+   */
+  const collectScanSource = (): ScanSource => {
+    const due = taskManager.check_due_tasks().map((task) => ({
+      id: task.id,
+      description: task.description,
+      overdueHours: Math.max(0, Math.round(task.overdueMs / 3_600_000)),
+    }));
+    const openGaps = gaps.open().map((gap) => ({ id: gap.id, text: gap.text }));
+    const active = playbook.all().filter((entry) => entry.status === 'active');
+    const brokenRules = active
+      .filter((entry) => entry.evidence?.status === 'orphaned')
+      .map((entry) => ({ id: entry.id, content: entry.content }));
+    const expiredRules = active
+      .filter((entry) => playbook.isExpired(entry))
+      .map((entry) => ({ id: entry.id, content: entry.content }));
+    return { dueTasks: due, gaps: openGaps, brokenRules, expiredRules };
+  };
+
+  const runProactiveScan = (): {
+    score: number;
+    parts: Record<string, number>;
+    items: unknown[];
+    canSpeak: { speak: boolean; reason: string };
+    phase: string;
+  } => {
+    const source = collectScanSource();
+    const scored = scoreScan({
+      pendingDue: source.dueTasks.length,
+      unresolvedGaps: source.gaps.length,
+      brokenEvidence: source.brokenRules.length,
+      expiredRules: source.expiredRules.length,
+      silenceMs: Math.max(0, Date.now() - lastTurnAtMs),
+    });
+    const items = proactiveStore.recordScan(source, scored.score);
+    return {
+      score: scored.score,
+      parts: scored.parts,
+      items,
+      canSpeak: proactiveStore.canSpeak(scored.score),
+      phase: proactiveStore.phase,
+    };
+  };
 
   // 宿主 → 页面 的数据桥：Client 半区 fetch('/cognition-engine/state')
   // 注意：不能放在 /api 前缀下——那条前缀归 API 网关所有，会先被它 401 掉。
@@ -1942,6 +2001,42 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     }), { method: 'POST' });
     route('/cognition-engine/shadow/sweep', () => ({ expired: shadow.sweepExpired().map((entry) => entry.id) }), { method: 'POST' });
 
+    // 主动闸门（S7）：默认 P1 只记录，不发言
+    route('/cognition-engine/proactive', () => {
+      const doc = proactiveStore.document;
+      return {
+        path: proactiveStore.path,
+        phase: doc.phase,
+        /** P1 永远不发言；这条字段就是给页面「为什么没有主动消息」的解释。 */
+        recordOnly: doc.phase === 'P1',
+        rules: doc.rules,
+        pending: proactiveStore.pending().slice(0, 20),
+        stats: { ...doc.stats, adoptionRate: proactiveStore.adoptionRate() },
+        /** 下一阶段的门槛，页面直接展示，避免「为什么不能开 P3」的疑问。 */
+        gates: { p3MinSamples: 20, p3MinAdoption: 0.7 },
+        saveError: proactiveStore.lastSaveError ?? null,
+      };
+    });
+    route('/cognition-engine/proactive/scan', () => runProactiveScan(), { method: 'POST' });
+    route('/cognition-engine/proactive/adopt', (url) => ({
+      id: url.searchParams.get('id') ?? '',
+      ok: proactiveStore.adopt(url.searchParams.get('id') ?? ''),
+    }), { method: 'POST' });
+    route('/cognition-engine/proactive/dismiss', (url) => ({
+      id: url.searchParams.get('id') ?? '',
+      ok: proactiveStore.dismiss(url.searchParams.get('id') ?? ''),
+    }), { method: 'POST' });
+    route('/cognition-engine/proactive/phase', (url) => {
+      const raw = url.searchParams.get('phase');
+      const phase = raw === 'P1' || raw === 'P2' || raw === 'P3' ? raw : 'P1';
+      return proactiveStore.setPhase(phase);
+    }, { method: 'POST' });
+    route('/cognition-engine/proactive/rule', (url) => proactiveStore.addRule(url.searchParams.get('text') ?? ''), { method: 'POST' });
+    route('/cognition-engine/proactive/rule/remove', (url) => ({
+      id: url.searchParams.get('id') ?? '',
+      ok: proactiveStore.removeRule(url.searchParams.get('id') ?? ''),
+    }), { method: 'POST' });
+
     // 八类不学：给候选做个检查（不改数据，只回答「该不该学」）
     route('/cognition-engine/learn/check', (url) => {
       const text = url.searchParams.get('text') ?? '';
@@ -2197,6 +2292,13 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const patrol = async (): Promise<void> => {
     try {
       await tasksReady;
+
+      // 主动闸门扫描（S7）：放在最前面——即使没有逾期任务也要记录 wouldDo
+      try {
+        runProactiveScan();
+      } catch (error) {
+        ctx.logger?.warn?.(`cognition-engine: 主动扫描失败 ${messageOf(error)}`);
+      }
 
       // P1 记忆生命周期：长期没被想起的记忆退出 strict 召回（不删数据）
       const archived = memory.autoArchive({ idleDays: 180, maxActivation: 1 });

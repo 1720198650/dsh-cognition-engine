@@ -20,6 +20,7 @@ import { CpeStore } from './cpe.ts';
 import { BudgetStore, computeQuota, isoWeekKey } from './budget.ts';
 import { ShadowStore } from './shadow.ts';
 import { classifyNotLearn, shouldReject } from './notlearn.ts';
+import { ProactiveStore, buildWouldDo, scoreScan } from './proactive_scan.ts';
 import {
   StyleStore,
   analyzeTurn,
@@ -2204,6 +2205,93 @@ async function main(): Promise<void> {
     // 正常准则不该被硬拒
     const ok = shouldReject('发版前依次执行六步，不可跳步');
     assert.equal(ok.reject, false);
+  });
+
+  section('[17] 主动闸门（S7）');
+
+  await test('主动打分：信号越多分越高，零信号不过线', () => {
+    const none = scoreScan({ pendingDue: 0, unresolvedGaps: 0, brokenEvidence: 0, expiredRules: 0 });
+    assert.ok(none.score < 0.4, `零信号分应很低，实得 ${none.score}`);
+    const some = scoreScan({ pendingDue: 1, unresolvedGaps: 1, brokenEvidence: 0, expiredRules: 0 });
+    const many = scoreScan({ pendingDue: 3, unresolvedGaps: 2, brokenEvidence: 1, expiredRules: 3, silenceMs: 7 * 24 * 3600_000 });
+    assert.ok(some.score > none.score, '有信号应比零信号高');
+    assert.ok(many.score > some.score, '信号越多分越高');
+    assert.ok(many.score <= 1 && many.score >= 0, '分数必须有界');
+  });
+
+  await test('wouldDo：每条都能回答「用户要做什么 / 能得到什么」', () => {
+    const drafts = buildWouldDo(
+      {
+        dueTasks: [{ id: 't1', description: '整理文档整理', overdueHours: 30 }],
+        gaps: [{ id: 'g1', text: '不清楚某个 slot 的取值' }],
+        brokenRules: [{ id: 'ctxt-00001', content: '发版六步不可跳步' }],
+        expiredRules: [{ id: 'ctxt-00002', content: '纯文档只推 commit' }],
+      },
+      0.8,
+    );
+    assert.equal(drafts.length, 4);
+    for (const draft of drafts) {
+      assert.ok(draft.userAction.length > 0, `${draft.kind} 缺少 userAction`);
+      assert.ok(draft.benefit.length > 0, `${draft.kind} 缺少 benefit`);
+      assert.ok(draft.action.length > 0);
+      assert.ok(draft.key.includes(draft.targetId));
+    }
+  });
+
+  await test('wouldDo 入库：同一条反复扫到只加 seen，不重复；处理过的不复活', () => {
+    const file = join(TEST_TMP, 'proactive-test.json');
+    rmSync(file, { force: true });
+    const store = new ProactiveStore({ filePath: file, now: () => 10_000 });
+    const source = {
+      dueTasks: [{ id: 't1', description: '整理文档整理', overdueHours: 30 }],
+      gaps: [],
+      brokenRules: [],
+      expiredRules: [],
+    };
+    const first = store.recordScan(source, 0.7);
+    assert.equal(first.length, 1);
+    assert.equal(first[0]?.seen, 1);
+    store.recordScan(source, 0.7);
+    store.recordScan(source, 0.7);
+    const pending = store.pending();
+    assert.equal(pending.length, 1, '同一件事不能重复入列');
+    assert.equal(pending[0]?.seen, 3);
+
+    // 忽略后不再复活
+    assert.equal(store.dismiss(pending[0]!.id), true);
+    assert.equal(store.pending().length, 0);
+    store.recordScan(source, 0.7);
+    assert.equal(store.pending().length, 0, '已处理过的同一件事不该复活');
+    assert.equal(store.adoptionRate(), 0, '只有 dismiss，采纳率 0');
+    rmSync(file, { force: true });
+  });
+
+  await test('三阶段：P1 只记录不发言，P2 需用户规则，P3 有门槛', () => {
+    const file = join(TEST_TMP, 'proactive-phase.json');
+    rmSync(file, { force: true });
+    const store = new ProactiveStore({ filePath: file, now: () => 11_000 });
+    assert.equal(store.phase, 'P1', '默认必须是 P1');
+    assert.equal(store.canSpeak(0.99).speak, false, 'P1 分数再高也不发言');
+
+    store.setPhase('P2');
+    assert.equal(store.canSpeak(0.99).speak, false, 'P2 没规则不发言');
+    store.addRule('每天 9 点提醒待办');
+    assert.equal(store.canSpeak(0.2).speak, true, 'P2 有规则即可发言');
+
+    const blocked = store.setPhase('P3');
+    assert.equal(blocked.ok, false, '样本不足不许升 P3');
+    assert.ok((blocked.reason ?? '').includes('样本不足'));
+
+    // 造够样本 + 高采纳率
+    for (let i = 0; i < 18; i += 1) store.document.stats.adopted += 1;
+    for (let i = 0; i < 2; i += 1) store.document.stats.dismissed += 1;
+    const ok = store.setPhase('P3');
+    assert.equal(ok.ok, true, `20 样本 90% 采纳应允许升 P3，实得 ${JSON.stringify(ok)}`);
+    assert.equal(store.canSpeak(0.7).speak, true);
+    assert.equal(store.canSpeak(0.3).speak, false, 'P3 分数不够仍不发言');
+    // 降级随时允许
+    assert.equal(store.setPhase('P1').ok, true);
+    rmSync(file, { force: true });
   });
 
   await test('事件日志：追加、seq 连续、重新加载续接', () => {
