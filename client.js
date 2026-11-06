@@ -387,7 +387,7 @@ window.__ModuleLoader__.load({
         display: 'inline-block',
         padding: '0 7px',
         borderRadius: 999,
-        border: '1px solid var(--dsw-alias-border-l2)',
+        border: '1px solid var(--dsw-alias-border-l1)',
         color: 'var(--dsw-alias-label-secondary)',
         fontSize: 11,
         lineHeight: '18px',
@@ -402,8 +402,8 @@ window.__ModuleLoader__.load({
       },
       empty: { padding: '24px 12px', textAlign: 'center', color: 'var(--dsw-alias-label-secondary)', fontSize: 12 },
       input: {
-        background: 'var(--dsw-alias-bg-layer-2)',
-        border: '1px solid var(--dsw-alias-border-l1)',
+        background: 'transparent',
+        border: '1px solid var(--dsw-alias-border-l2)',
         color: 'var(--dsw-alias-label-primary)',
         borderRadius: 6,
         fontSize: 12,
@@ -1767,7 +1767,9 @@ window.__ModuleLoader__.load({
       minHeight: 0,
       width: '100%',
       boxSizing: 'border-box',
-      background: 'var(--dsw-alias-bg-base)',
+      // **不能设背景**：侧栏主列自己有一层底，这里再铺 bg-base 会变成「灰上叠灰」，
+      // 整个面板看起来蒙了一层雾。透明就对了。
+      background: 'transparent',
       color: 'var(--dsw-alias-label-primary)',
       fontSize: 13,
     };
