@@ -1819,13 +1819,17 @@ window.__ModuleLoader__.load({
         fontFamily: 'inherit',
       },
       primary: {
+        // 不能假设 brand-primary 是饱和色：本主题里它接近白色，
+        // 之前的「brand 底 + #fff 字」就渲染成一整块白（字看不见）。
+        // 改成描边式主按钮：透明底 + brand 边框与文字，深浅主题都安全。
         padding: '6px 14px',
         borderRadius: 8,
-        border: '1px solid transparent',
-        background: 'var(--dsw-alias-brand-primary)',
-        color: '#fff',
+        border: '1px solid var(--dsw-alias-brand-primary)',
+        background: 'transparent',
+        color: 'var(--dsw-alias-brand-primary)',
         cursor: 'pointer',
         fontSize: 12,
+        fontWeight: 600,
         fontFamily: 'inherit',
       },
       btnDisabled: { opacity: 0.5, cursor: 'default' },
