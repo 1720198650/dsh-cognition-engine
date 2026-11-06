@@ -416,7 +416,7 @@ window.__ModuleLoader__.load({
         const opts = { ...(options || {}), ...(props || {}) };
         const [state, setState] = React.useState(null);
         const [failure, setFailure] = React.useState(null);
-        const [open, setOpen] = React.useState(opts.defaultOpen === true);
+        const [open, setOpen] = React.useState(opts.defaultOpen === true || opts.variant === 'panel');
         // 默认停在「记忆」页签：早先默认值是已删除的 'tasks'，导致打开时没有任何页签高亮
         const [tab, setTab] = React.useState('memories');
         const [formOpen, setFormOpen] = React.useState(null);
@@ -782,9 +782,14 @@ window.__ModuleLoader__.load({
         };
 
         const toggle = () => setOpen((value) => !value);
-        const rootStyle = opts.variant === 'panel' ? S.panelRoot : opts.variant === 'wide' ? S.wideRoot : S.root;
+        // panel = 侧边栏一级页面：整列铺满，自己管滚动，不显示摘要行
+        const rootStyle = opts.variant === 'panel' ? SIDEBAR_PANEL_STYLE : opts.variant === 'wide' ? S.wideRoot : S.root;
+        const isPanel = opts.variant === 'panel';
 
         if (!state) {
+          if (isPanel) {
+            return h('div', { style: SIDEBAR_PANEL_STYLE }, h('div', { style: S.panelRoot }, h('div', { style: S.explain }, failure || dict.connecting)));
+          }
           return h(
             'div',
             { style: S.row, title: failure || '' },
@@ -834,7 +839,8 @@ window.__ModuleLoader__.load({
           h('span', { style: S.caret }, open ? '▾' : '▸'),
         );
 
-        if (!open) return h('div', { style: rootStyle }, row);
+        // 面板形态没有「收起」：永远展开。浮层形态才有折叠成一行摘要的行为。
+        if (!isPanel && !open) return h('div', { style: rootStyle }, row);
 
         const tabs = [
           // 「状态」页签已移除：三个数字与页签标签重复，没有信息量
@@ -1586,7 +1592,10 @@ window.__ModuleLoader__.load({
 
         const panel = h(
           'div',
-          { style: opts.variant === 'wide' ? S.widePanel : S.panel, role: 'dialog', 'aria-label': dict.name },
+          {
+            style: opts.variant === 'wide' ? S.widePanel : S.panel,
+            ...(opts.variant === 'wide' ? {} : { role: 'dialog', 'aria-label': dict.name }),
+          },
           h(
             'div',
             { style: S.tabs },
@@ -1614,18 +1623,21 @@ window.__ModuleLoader__.load({
               },
               dict.refresh,
             ),
-            h(
-              'button',
-              {
-                type: 'button',
-                style: S.action,
-                onClick: (event) => {
-                  event.stopPropagation();
-                  setOpen(false);
-                },
-              },
-              dict.close,
-            ),
+            // 面板形态（侧边栏一级页面）里没有「收起」的概念：整页就是全局的，收起反而突兀
+            opts.variant === 'panel'
+              ? null
+              : h(
+                  'button',
+                  {
+                    type: 'button',
+                    style: S.action,
+                    onClick: (event) => {
+                      event.stopPropagation();
+                      setOpen(false);
+                    },
+                  },
+                  dict.close,
+                ),
           ),
           h(
             'div',
@@ -1682,6 +1694,37 @@ window.__ModuleLoader__.load({
         return h('div', { style: rootStyle }, row, panel);
       };
     }
+
+    /**
+     * 侧边栏一级面板视图（`sidebar.panellist`）。
+     *
+     * 为什么要有它：原来六个页签全挤在输入框上方的浮层里（66% 宽、60vh 高），
+     * 记忆/主题/准则那种长列表在里面根本看不全。这里复用同一套组件，
+     * 只把外框换成「占满整列、自己滚动」的形态——**视图逻辑一份都不重写**。
+     *
+     * 侧边栏是全局的（不绑定某个会话），所以某些需要会话上下文的操作
+     * 在这里可能拿不到 sessionId。当前各页签都不依赖它，先不处理。
+     */
+    function createSidebarPanel(ctx) {
+      const Dock = createDock(ctx);
+      const dict = pickDict(ctx);
+      return function SidebarPanel(props) {
+        return h(Dock, { ...(props || {}), variant: 'panel' });
+      };
+    }
+
+    /** 面板形态的外框样式：整列可用，自己管滚动。 */
+    const SIDEBAR_PANEL_STYLE = {
+      display: 'flex',
+      flexDirection: 'column',
+      height: '100%',
+      minHeight: 0,
+      width: '100%',
+      boxSizing: 'border-box',
+      background: 'var(--dsw-alias-bg-base)',
+      color: 'var(--dsw-alias-label-primary)',
+      fontSize: 13,
+    };
 
     /* ---------------- 人格页面（settings.section） ---------------- */
 
@@ -2745,6 +2788,44 @@ window.__ModuleLoader__.load({
           // 槽位被占用或宿主不支持：静默跳过，工具与记忆功能不受影响
           if (ctx.logger && typeof ctx.logger.warn === 'function') {
             ctx.logger.warn('cognition-engine: 状态条槽位注册失败，已降级为不显示');
+          }
+        }
+
+        // 侧边栏一级面板：整列铺满，六个页签不再挤在输入框上方的小浮层里
+        try {
+          const Panel = createSidebarPanel(ctx);
+          const CogIcon = (props) =>
+            h(
+              'svg',
+              {
+                width: (props && props.size) || 16,
+                height: (props && props.size) || 16,
+                viewBox: '0 0 16 16',
+                fill: 'none',
+                'aria-hidden': true,
+                style: { display: 'block' },
+              },
+              h('circle', { cx: 8, cy: 8, r: 5.2, stroke: 'currentColor', strokeWidth: 1.4 }),
+              h('circle', { cx: 8, cy: 8, r: 1.8, stroke: 'currentColor', strokeWidth: 1.4 }),
+              h('path', { d: 'M8 1.4v2.2M8 12.4v2.2M1.4 8h2.2M12.4 8h2.2', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round' }),
+            );
+          ctx.slots.inject('sidebar.panellist', () => [
+            ctx.slots.register(
+              { name: 'sidebar.panellist', id: 'cognition-engine', order: 30, label: () => pickDict(ctx).name },
+              Panel,
+            ),
+          ]);
+          // 面板图标：slot id 与面板 id 相同即可被侧栏取用；宿主没有这个插槽时静默跳过
+          try {
+            ctx.slots.inject('sidebar.panellist.icon', () => [
+              ctx.slots.register({ name: 'sidebar.panellist.icon', id: 'cognition-engine', order: 30 }, CogIcon),
+            ]);
+          } catch {
+            /* 没有该插槽：用宿主默认字形 */
+          }
+        } catch (error) {
+          if (ctx.logger && typeof ctx.logger.warn === 'function') {
+            ctx.logger.warn('cognition-engine: 侧边栏面板注册失败，已跳过');
           }
         }
 
