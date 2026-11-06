@@ -2791,7 +2791,11 @@ window.__ModuleLoader__.load({
           }
         }
 
-        // 侧边栏一级面板：整列铺满，六个页签不再挤在输入框上方的小浮层里
+        // 侧边栏一级面板：整列铺满，六个页签不再挤在输入框上方的小浮层里。
+        //
+        // **关键**：`sidebar.panellist` 注册的是**图标**，`main` 注册的才是**面板主体**。
+        // 之前只注册了 panellist，结果整个面板被当成图标塞进侧栏列表里、
+        // 把工作区列表盖住了——这正是用户在截图里看到的那个问题。
         try {
           const Panel = createSidebarPanel(ctx);
           const CogIcon = (props) =>
@@ -2809,20 +2813,15 @@ window.__ModuleLoader__.load({
               h('circle', { cx: 8, cy: 8, r: 1.8, stroke: 'currentColor', strokeWidth: 1.4 }),
               h('path', { d: 'M8 1.4v2.2M8 12.4v2.2M1.4 8h2.2M12.4 8h2.2', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round' }),
             );
-          ctx.slots.inject('sidebar.panellist', () => [
-            ctx.slots.register(
-              { name: 'sidebar.panellist', id: 'cognition-engine', order: 30, label: () => pickDict(ctx).name },
-              Panel,
-            ),
+
+          // 1) 主列面板主体：按 key 注册，key 与侧栏图标 id 相同才会被点开
+          ctx.slots.inject('main', () => [
+            ctx.slots.register({ name: 'main', key: 'cognition-engine', label: () => pickDict(ctx).name }, Panel),
           ]);
-          // 面板图标：slot id 与面板 id 相同即可被侧栏取用；宿主没有这个插槽时静默跳过
-          try {
-            ctx.slots.inject('sidebar.panellist.icon', () => [
-              ctx.slots.register({ name: 'sidebar.panellist.icon', id: 'cognition-engine', order: 30 }, CogIcon),
-            ]);
-          } catch {
-            /* 没有该插槽：用宿主默认字形 */
-          }
+          // 2) 侧栏图标：只放图标，不放整个面板
+          ctx.slots.inject('sidebar.panellist', () => [
+            ctx.slots.register({ name: 'sidebar.panellist', id: 'cognition-engine', order: 30, label: () => pickDict(ctx).name }, CogIcon),
+          ]);
         } catch (error) {
           if (ctx.logger && typeof ctx.logger.warn === 'function') {
             ctx.logger.warn('cognition-engine: 侧边栏面板注册失败，已跳过');
