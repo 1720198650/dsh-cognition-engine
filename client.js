@@ -272,10 +272,14 @@ window.__ModuleLoader__.load({
         display: 'flex',
         flexDirection: 'column',
         gap: 0,
-        height: '100%',
+        // 面板形态用 flex:1 撑满外层（外层是 flex column + height:100%）；
+        // 用 height:100% 在 flex 容器里等于「和父元素一样高」，会把正文区的
+        // flex:1 挤成 0，结果整页不能滚动——这就是记忆页滚不动的原因。
+        flex: '1 1 auto',
         minHeight: 0,
         width: '100%',
         boxSizing: 'border-box',
+        overflow: 'hidden',
       },
       row: {
         display: 'flex',
@@ -357,7 +361,15 @@ window.__ModuleLoader__.load({
         fontFamily: 'inherit',
       },
       // 列表与卡片：面板形态下不再限制高度（整列都能滚），浮层形态保持 280 的帽子
-      list: { padding: '12px 20px 40px', display: 'flex', flexDirection: 'column', gap: 0, maxWidth: 880 },
+      list: {
+        flex: '1 1 auto',
+        minHeight: 0,
+        overflowY: 'auto',
+        padding: '12px 20px 40px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 0,
+      },
       item: {
         padding: '12px 0',
         borderBottom: '1px solid var(--dsw-alias-border-l1)',
@@ -1699,7 +1711,7 @@ window.__ModuleLoader__.load({
           ),
           h(
             'div',
-            { style: isPanel ? { ...S.list, ...PANEL_SCROLL_STYLE, flex: '1 1 auto' } : S.list },
+            { style: isPanel ? { ...S.list, ...PANEL_SCROLL_STYLE, flex: '1 1 auto' } : { ...S.list, maxHeight: 280, overflowY: 'auto' } },
             notice
               ? h(
                   'div',
