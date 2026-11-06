@@ -54,7 +54,9 @@ export interface WouldDo {
     userAction: string;
     /** 用户能得到什么。 */
     benefit: string;
-    status: 'pending' | 'adopted' | 'dismissed';
+    status: 'pending' | 'adopted' | 'dismissed' | 'stale';
+    /** 下线/处理时留下的说明。 */
+    note?: string;
 }
 export interface ProactiveDoc {
     schema: 'cognition.proactive';
@@ -151,6 +153,8 @@ export declare class ProactiveStore {
      * 本身就是最有价值的信息（说明一直没处理）。
      */
     recordScan(source: ScanSource, score: number): WouldDo[];
+    /** 明确清掉某一条目标（任务/缺口/准则）对应的待处理提醒。即时联动用。 */
+    clearByTarget(targetId: string, reason?: string): number;
     /** 当前待处理的 wouldDo（新的在前）。 */
     pending(): WouldDo[];
     /**
@@ -159,7 +163,7 @@ export declare class ProactiveStore {
      * 采纳 = 用户点了「好，我去处理」。这个计数是 P3 的入场券。
      */
     adopt(id: string): boolean;
-    /** 标记不需要（也算一次负样本，用来算采纳率）。 */
+    /** 标记不需要（也算一次负样本，用来算采纳率）。冷却期内不会再提同一件事。 */
     dismiss(id: string): boolean;
     /**
      * 这一轮到底能不能真的发消息。

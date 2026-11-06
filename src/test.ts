@@ -2366,6 +2366,110 @@ async function main(): Promise<void> {
     rmSync(file, { force: true });
   });
 
+  await test('联动：目标消失后待处理提醒自动下线，且不计入采纳率', () => {
+    const file = join(TEST_TMP, 'proactive-link.json');
+    rmSync(file, { force: true });
+    const store = new ProactiveStore({ filePath: file, now: () => 12_000 });
+    const withTask = {
+      dueTasks: [{ id: 't1', description: '整理文档整理', overdueHours: 30 }],
+      gaps: [],
+      brokenRules: [],
+      expiredRules: [],
+    };
+    store.recordScan(withTask, 0.7);
+    assert.equal(store.pending().length, 1);
+
+    // 任务被标记完成 → 下一次扫描时 dueTasks 里没有它 → 该提醒应下线
+    store.recordScan({ dueTasks: [], gaps: [], brokenRules: [], expiredRules: [] }, 0.1);
+    assert.equal(store.pending().length, 0, '目标消失后不该还挂着提醒');
+    // stale 不是「用户不要」，不能进采纳率分母
+    assert.equal(store.adoptionRate(), 0);
+    assert.equal(store.document.stats.dismissed, 0, 'stale 不该记成 dismissed');
+
+    // 任务后来又逾期了 → 应该重新提醒（stale 允许复活）
+    store.recordScan(withTask, 0.7);
+    assert.equal(store.pending().length, 1, '条件再次成立应重新提醒');
+    rmSync(file, { force: true });
+  });
+
+  await test('联动：clearByTarget 能即时清掉某一条的提醒', () => {
+    const file = join(TEST_TMP, 'proactive-clear.json');
+    rmSync(file, { force: true });
+    const store = new ProactiveStore({ filePath: file, now: () => 13_000 });
+    store.recordScan(
+      {
+        dueTasks: [
+          { id: 't1', description: '任务一', overdueHours: 10 },
+          { id: 't2', description: '任务二', overdueHours: 20 },
+        ],
+        gaps: [],
+        brokenRules: [],
+        expiredRules: [],
+      },
+      0.8,
+    );
+    assert.equal(store.pending().length, 2);
+    assert.equal(store.clearByTarget('t1', '任务已完成'), 1);
+    const left = store.pending();
+    assert.equal(left.length, 1);
+    assert.equal(left[0]?.targetId, 't2', '只清指定的那条，不误伤其他');
+    assert.equal(store.clearByTarget('not-exist'), 0);
+    rmSync(file, { force: true });
+  });
+
+  await test('联动：dismiss 只冷却不永久封杀，冷却过后同一件事会再出现', () => {
+    const file = join(TEST_TMP, 'proactive-cooldown.json');
+    rmSync(file, { force: true });
+    const DAY = 24 * 60 * 60 * 1000;
+    let t = 20_000;
+    const store = new ProactiveStore({ filePath: file, now: () => t });
+    const src = {
+      dueTasks: [{ id: 't1', description: '整理文档整理', overdueHours: 30 }],
+      gaps: [],
+      brokenRules: [],
+      expiredRules: [],
+    };
+    store.recordScan(src, 0.7);
+    const first = store.pending()[0]!;
+    assert.equal(store.dismiss(first.id), true);
+    assert.equal(store.pending().length, 0, 'dismiss 后当次不再显示');
+
+    // 冷却期内：条件仍成立，但不重复打扰
+    t += 3 * DAY;
+    store.recordScan(src, 0.7);
+    assert.equal(store.pending().length, 0, '7 天冷却期内不该重复提');
+
+    // 冷却期过后：允许重新出现（关键修复点）
+    t += 5 * DAY;
+    store.recordScan(src, 0.7);
+    assert.equal(store.pending().length, 1, '冷却过后同一件事应重新提醒');
+    rmSync(file, { force: true });
+  });
+
+  await test('任务年龄口径统一：withAge 与 detail 用同一套算法', () => {
+    const file = join(TEST_TMP, 'task-age.json');
+    rmSync(file, { force: true });
+    const HOUR = 60 * 60 * 1000;
+    const now = 1_000 * HOUR;
+    const mgr = new LongHorizonTaskManager({ filePath: file, now: () => now, heartbeatMs: 6 * HOUR });
+    return (async () => {
+      await mgr.load();
+      await mgr.create_task('逾期任务');
+      const created = mgr.all()[0]!;
+      // 把 lastUpdatedAt 推到 31 小时前
+      const raw = { version: 1, tasks: [{ ...created, lastUpdatedAt: now - 31 * HOUR }] };
+      writeFileSync(file, JSON.stringify(raw), 'utf8');
+      const reloaded = new LongHorizonTaskManager({ filePath: file, now: () => now, heartbeatMs: 6 * HOUR });
+      await reloaded.load();
+      const withAge = reloaded.withAge();
+      assert.equal(withAge[0]?.ageMs, 31 * HOUR, 'ageMs 应是真实年龄');
+      assert.equal(withAge[0]?.overdue, true);
+      const due = reloaded.check_due_tasks();
+      assert.equal(due[0]?.overdueMs, 31 * HOUR, 'check_due_tasks 与 withAge 必须一致');
+      rmSync(file, { force: true });
+    })();
+  });
+
   await test('事件日志：追加、seq 连续、重新加载续接', () => {
     const file = resolve('.dsh-events-test.jsonl');
     rmSync(file, { force: true });

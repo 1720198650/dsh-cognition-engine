@@ -35,6 +35,19 @@ export interface DueTask extends LongTask {
     /** 距上次更新已经过去多久（毫秒）。 */
     overdueMs: number;
 }
+/**
+ * 带实时逾期时长的任务视图（`/detail` 与主动扫描共用）。
+ *
+ * 为什么单独一个类型：`LongTask` 本身**不含** `overdueMs`，
+ * 之前 `/detail` 直接把 `LongTask` 序列化出去，前端读到的 `overdueMs` 是 undefined，
+ * 于是「逾期 N 小时」这类文案拿不到真实数字。
+ */
+export interface TaskWithAge extends LongTask {
+    /** 距上次更新过去多久（毫秒）。**所有任务都有**，未逾期的也在里面。 */
+    ageMs: number;
+    /** 是否已经超过心跳阈值。 */
+    overdue: boolean;
+}
 export interface TaskManagerOptions {
     /** tasks.json 的位置，默认 `~/.dsh/cognition-engine/tasks.json`。 */
     filePath?: string;
@@ -83,6 +96,13 @@ export declare class LongHorizonTaskManager {
     /** 全部任务，按创建时间升序。 */
     all(): LongTask[];
     get(id: string): LongTask | undefined;
+    /**
+     * 带实时逾期的任务视图：`/detail` 用它，主动扫描也用它。
+     *
+     * 统一在**一个地方**算 ageMs/overdue，避免「列表页一套算法、扫描器另一套」——
+     * 两套算法迟早会漂，然后就出现「页面说逾期 32 小时、提醒说逾期 29 小时」。
+     */
+    withAge(now?: number): TaskWithAge[];
     /**
      * 长程心跳：供外部定时器调用。
      * 返回「超过 heartbeatMs 没有更新」的未完成任务，用于催办。

@@ -95,8 +95,10 @@ export function buildDetail({ memory, taskManager }: DetailDeps): Record<string,
       revisedAt: fact.revisedAt,
     }));
 
+  // 用 withAge() 统一算逾期：列表页和主动扫描必须同一个口径，
+  // 否则会出现「页面说 32 小时、提醒说 29 小时」这种自相矛盾。
   const tasks = taskManager
-    .all()
+    .withAge(now)
     .slice()
     .sort((a, b) => {
       const rank = (status: string): number => (status === 'COMPLETED' ? 2 : status === 'IN_PROGRESS' ? 0 : 1);
@@ -108,7 +110,8 @@ export function buildDetail({ memory, taskManager }: DetailDeps): Record<string,
       status: task.status,
       createdAt: task.createdAt,
       lastUpdatedAt: task.lastUpdatedAt,
-      overdueMs: Math.max(0, now - task.lastUpdatedAt),
+      overdueMs: task.ageMs,
+      overdue: task.overdue,
       context: task.context.slice(-5),
     }));
 

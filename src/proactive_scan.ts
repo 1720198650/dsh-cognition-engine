@@ -63,7 +63,9 @@ export interface WouldDo {
   userAction: string;
   /** 用户能得到什么。 */
   benefit: string;
-  status: 'pending' | 'adopted' | 'dismissed';
+  status: 'pending' | 'adopted' | 'dismissed' | 'stale';
+  /** 下线/处理时留下的说明。 */
+  note?: string;
 }
 
 export interface ProactiveDoc {
@@ -122,8 +124,7 @@ export function scoreScan(input: ScanInput): { score: number; logit: number; par
 
 /** 供 scan 生成 wouldDo 的原始条目（由调用方从各存储里取）。 */
 export interface ScanSource {
-  dueTasks: Array<{ id: string; description: string; overdueHours: number }>;
-  gaps: Array<{ id: string; text: string }>;
+  dueTasks: Array<{ id: string; description: string; overdueHours: number }>;  gaps: Array<{ id: string; text: string }>;
   brokenRules: Array<{ id: string; content: string }>;
   expiredRules: Array<{ id: string; content: string }>;
 }
@@ -179,6 +180,8 @@ export function buildWouldDo(source: ScanSource, score: number): Array<Omit<Woul
 }
 
 const DEFAULT_PHASE: ProactivePhase = 'P1';
+/** dismissed 之后的冷却期：这段时间内不再提同一件事（默认 7 天）。 */
+const DISMISS_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 /** P3 的开门条件：样本够 + 采纳率高。 */
 const P3_MIN_SAMPLES = 20;
 const P3_MIN_ADOPTION = 0.7;
@@ -318,9 +321,16 @@ export class ProactiveStore {
         touched.push(existing);
         continue;
       }
-      // 已处理过的同一件事不再复活（否则「忽略」等于没忽略）
-      const handled = this.doc.items.find((item) => item.key === draft.key && item.status !== 'pending');
+      // 「已处理」只挡 `adopted`（用户真去做了），**不挡 dismissed**——
+      // dismissed 的意思是「这一次先不处理」，不是「以后别再提」。
+      // 上一版把两者都当成永久封杀，结果一次误点就让提醒永不再现。
+      const handled = this.doc.items.find((item) => item.key === draft.key && item.status === 'adopted');
       if (handled !== undefined) continue;
+      // dismissed 带冷却：冷却期内不重提，免得每轮扫描都烦一次；过了冷却才允许再出现。
+      const dismissed = this.doc.items
+        .filter((item) => item.key === draft.key && item.status === 'dismissed')
+        .sort((a, b) => b.lastSeenAt - a.lastSeenAt)[0];
+      if (dismissed !== undefined && this.clock() - dismissed.lastSeenAt < DISMISS_COOLDOWN_MS) continue;
       const item: WouldDo = {
         id: `wd-${randomUUID().slice(0, 8)}`,
         ...draft,
@@ -333,8 +343,44 @@ export class ProactiveStore {
       touched.push(item);
     }
     this.doc.items = this.doc.items.slice(-this.keep);
+    this.#reconcile(touched);
     this.#save();
     return touched;
+  }
+
+  /**
+   * 联动清理：条件已经不成立的待处理项自动下线。
+   *
+   * 这是「任务做完了但提醒还在」的修法。触发场景：
+   *   - 待办被标记完成 → 不再出现在 dueTasks；
+   *   - 缺口被解决 → 不再出现在 gaps；
+   *   - 准则被修复/停用 → 不再出现在 broken/expired 列表。
+   *
+   * 标 `stale` 而不是 `dismissed`：它既不是「用户采纳」也不是「用户不要」，
+   * 只是「事情已经不存在了」，不能算进采纳率的分母。
+   */
+  #reconcile(touched: readonly WouldDo[]): void {
+    const alive = new Set(touched.map((item) => item.key));
+    for (const item of this.doc.items) {
+      if (item.status !== 'pending') continue;
+      if (alive.has(item.key)) continue;
+      item.status = 'stale';
+    }
+  }
+
+  /** 明确清掉某一条目标（任务/缺口/准则）对应的待处理提醒。即时联动用。 */
+  clearByTarget(targetId: string, reason = '目标已处理'): number {
+    this.loadSync();
+    let cleared = 0;
+    for (const item of this.doc.items) {
+      if (item.status !== 'pending' || item.targetId !== targetId) continue;
+      item.status = 'stale';
+      item.lastSeenAt = this.clock();
+      if (item.note === undefined) item.note = reason;
+      cleared += 1;
+    }
+    if (cleared > 0) this.#save();
+    return cleared;
   }
 
   /** 当前待处理的 wouldDo（新的在前）。 */
@@ -358,12 +404,13 @@ export class ProactiveStore {
     return true;
   }
 
-  /** 标记不需要（也算一次负样本，用来算采纳率）。 */
+  /** 标记不需要（也算一次负样本，用来算采纳率）。冷却期内不会再提同一件事。 */
   dismiss(id: string): boolean {
     this.loadSync();
     const item = this.doc.items.find((entry) => entry.id === id);
     if (item === undefined || item.status !== 'pending') return false;
     item.status = 'dismissed';
+    item.lastSeenAt = this.clock();
     this.doc.stats.dismissed += 1;
     this.#save();
     return true;

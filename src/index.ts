@@ -1148,11 +1148,16 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
    * 一旦掺进 LLM，光是「观察」就变成持续烧 token。
    */
   const collectScanSource = (): ScanSource => {
-    const due = taskManager.check_due_tasks().map((task) => ({
-      id: task.id,
-      description: task.description,
-      overdueHours: Math.max(0, Math.round(task.overdueMs / 3_600_000)),
-    }));
+    // 用 withAge() 而不是 check_due_tasks()：后者的 overdueMs 只对**逾期**任务有意义，
+    // 这里要的是「所有未完成任务的真实年龄」，口径和 /detail 完全一致。
+    const due = taskManager
+      .withAge()
+      .filter((task) => task.status !== 'COMPLETED' && task.overdue)
+      .map((task) => ({
+        id: task.id,
+        description: task.description,
+        overdueHours: Math.max(0, Math.round(task.ageMs / 3_600_000)),
+      }));
     const openGaps = gaps.open().map((gap) => ({ id: gap.id, text: gap.text }));
     const active = playbook.all().filter((entry) => entry.status === 'active');
     const brokenRules = active
@@ -1275,7 +1280,11 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       (url) => {
         const id = url.searchParams.get('id') ?? '';
         const ok = gaps.resolve(id, url.searchParams.get('by') ?? '人工确认');
-        if (ok) gaps.flush();
+        if (ok) {
+          gaps.flush();
+          // 联动：缺口解决了，相关提醒立刻下线
+          proactiveStore.clearByTarget(id, '缺口已补齐');
+        }
         return { id, ok };
       },
       { method: 'POST' },
@@ -1419,6 +1428,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         const id = url.searchParams.get('id') ?? '';
         const ok = await taskManager.delete_task(id);
         if (!ok) throw new Error('任务不存在');
+        proactiveStore.clearByTarget(id, '任务已删除');
         return { id, deleted: true };
       },
       { method: 'POST', requireAuth: explicitLock },
@@ -1440,7 +1450,10 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           status,
           clue === null || clue.trim().length === 0 ? undefined : clue.trim(),
         );
-        return { task };
+        // 联动：任务状态一变（尤其标记完成），立刻清掉它的待处理提醒。
+        // 不这么做就会出现「任务早做完了，提醒还挂着」——用户会以为系统没在看。
+        const cleared = proactiveStore.clearByTarget(id, status === 'COMPLETED' ? '任务已完成' : '任务状态已更新');
+        return { task, clearedReminders: cleared };
       },
       { method: 'POST', requireAuth: explicitLock },
     );
@@ -1454,6 +1467,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         const ok = restore ? memory.restoreDeleted(id) : memory.softDelete(id);
         if (!ok) throw new Error(restore ? '没有可恢复的记忆' : '记忆不存在');
         refreshEvidence();
+        // 联动：准则的证据链可能因此断裂 → 相关提醒要重算；已恢复则清掉旧的
+        if (restore) proactiveStore.clearByTarget(id, '记忆已恢复');
         void stateStore.flush();
         return { id, deleted: !restore };
       },
@@ -1755,18 +1770,27 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           case 'reject': ok = playbook.reject(id); break;
           case 'retire':
             ok = playbook.retire(id, '手动停用');
-            if (ok) ruleEvents.append({ type: 'RuleRetired', ruleId: id, reason: '手动停用', by: 'user' });
+            if (ok) {
+              ruleEvents.append({ type: 'RuleRetired', ruleId: id, reason: '手动停用', by: 'user' });
+              // 停用后这条不再参与注入，关于它的提醒也就没意义了
+              proactiveStore.clearByTarget(id, '准则已停用');
+            }
             break;
           case 'revive': ok = playbook.revive(id); break;
           case 'revise': {
-            ok = playbook.revise(id, url.searchParams.get('content') ?? '');
+            const nextContent = url.searchParams.get('content') ?? '';
+            ok = playbook.revise(id, nextContent);
             // 修旧也占名额（但不拦：改错比不改好）
-            if (ok) budget.consume('revise');
+            if (ok) {
+              budget.consume('revise');
+              proactiveStore.clearByTarget(id, '准则已修订');
+            }
             break;
           }
           case 'extend': {
             const raw = url.searchParams.get('validTo');
             ok = playbook.extend(id, raw === null ? null : (parseMoment(raw) ?? null));
+            if (ok) proactiveStore.clearByTarget(id, '准则已续期');
             break;
           }
           case 'helpful': ok = playbook.mark(id, 'helpful'); break;
@@ -1774,7 +1798,10 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           // 永久删除（任意状态）。停用只是不注入，删除是当它没存在过。
           case 'delete':
             ok = playbook.remove(id);
-            if (ok) ruleEvents.append({ type: 'RuleRetired', ruleId: id, reason: '人工删除', by: 'user' });
+            if (ok) {
+              ruleEvents.append({ type: 'RuleRetired', ruleId: id, reason: '人工删除', by: 'user' });
+              proactiveStore.clearByTarget(id, '准则已删除');
+            }
             break;
           // 人工标记冲突对：自动检测不可靠时用这个
           case 'markConflict': {
