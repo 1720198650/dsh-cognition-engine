@@ -271,12 +271,9 @@ window.__ModuleLoader__.load({
       panelRoot: {
         display: 'flex',
         flexDirection: 'column',
-        gap: 12,
-        padding: '20px 24px',
+        gap: 0,
         height: '100%',
-        overflowY: 'auto',
-        maxWidth: 900,
-        margin: '0 auto',
+        minHeight: 0,
         width: '100%',
         boxSizing: 'border-box',
       },
@@ -320,72 +317,101 @@ window.__ModuleLoader__.load({
       tabs: {
         display: 'flex',
         alignItems: 'center',
-        gap: 4,
-        padding: '6px 8px',
+        gap: 2,
+        padding: '10px 16px 0',
         borderBottom: '1px solid var(--dsw-alias-border-l1)',
+        flexWrap: 'wrap',
       },
       tab: {
         border: 'none',
         background: 'transparent',
         color: 'var(--dsw-alias-label-secondary)',
-        fontSize: 11,
-        padding: '3px 8px',
-        borderRadius: 6,
+        fontSize: 13,
+        lineHeight: '20px',
+        padding: '6px 12px',
+        borderRadius: '6px 6px 0 0',
         cursor: 'pointer',
+        fontFamily: 'inherit',
+        // 未选中页签下面留一条透明边，选中时换成品牌色，避免整体跳动
+        borderBottom: '2px solid transparent',
+        marginBottom: -1,
+        transition: 'color 0.16s ease, border-color 0.16s ease',
       },
       tabActive: {
-        background: 'var(--dsw-alias-bg-layer-2)',
+        background: 'transparent',
         color: 'var(--dsw-alias-label-primary)',
         fontWeight: 600,
+        borderBottom: '2px solid var(--dsw-alias-brand-primary)',
       },
       action: {
         marginLeft: 'auto',
-        border: 'none',
+        border: '1px solid var(--dsw-alias-border-l1)',
         background: 'transparent',
         color: 'var(--dsw-alias-label-secondary)',
-        fontSize: 11,
+        fontSize: 12,
         cursor: 'pointer',
-        padding: '3px 6px',
+        padding: '3px 10px',
         borderRadius: 6,
+        fontFamily: 'inherit',
       },
-      list: { maxHeight: 280, overflowY: 'auto', padding: '2px 0' },
+      // 列表与卡片：面板形态下不再限制高度（整列都能滚），浮层形态保持 280 的帽子
+      list: { padding: '10px 16px 32px', display: 'flex', flexDirection: 'column', gap: 8 },
       item: {
-        padding: '6px 10px',
-        borderBottom: '1px solid var(--dsw-alias-border-l1)',
+        padding: '10px 12px',
+        borderRadius: 8,
+        border: '1px solid var(--dsw-alias-border-l1)',
+        background: 'var(--dsw-alias-bg-layer-1)',
         display: 'flex',
         flexDirection: 'column',
-        gap: 3,
+        gap: 6,
       },
       itemTitle: {
         color: 'var(--dsw-alias-label-primary)',
-        fontSize: 11.5,
-        lineHeight: '16px',
+        fontSize: 13,
+        lineHeight: '20px',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         display: '-webkit-box',
         WebkitLineClamp: 2,
         WebkitBoxOrient: 'vertical',
       },
-      meta: { fontSize: 10.5, opacity: 0.75, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
-      explain: { fontSize: 10.5, opacity: 0.82, lineHeight: '15px', whiteSpace: 'normal' },
+      meta: {
+        fontSize: 11,
+        color: 'var(--dsw-alias-label-secondary)',
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 8,
+        alignItems: 'center',
+        fontVariantNumeric: 'tabular-nums',
+      },
+      explain: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', lineHeight: '18px', whiteSpace: 'normal' },
       chip: {
         display: 'inline-block',
-        padding: '0 6px',
+        padding: '0 7px',
         borderRadius: 999,
-        border: '1px solid currentColor',
-        fontSize: 10,
-        lineHeight: '15px',
+        border: '1px solid var(--dsw-alias-border-l2)',
+        color: 'var(--dsw-alias-label-secondary)',
+        fontSize: 11,
+        lineHeight: '18px',
+        fontVariantNumeric: 'tabular-nums',
       },
-      clue: { fontSize: 10.5, opacity: 0.8, paddingLeft: 8, borderLeft: '2px solid var(--dsw-alias-border-l2)' },
-      empty: { padding: '14px 10px', textAlign: 'center', opacity: 0.7 },
+      clue: {
+        fontSize: 11,
+        color: 'var(--dsw-alias-label-secondary)',
+        paddingLeft: 10,
+        borderLeft: '2px solid var(--dsw-alias-border-l2)',
+        lineHeight: '18px',
+      },
+      empty: { padding: '24px 12px', textAlign: 'center', color: 'var(--dsw-alias-label-secondary)', fontSize: 12 },
       input: {
         background: 'var(--dsw-alias-bg-layer-2)',
         border: '1px solid var(--dsw-alias-border-l1)',
         color: 'var(--dsw-alias-label-primary)',
         borderRadius: 6,
-        fontSize: 11,
-        padding: '2px 6px',
-        width: 130,
+        fontSize: 12,
+        padding: '4px 8px',
+        width: 160,
+        fontFamily: 'inherit',
       },
     };
 
@@ -843,10 +869,11 @@ window.__ModuleLoader__.load({
         if (!isPanel && !open) return h('div', { style: rootStyle }, row);
 
         const tabs = [
-          // 「状态」页签已移除：三个数字与页签标签重复，没有信息量
-          ['memories', `${dict.memories} ${detail ? detail.memories.length : ''}`.trim()],
-          ['schemas', `${dict.schemas} ${topicsData && topicsData.stats ? topicsData.stats.active : 0}`.trim()],
-          ['playbook', `${dict.playbookTab}${detail && detail.playbook ? ' ' + detail.playbook.active : ''}`.trim()],
+          // 页签文案不带计数（原来「记忆 21」这类数字让一行晃来晃去）；
+          // 计数放到每个页签自己的正文顶部，视觉上更稳。
+          ['memories', dict.memories],
+          ['schemas', dict.schemas],
+          ['playbook', dict.playbookTab],
           ['persona', dict.personaTab],
           ['learning', dict.learnTab],
           ['settings', dict.settings],
@@ -1596,6 +1623,27 @@ window.__ModuleLoader__.load({
             style: opts.variant === 'wide' ? S.widePanel : S.panel,
             ...(opts.variant === 'wide' ? {} : { role: 'dialog', 'aria-label': dict.name }),
           },
+          // 页签栏上方的标题区：面板形态给一个明确的页面标题，浮层形态不需要
+          isPanel
+            ? h(
+                'div',
+                {
+                  style: {
+                    display: 'flex',
+                    alignItems: 'baseline',
+                    gap: 10,
+                    padding: '22px 16px 12px',
+                    borderBottom: 'none',
+                  },
+                },
+                h('h2', {
+                  style: { margin: 0, fontSize: 18, fontWeight: 600, lineHeight: '26px', color: 'var(--dsw-alias-label-primary)' },
+                }, dict.name),
+                h('span', {
+                  style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', fontVariantNumeric: 'tabular-nums' },
+                }, `记忆 ${memoryCount} · 主题 ${schemaCount} · 准则 ${playbookCount} · 任务 ${taskCount}`),
+              )
+            : null,
           h(
             'div',
             { style: S.tabs },
@@ -1641,7 +1689,7 @@ window.__ModuleLoader__.load({
           ),
           h(
             'div',
-            { style: S.list },
+            { style: isPanel ? { ...S.list, ...PANEL_SCROLL_STYLE, flex: '1 1 auto' } : S.list },
             notice
               ? h(
                   'div',
@@ -1724,6 +1772,14 @@ window.__ModuleLoader__.load({
       background: 'var(--dsw-alias-bg-base)',
       color: 'var(--dsw-alias-label-primary)',
       fontSize: 13,
+    };
+
+    /** 面板里可滚动的正文区（页签栏固定、正文独立滚动）。 */
+    const PANEL_SCROLL_STYLE = {
+      flex: '1 1 auto',
+      minHeight: 0,
+      overflowY: 'auto',
+      scrollbarGutter: 'stable',
     };
 
     /* ---------------- 人格页面（settings.section） ---------------- */
