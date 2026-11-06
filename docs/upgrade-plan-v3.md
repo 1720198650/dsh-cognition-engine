@@ -372,6 +372,34 @@ cognition-playbook.json           ← 主存储（不变）
 `propose → confirm（revision 2）→ undo（revision 3，内容回到原文）`，
 并确认 `traits` / `interactionStyle` / `slots` / `facts` 的 key 全都**没有**出现在注入段里。
 
+### 4.8 页面（2026-11-06）
+
+人格不再是「只能改 JSON 文件」——设置里多了一整页：**设置 → 人格**（`settings.section`，
+`id: cognition-persona`，`order: 45`），侧栏图标用一个人形轮廓。
+
+| 能力 | 说明 |
+|---|---|
+| 首次启用 | 没有人格文件时给一份**骨架**（尖括号占位，不是成品人格），改完点「创建人格」 |
+| 编辑 | 人格 / 用户画像两个多行编辑器，实时显示 `已用 / 预算`，超预算禁用保存 |
+| 保存 | 一次点击 = `propose(by=user)` + `confirm`，走同一套闸门：删掉锁定边界会被拒，理由直接显示在页面上 |
+| 撤销 | 「撤销最近一次改动」，按 `before` 快照退一格 |
+| 待确认 | agent 提的提案列在下面，可确认或放弃（`human` 块的提案 agent 根本提不出来） |
+| 预览 | 可展开「实际注入内容」，看到的就是模型看到的那段 |
+| 审计 | 折叠区显示 `traits / interactionStyle / slots / facts`，**只读、不注入** |
+
+**技术要点（下次做 UI 可复用）**：
+- 整页入口是 `settings.section`（list 槽，注册项 `id/order/label`），图标是 `settings.section.icon`，
+  **两者的 id 必须一致**，否则图标不渲染。
+- 纯 JS 的 `client.js` 改完**不用重启、也不用刷新页面**：`dsh-client-hmr` 每 500ms stat 轮询
+  bundle 的 mtime/ctime/size，变了就 `clientModules.rebuilt(id)` 并通过 `/plugins/events` SSE 推给浏览器。
+  这次改完几秒内 `settings.section` 的 occupants 里就出现了 `cognition-persona`。
+- 页面里的文案不写死中文：用 `ctx.locale.getLocale()` 判语言，`label` 传 thunk 让宿主每次投影重读。
+
+**验证**：真机 `/plugins/events` 在（SSE 挂载中）；`Slots.listSubTree settings.section`
+的 occupants 出现 `{id: cognition-persona, order: 45, active: true}`；`settings.section.icon` 同 id 也在。
+接口侧：`create → present=true, lockedPhrases 自动从「边界：」行派生出 2 条 → 删边界的提案被 confirm 拒绝 →
+删除文件并重载后 present=false`。测试 114 → 120 条。
+
 **启用方式**：把 `docs/persona/cognition-persona.example.json` 拷到
 `~/.dsh/cognition-engine/cognition-persona.json` 即可，无需改配置；
 `personaEnabled: false` 可临时关掉注入但保留文件。

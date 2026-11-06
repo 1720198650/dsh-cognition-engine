@@ -15,7 +15,7 @@
 |---|---|---|
 | **S1** | 真实反馈回路（注入快照 + 纠正/确认识别 + 自动打标） | ✅ 已实现，**v2 重做**（见下） |
 | **S2** | 准则事件日志（8 种事件，轻量事件溯源） | ✅ 已实现 |
-| **S3** | 轻人格块（persona/human 两块 + propose→confirm 闸门 + 预算截断） | ✅ 已实现，**默认关闭**（无人格文件就不占 token） |
+| **S3** | 轻人格块（persona/human 两块 + propose→confirm 闸门 + 预算截断） | ✅ 已实现，**默认关闭**（无人格文件就不占 token）；**设置里有整页 UI** |
 | **M1** | 反馈闭环里程碑 | ✅ 达成 |
 
 ### 2026-11-06 真实数据核对（S1/S2 冻结验证）
@@ -152,11 +152,12 @@ Invoke-WebRequest "http://127.0.0.1:3111/cognition-engine/events" -UseBasicParsi
 样本没到 60 轮 / 6000 字之前它只会回 `insufficient` —— 这不是坏了，是拒绝给假分数。
 等样本够了先 `POST /cognition-engine/style/baseline` 冻结基线，之后才谈「有没有漂」。
 
-**要用人格块**：把 `docs/persona/cognition-persona.example.json` 拷到
-`~/.dsh/cognition-engine/cognition-persona.json`，然后
-`POST /cognition-engine/persona/propose?label=persona&value=...` 提改动、
-`POST /cognition-engine/persona/confirm?id=...` 确认。改完 `GET /persona` 能看到渲染结果，
-`GET /state` 的 `persona.chars` 是实际注入的字符数。
+**要用人格块**：打开 **设置 → 人格**（`settings.section`，id `cognition-persona`）。
+页面上能编辑人格与用户画像、创建/保存/撤销、确认 agent 提案、预览实际注入内容。
+也可以走接口：
+`POST /cognition-engine/persona/create?persona=...&human=...`（首次）、
+`POST /persona/propose?label=persona&value=...` + `POST /persona/confirm?id=...`、
+`POST /persona/undo`；`GET /persona` 看渲染结果，`GET /state` 的 `persona.chars` 是实际注入字符数。
 
 **建议**：先观察 2–3 天。如果记忆条数确实不涨，**「会话摘要 → 候选提取」的优先级应该高于 S3**——
 因为那是「记得住」的地基，而 S3 是「说得像」。

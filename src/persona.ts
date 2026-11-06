@@ -490,6 +490,56 @@ export class PersonaStore {
     this.#saveDocument();
   }
 
+  /**
+   * 从零创建人格文件（**只能由用户侧调用**）。
+   *
+   * 已存在时拒绝——创建不该变成「覆盖旧人格」的后门。
+   * `lockedPhrases` 从 `边界：a；b；c。` 这一行自动派生：
+   * 用户亲手写下的边界，本来就是他最想守住的东西，创建时就该被锁住。
+   */
+  create(input: { persona: string; human: string }): { ok: boolean; reason?: string; revision?: number } {
+    this.loadSync();
+    if (this.doc !== undefined) return { ok: false, reason: '人格文件已存在，请用编辑保存，不要覆盖重建' };
+    const personaValue = input.persona.trim();
+    const humanValue = input.human.trim();
+    if (personaValue.length === 0) return { ok: false, reason: '人格内容不能为空' };
+    if (personaValue.length > DEFAULT_BUDGET.persona) return { ok: false, reason: `人格超出预算 ${personaValue.length}/${DEFAULT_BUDGET.persona}` };
+    if (humanValue.length > DEFAULT_BUDGET.human) return { ok: false, reason: `用户画像超出预算 ${humanValue.length}/${DEFAULT_BUDGET.human}` };
+    const now = this.clock();
+    const doc: PersonaDocument = {
+      schema: 'cognition.persona',
+      version: 1,
+      revision: 1,
+      updatedAt: now,
+      budget: { ...DEFAULT_BUDGET },
+      blocks: {
+        persona: {
+          label: 'persona',
+          displayName: '人格',
+          limit: DEFAULT_BUDGET.persona,
+          readOnly: false,
+          value: personaValue,
+          lockedPhrases: deriveLockedPhrases(personaValue),
+          history: [{ at: now, by: 'user', op: 'create', afterHash: hashText(personaValue) }],
+        },
+        human: {
+          label: 'human',
+          limit: DEFAULT_BUDGET.human,
+          readOnly: false,
+          value: humanValue,
+          history: [{ at: now, by: 'user', op: 'create', afterHash: hashText(humanValue) }],
+        },
+      },
+    };
+    this.doc = doc;
+    this.loaded = true;
+    if (!this.#saveDocument()) {
+      this.doc = undefined;
+      return { ok: false, reason: `写入失败：${this.lastSaveError ?? '未知错误'}` };
+    }
+    return { ok: true, revision: 1 };
+  }
+
   /** 最近一次落盘失败的原因（null = 一切正常）。页面与路由用它暴露「改了但没存下」。 */
   get lastSaveError(): string | undefined {
     return this.saveError;
@@ -520,8 +570,27 @@ export class PersonaStore {
   }
 }
 
+/**
+ * 从 `边界：a；b；c。` 这一行派生锁定短语。
+ *
+ * 用户亲手写下的边界就是他最想守住的约束，创建时自动锁住，
+ * 之后任何提案想删掉它都会被 confirm 拒绝。找不到边界行就返回空数组
+ * （不强行猜，也不假装有保护）。
+ */
+export function deriveLockedPhrases(value: string): string[] {
+  const line = value.split(/\r?\n/).find((item) => /^\s*边界[:：]/.test(item));
+  if (line === undefined) return [];
+  const body = line.replace(/^\s*边界[:：]\s*/, '').replace(/[。.]\s*$/, '');
+  return body
+    .split(/[；;、]/)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 2 && item.length <= 30)
+    .slice(0, 5);
+}
+
 /** 按字符截断，尽量停在换行边界，末尾加省略号。 */
-function clip(text: string, limit: number): string {  if (limit <= 0) return '';
+function clip(text: string, limit: number): string {
+  if (limit <= 0) return '';
   if (text.length <= limit) return text;
   const head = text.slice(0, Math.max(0, limit - 1));
   const cut = head.lastIndexOf('\n');

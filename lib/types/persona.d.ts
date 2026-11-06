@@ -183,6 +183,29 @@ export declare class PersonaStore {
     reject(id: string): boolean;
     /** 直接用文件内容覆盖（迁移/初始化用；不经过提案，调用方必须是用户侧入口）。 */
     replaceDocument(doc: PersonaDocument): void;
+    /**
+     * 从零创建人格文件（**只能由用户侧调用**）。
+     *
+     * 已存在时拒绝——创建不该变成「覆盖旧人格」的后门。
+     * `lockedPhrases` 从 `边界：a；b；c。` 这一行自动派生：
+     * 用户亲手写下的边界，本来就是他最想守住的东西，创建时就该被锁住。
+     */
+    create(input: {
+        persona: string;
+        human: string;
+    }): {
+        ok: boolean;
+        reason?: string;
+        revision?: number;
+    };
     /** 最近一次落盘失败的原因（null = 一切正常）。页面与路由用它暴露「改了但没存下」。 */
     get lastSaveError(): string | undefined;
 }
+/**
+ * 从 `边界：a；b；c。` 这一行派生锁定短语。
+ *
+ * 用户亲手写下的边界就是他最想守住的约束，创建时自动锁住，
+ * 之后任何提案想删掉它都会被 confirm 拒绝。找不到边界行就返回空数组
+ * （不强行猜，也不假装有保护）。
+ */
+export declare function deriveLockedPhrases(value: string): string[];

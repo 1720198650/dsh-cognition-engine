@@ -1667,6 +1667,497 @@ window.__ModuleLoader__.load({
       };
     }
 
+    /* ---------------- 人格页面（settings.section） ---------------- */
+
+    const PERSONA_TEXT = {
+      zh: {
+        nav: '人格',
+        title: '人格',
+        subtitle: '决定它「是谁」。保存立即生效，每次改动都留快照、可撤销。',
+        loading: '加载中…',
+        absent: '还没有人格文件',
+        absentHint:
+          '下面是一份骨架：把尖括号里的内容改成你自己的，再点创建。创建后这段文字会每轮注入系统提示（约 200–600 字，占预算很小）。',
+        personaBlock: '人格（它是什么助手）',
+        humanBlock: '用户画像（你是谁）',
+        create: '创建人格',
+        save: '保存并生效',
+        undo: '撤销最近一次改动',
+        preview: '实际注入内容',
+        showPreview: '展开预览',
+        hidePreview: '收起预览',
+        pending: '待确认的提案',
+        confirm: '确认生效',
+        reject: '放弃',
+        noPending: '没有待确认的提案',
+        locked: '锁定边界',
+        readonly: '只读',
+        audit: '审计信息（不注入上下文）',
+        saveError: '上次写入失败',
+        created: '已创建',
+        saved: '已保存',
+        undone: '已撤销',
+        failed: '操作失败',
+        insufficient: '没有人格文件，页面处于未启用状态',
+        chars: '字',
+        rev: '版本',
+        budget: '注入预算',
+      },
+      en: {
+        nav: 'Persona',
+        title: 'Persona',
+        subtitle: 'Decides "who it is". Saving applies immediately; every change keeps a snapshot and can be undone.',
+        loading: 'Loading…',
+        absent: 'No persona file yet',
+        absentHint:
+          'A skeleton is pre-filled below. Replace the bracketed text, then create it. The text is injected into the system prompt every turn (about 200–600 chars).',
+        personaBlock: 'Persona (who the assistant is)',
+        humanBlock: 'User profile (who you are)',
+        create: 'Create persona',
+        save: 'Save & apply',
+        undo: 'Undo last change',
+        preview: 'Actually injected text',
+        showPreview: 'Show preview',
+        hidePreview: 'Hide preview',
+        pending: 'Pending proposals',
+        confirm: 'Confirm',
+        reject: 'Discard',
+        noPending: 'No pending proposals',
+        locked: 'Locked boundaries',
+        readonly: 'read-only',
+        audit: 'Audit (not injected)',
+        saveError: 'Last write failed',
+        created: 'Created',
+        saved: 'Saved',
+        undone: 'Undone',
+        failed: 'Failed',
+        insufficient: 'No persona file; the feature is inactive',
+        chars: 'chars',
+        rev: 'revision',
+        budget: 'injection budget',
+      },
+    };
+
+    function personaText(ctx) {
+      let id = 'zh';
+      try {
+        const snap = ctx && ctx.locale && typeof ctx.locale.getLocale === 'function' ? ctx.locale.getLocale() : null;
+        id = (snap && (snap.id || snap.locale || snap.language)) || 'zh';
+      } catch {
+        id = 'zh';
+      }
+      return String(id).toLowerCase().startsWith('en') ? PERSONA_TEXT.en : PERSONA_TEXT.zh;
+    }
+
+    const PS = {
+      page: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+        padding: '20px 24px 40px',
+        maxWidth: 860,
+        width: '100%',
+        boxSizing: 'border-box',
+        color: 'var(--dsw-alias-label-primary)',
+      },
+      title: { fontSize: 18, fontWeight: 600, margin: 0 },
+      sub: { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-secondary)', margin: 0 },
+      card: {
+        border: '1px solid var(--dsw-alias-border-l1)',
+        borderRadius: 12,
+        background: 'var(--dsw-alias-bg-layer-1)',
+        padding: '14px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+      },
+      blockHead: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
+      label: { fontSize: 13, fontWeight: 600 },
+      counter: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)', fontVariantNumeric: 'tabular-nums' },
+      counterOver: { fontSize: 11, color: 'var(--dsw-alias-state-error-primary)', fontVariantNumeric: 'tabular-nums' },
+      ta: {
+        width: '100%',
+        minHeight: 108,
+        resize: 'vertical',
+        boxSizing: 'border-box',
+        padding: '10px 12px',
+        borderRadius: 8,
+        border: '1px solid var(--dsw-alias-border-l1)',
+        background: 'var(--dsw-alias-bg-layer-2)',
+        color: 'var(--dsw-alias-label-primary)',
+        fontFamily: 'inherit',
+        fontSize: 13,
+        lineHeight: 1.65,
+      },
+      rowFlex: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+      btn: {
+        padding: '6px 14px',
+        borderRadius: 8,
+        border: '1px solid var(--dsw-alias-border-l1)',
+        background: 'var(--dsw-alias-bg-layer-2)',
+        color: 'var(--dsw-alias-label-primary)',
+        cursor: 'pointer',
+        fontSize: 12,
+        fontFamily: 'inherit',
+      },
+      primary: {
+        padding: '6px 14px',
+        borderRadius: 8,
+        border: '1px solid transparent',
+        background: 'var(--dsw-alias-brand-primary)',
+        color: '#fff',
+        cursor: 'pointer',
+        fontSize: 12,
+        fontFamily: 'inherit',
+      },
+      btnDisabled: { opacity: 0.5, cursor: 'default' },
+      chip: {
+        fontSize: 11,
+        padding: '2px 8px',
+        borderRadius: 999,
+        background: 'var(--dsw-alias-bg-layer-2)',
+        color: 'var(--dsw-alias-label-secondary)',
+        border: '1px solid var(--dsw-alias-border-l1)',
+      },
+      pre: {
+        margin: 0,
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        fontSize: 12,
+        lineHeight: 1.65,
+        color: 'var(--dsw-alias-label-secondary)',
+        background: 'var(--dsw-alias-bg-layer-2)',
+        padding: '10px 12px',
+        borderRadius: 8,
+      },
+      meta: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)', display: 'flex', gap: 14, flexWrap: 'wrap' },
+      err: { fontSize: 12, color: 'var(--dsw-alias-state-error-primary)' },
+      ok: { fontSize: 12, color: 'var(--dsw-alias-state-success-primary)' },
+      hint: { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-secondary)' },
+    };
+
+    const PERSONA_DEFAULT_PERSONA = [
+      '我是<一句话：你希望它是什么身份的助手>。',
+      '风格：当<某场景>时<怎么做>；当<另一场景>时<怎么做>；当没把握时直接说「没把握」。',
+      '价值观：<更重要的>优先于<次要的>。',
+      '边界：不编造事实；不替你做出不可逆的决定。',
+    ].join('\n');
+    const PERSONA_DEFAULT_HUMAN = '做<你的行业>，中文为主；<你的偏好>。';
+
+    function createPersonaPage(ctx) {
+      return function PersonaPage() {
+        const dict = personaText(ctx);
+        const [data, setData] = React.useState(null);
+        const [error, setError] = React.useState(null);
+        const [busy, setBusy] = React.useState(false);
+        const [notice, setNotice] = React.useState(null);
+        const [personaDraft, setPersonaDraft] = React.useState(null);
+        const [humanDraft, setHumanDraft] = React.useState(null);
+        const [showPreview, setShowPreview] = React.useState(false);
+
+        const reload = React.useCallback(async () => {
+          try {
+            const res = await fetch('/cognition-engine/persona', { cache: 'no-store' });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const json = await res.json();
+            setData(json);
+            setError(null);
+            if (json.present && json.blocks) {
+              setPersonaDraft((prev) => (prev === null ? json.blocks.persona.value : prev));
+              setHumanDraft((prev) => (prev === null ? json.blocks.human.value : prev));
+            } else {
+              setPersonaDraft((prev) => (prev === null ? PERSONA_DEFAULT_PERSONA : prev));
+              setHumanDraft((prev) => (prev === null ? PERSONA_DEFAULT_HUMAN : prev));
+            }
+          } catch (e) {
+            setError(e && e.message ? e.message : String(e));
+          }
+        }, []);
+
+        React.useEffect(() => {
+          reload();
+        }, [reload]);
+
+        const call = async (path, init) => {
+          setBusy(true);
+          setNotice(null);
+          try {
+            const options = Object.assign({ cache: 'no-store' }, init || {});
+            const res = await fetch(path, options);
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(json.error || 'HTTP ' + res.status);
+            return json;
+          } finally {
+            setBusy(false);
+          }
+        };
+
+        const say = (kind, text) => setNotice({ kind, text });
+
+        const doCreate = async () => {
+          try {
+            const result = await call(
+              '/cognition-engine/persona/create?persona=' +
+                encodeURIComponent(personaDraft || '') +
+                '&human=' +
+                encodeURIComponent(humanDraft || ''),
+              { method: 'POST' },
+            );
+            if (!result.ok) return say('err', result.reason || dict.failed);
+            say('ok', dict.created + ' · ' + dict.rev + ' ' + result.revision);
+            await reload();
+          } catch (e) {
+            say('err', e && e.message ? e.message : String(e));
+          }
+        };
+
+        const saveBlock = async (label) => {
+          const value = (label === 'persona' ? personaDraft : humanDraft) || '';
+          try {
+            const proposed = await call(
+              '/cognition-engine/persona/propose?label=' + label + '&by=user&value=' + encodeURIComponent(value),
+              { method: 'POST' },
+            );
+            if (proposed.rejected) return say('err', proposed.rejected);
+            const id = proposed.proposal && proposed.proposal.id;
+            if (!id) return say('err', dict.failed);
+            const confirmed = await call('/cognition-engine/persona/confirm?id=' + encodeURIComponent(id), {
+              method: 'POST',
+            });
+            if (!confirmed.ok) return say('err', confirmed.reason || dict.failed);
+            const warn = proposed.warnings && proposed.warnings.length > 0 ? ' · ' + proposed.warnings.join('；') : '';
+            say('ok', dict.saved + ' · ' + dict.rev + ' ' + confirmed.revision + warn);
+            await reload();
+          } catch (e) {
+            say('err', e && e.message ? e.message : String(e));
+          }
+        };
+
+        const doUndo = async () => {
+          try {
+            const result = await call('/cognition-engine/persona/undo', { method: 'POST' });
+            if (!result.ok) return say('err', result.reason || dict.failed);
+            say('ok', dict.undone + ' · ' + dict.rev + ' ' + result.revision);
+            // 撤销后编辑器要跟着文件走
+            setPersonaDraft(null);
+            setHumanDraft(null);
+            await reload();
+          } catch (e) {
+            say('err', e && e.message ? e.message : String(e));
+          }
+        };
+
+        const resolveProposal = async (id, action) => {
+          try {
+            const result = await call(
+              '/cognition-engine/persona/' + action + '?id=' + encodeURIComponent(id),
+              { method: 'POST' },
+            );
+            if (action === 'confirm' && !result.ok) return say('err', result.reason || dict.failed);
+            say('ok', action === 'confirm' ? dict.saved : dict.reject);
+            setPersonaDraft(null);
+            setHumanDraft(null);
+            await reload();
+          } catch (e) {
+            say('err', e && e.message ? e.message : String(e));
+          }
+        };
+
+        const editorFor = (label, value, setValue, block) => {
+          const limit = block && typeof block.limit === 'number' ? block.limit : label === 'persona' ? 600 : 500;
+          const len = (value || '').length;
+          const over = len > limit;
+          const readOnly = block && block.readOnly === true;
+          const locked = (block && block.lockedPhrases) || [];
+          return h(
+            'div',
+            { style: PS.card, key: label },
+            h(
+              'div',
+              { style: PS.blockHead },
+              h('span', { style: PS.label }, label === 'persona' ? dict.personaBlock : dict.humanBlock),
+              h('span', { style: over ? PS.counterOver : PS.counter }, len + ' / ' + limit + ' ' + dict.chars),
+            ),
+            locked.length > 0
+              ? h(
+                  'div',
+                  { style: PS.rowFlex },
+                  h('span', { style: PS.counter }, dict.locked + '：'),
+                  locked.map((phrase) => h('span', { style: PS.chip, key: phrase }, phrase)),
+                )
+              : null,
+            h('textarea', {
+              style: PS.ta,
+              value: value || '',
+              spellCheck: false,
+              readOnly: readOnly,
+              onChange: (event) => setValue(event.target.value),
+            }),
+            h(
+              'div',
+              { style: PS.rowFlex },
+              readOnly
+                ? h('span', { style: PS.counter }, dict.readonly)
+                : h(
+                    'button',
+                    {
+                      type: 'button',
+                      style: busy || over ? Object.assign({}, PS.primary, PS.btnDisabled) : PS.primary,
+                      disabled: busy || over,
+                      onClick: () => saveBlock(label),
+                    },
+                    dict.save,
+                  ),
+              over ? h('span', { style: PS.err }, '超出预算，需先删减') : null,
+            ),
+          );
+        };
+
+        if (data === null && error === null) {
+          return h('div', { style: PS.page }, h('p', { style: PS.hint }, dict.loading));
+        }
+        if (error !== null && data === null) {
+          return h(
+            'div',
+            { style: PS.page },
+            h('p', { style: PS.err }, dict.failed + '：' + error),
+            h(
+              'button',
+              { type: 'button', style: PS.btn, onClick: () => { setError(null); setData(null); reload(); } },
+              '重试',
+            ),
+          );
+        }
+
+        const present = data.present === true && data.blocks;
+        const pending = data.pending || [];
+        const usage = data.usage || {};
+        const audit = data.audit || {};
+        const saveError = data.saveError;
+
+        return h(
+          'div',
+          { style: PS.page },
+          h(
+            'div',
+            { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+            h('h2', { style: PS.title }, dict.title),
+            h('p', { style: PS.sub }, dict.subtitle),
+          ),
+          notice
+            ? h('div', { style: notice.kind === 'err' ? PS.err : PS.ok }, (notice.kind === 'err' ? '✗ ' : '✓ ') + notice.text)
+            : null,
+          saveError ? h('div', { style: PS.err }, dict.saveError + '：' + saveError) : null,
+          present
+            ? h(
+                'div',
+                { style: PS.meta },
+                h('span', null, dict.rev + ' ' + data.revision),
+                h('span', null, dict.budget + ' ' + usage.rendered + ' / ' + (data.budget ? data.budget.total : 1100)),
+                h('span', null, data.path),
+              )
+            : null,
+          !present
+            ? h(
+                'div',
+                { style: PS.card },
+                h('span', { style: PS.label }, dict.absent),
+                h('span', { style: PS.hint }, dict.absentHint),
+              )
+            : null,
+          editorFor('persona', personaDraft, setPersonaDraft, present ? data.blocks.persona : { limit: 600, lockedPhrases: [] }),
+          editorFor('human', humanDraft, setHumanDraft, present ? data.blocks.human : { limit: 500, lockedPhrases: [] }),
+          h(
+            'div',
+            { style: PS.rowFlex },
+            !present
+              ? h(
+                  'button',
+                  { type: 'button', style: busy ? Object.assign({}, PS.primary, PS.btnDisabled) : PS.primary, disabled: busy, onClick: doCreate },
+                  dict.create,
+                )
+              : null,
+            present
+              ? h('button', { type: 'button', style: busy ? Object.assign({}, PS.btn, PS.btnDisabled) : PS.btn, disabled: busy, onClick: doUndo }, dict.undo)
+              : null,
+            present
+              ? h(
+                  'button',
+                  { type: 'button', style: PS.btn, onClick: () => setShowPreview((v) => !v) },
+                  showPreview ? dict.hidePreview : dict.showPreview,
+                )
+              : null,
+          ),
+          present && showPreview
+            ? h(
+                'div',
+                { style: PS.card },
+                h('span', { style: PS.label }, dict.preview),
+                h('pre', { style: PS.pre }, data.render || ''),
+              )
+            : null,
+          present
+            ? h(
+                'div',
+                { style: PS.card },
+                h('span', { style: PS.label }, dict.pending + ' (' + pending.length + ')'),
+                pending.length === 0
+                  ? h('span', { style: PS.hint }, dict.noPending)
+                  : pending.map((item) =>
+                      h(
+                        'div',
+                        { style: { display: 'flex', flexDirection: 'column', gap: 6 }, key: item.id },
+                        h(
+                          'div',
+                          { style: PS.rowFlex },
+                          h('span', { style: PS.chip }, item.label),
+                          h('span', { style: PS.counter }, item.by + ' · ' + new Date(item.at).toLocaleString()),
+                          item.reason ? h('span', { style: PS.counter }, item.reason) : null,
+                        ),
+                        h('pre', { style: PS.pre }, item.value),
+                        h(
+                          'div',
+                          { style: PS.rowFlex },
+                          h(
+                            'button',
+                            { type: 'button', style: PS.primary, disabled: busy, onClick: () => resolveProposal(item.id, 'confirm') },
+                            dict.confirm,
+                          ),
+                          h(
+                            'button',
+                            { type: 'button', style: PS.btn, disabled: busy, onClick: () => resolveProposal(item.id, 'reject') },
+                            dict.reject,
+                          ),
+                        ),
+                      ),
+                    ),
+              )
+            : null,
+          present && (audit.personaTraits || audit.humanSlots)
+            ? h(
+                'div',
+                { style: PS.card },
+                h('span', { style: PS.label }, dict.audit),
+                h(
+                  'pre',
+                  { style: PS.pre },
+                  JSON.stringify(
+                    {
+                      personaTraits: audit.personaTraits || {},
+                      personaInteractionStyle: audit.personaInteractionStyle || {},
+                      humanSlots: audit.humanSlots || {},
+                      humanFacts: audit.humanFacts || [],
+                    },
+                    null,
+                    2,
+                  ),
+                ),
+              )
+            : null,
+        );
+      };
+    }
+
     return {
       inject: ['slots'],
       apply(ctx) {
@@ -1686,6 +2177,37 @@ window.__ModuleLoader__.load({
           // 槽位被占用或宿主不支持：静默跳过，工具与记忆功能不受影响
           if (ctx.logger && typeof ctx.logger.warn === 'function') {
             ctx.logger.warn('cognition-engine: 状态条槽位注册失败，已降级为不显示');
+          }
+        }
+
+        // 人格页面：设置里的一整页（settings.section），与「通用/模型/插件」并列
+        try {
+          const Page = createPersonaPage(ctx);
+          const PersonaIcon = (props) =>
+            h(
+              'svg',
+              {
+                width: (props && props.size) || 16,
+                height: (props && props.size) || 16,
+                viewBox: '0 0 16 16',
+                fill: 'none',
+                'aria-hidden': true,
+              },
+              h('circle', { cx: 8, cy: 5, r: 2.6, stroke: 'currentColor', strokeWidth: 1.4 }),
+              h('path', { d: 'M2.8 13.6c0-2.6 2.3-4.2 5.2-4.2s5.2 1.6 5.2 4.2', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round' }),
+            );
+          ctx.slots.inject('settings.section', () => [
+            ctx.slots.register(
+              { name: 'settings.section', id: 'cognition-persona', order: 45, label: () => personaText(ctx).nav },
+              Page,
+            ),
+          ]);
+          ctx.slots.inject('settings.section.icon', () => [
+            ctx.slots.register({ name: 'settings.section.icon', id: 'cognition-persona', order: 45 }, PersonaIcon),
+          ]);
+        } catch (error) {
+          if (ctx.logger && typeof ctx.logger.warn === 'function') {
+            ctx.logger.warn('cognition-engine: 人格页面槽位注册失败，已跳过');
           }
         }
       },
