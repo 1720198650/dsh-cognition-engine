@@ -15,6 +15,7 @@ import { TemporalMemoryStore, bm25Score, buildBm25Stats, contentHash, cosine, is
 import { GapStore } from './gaps.ts';
 import { PlaybookEventLog } from './events.ts';
 import { InjectionLog, TurnFeedbackTracker, classifyFeedback, extractUserText } from './injection_log.ts';
+import { PersonaStore } from './persona.ts';
 import { PlaybookStore } from './playbook.ts';
 import { TopicStore } from './topics.ts';
 import { buildDistillPrompt, parseDistillResult } from './distill.ts';
@@ -1548,6 +1549,150 @@ async function main(): Promise<void> {
     assert.equal(scored[1]?.kind, 'confirmation');
     assert.deepEqual(scored[1]?.ids, ['ctxt-00001', 'ctxt-00003']);
     rmSync(file, { force: true });
+  });
+
+  await test('人格块：文件不存在就不注入，不占 token', () => {
+    const store = new PersonaStore({
+      filePath: join(TEST_TMP, 'no-such-persona.json'),
+      proposalPath: join(TEST_TMP, 'no-such-proposals.json'),
+    });
+    assert.equal(store.present, false);
+    assert.equal(store.render(), '');
+    assert.equal(store.document, undefined);
+    assert.equal(store.propose({ label: 'persona', value: '我是 X', by: 'agent' }).rejected !== undefined, true);
+  });
+
+  await test('人格块：traits 与 slots 只做审计，不进注入段', () => {
+    const file = join(TEST_TMP, 'persona-render.json');
+    const propFile = join(TEST_TMP, 'persona-render-props.json');
+    rmSync(file, { force: true });
+    rmSync(propFile, { force: true });
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schema: 'cognition.persona',
+        version: 1,
+        revision: 3,
+        updatedAt: 1,
+        budget: { persona: 200, human: 200, total: 400 },
+        blocks: {
+          persona: {
+            label: 'persona',
+            limit: 200,
+            value: '我是小认，直接务实的协作助手。\n边界：不编造事实。',
+            traits: { directness: 0.8, warmth: 0.5 },
+            lockedPhrases: ['不编造事实'],
+            history: [],
+          },
+          human: {
+            label: 'human',
+            limit: 200,
+            value: '做文档整理，中文为主。',
+            slots: { preferences: { verbosity: '简短' } },
+            history: [],
+          },
+        },
+      }),
+      'utf8',
+    );
+    const store = new PersonaStore({ filePath: file, proposalPath: propFile, now: () => 5000 });
+    assert.equal(store.present, true);
+    const rendered = store.render();
+    assert.ok(rendered.startsWith('## 人格'), '人格段必须在最前');
+    assert.ok(rendered.includes('<persona'));
+    assert.ok(rendered.includes('<human'));
+    assert.ok(rendered.includes('不编造事实'), '边界要注入');
+    // 关键：trait 值绝不能进上下文，否则模型会照着表演
+    assert.equal(rendered.includes('directness'), false, 'traits 不能注入');
+    assert.equal(rendered.includes('0.8'), false, 'traits 数值不能注入');
+    assert.equal(rendered.includes('verbosity'), false, 'slots 不能注入');
+    rmSync(file, { force: true });
+    rmSync(propFile, { force: true });
+  });
+
+  await test('人格块：agent 不能改 human 块，lockedPhrases 不许删', () => {
+    const file = join(TEST_TMP, 'persona-guard.json');
+    const propFile = join(TEST_TMP, 'persona-guard-props.json');
+    rmSync(file, { force: true });
+    rmSync(propFile, { force: true });
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schema: 'cognition.persona',
+        version: 1,
+        revision: 1,
+        updatedAt: 1,
+        budget: { persona: 200, human: 200, total: 400 },
+        blocks: {
+          persona: { label: 'persona', limit: 200, value: '我是小认。边界：不编造事实。', lockedPhrases: ['不编造事实'], history: [] },
+          human: { label: 'human', limit: 200, value: '中文为主。', history: [] },
+        },
+      }),
+      'utf8',
+    );
+    const store = new PersonaStore({ filePath: file, proposalPath: propFile, now: () => 6000 });
+    store.loadSync();
+
+    // 硬规则 3：agent 不许改用户画像
+    const blocked = store.propose({ label: 'human', value: '用户喜欢吹捧', by: 'agent' });
+    assert.ok(blocked.rejected !== undefined, 'agent 改 human 必须被拒');
+    assert.equal(store.pending().length, 0);
+
+    // 硬规则 2：把锁定的边界删掉 → 确认时拒绝
+    const bad = store.propose({ label: 'persona', value: '我是小认，很聪明。', by: 'user' });
+    assert.ok(bad.proposal !== undefined);
+    const rejected = store.confirm(bad.proposal!.id, 'user');
+    assert.equal(rejected.ok, false);
+    assert.ok((rejected.reason ?? '').includes('不编造事实'), '拒绝理由要指出被删的边界');
+    assert.equal(store.document?.revision, 1, '拒绝后 revision 不能变');
+
+    // 正常提案 → 用户确认 → 生效
+    const good = store.propose({ label: 'persona', value: '我是小认，直接务实。边界：不编造事实。', by: 'agent' });
+    assert.ok(good.proposal !== undefined);
+    assert.equal(store.pending().length, 1, '未确认前只是提案');
+    assert.equal(store.document?.blocks.persona.value.includes('直接务实'), false, '未确认不能生效');
+    const ok = store.confirm(good.proposal!.id, 'user');
+    assert.equal(ok.ok, true);
+    assert.equal(ok.revision, 2);
+    assert.ok(store.document!.blocks.persona.value.includes('直接务实'));
+    assert.equal(store.pending().length, 0);
+    assert.equal(store.document!.blocks.persona.history.length, 1, '要留下改动历史');
+    // 重新加载：revision 与内容都要落盘
+    const reloaded = new PersonaStore({ filePath: file, proposalPath: propFile });
+    assert.equal(reloaded.document?.revision, 2);
+    assert.ok(reloaded.document!.blocks.persona.value.includes('直接务实'));
+    rmSync(file, { force: true });
+    rmSync(propFile, { force: true });
+  });
+
+  await test('人格块：超预算截断，不挤爆上下文', () => {
+    const file = join(TEST_TMP, 'persona-budget.json');
+    const propFile = join(TEST_TMP, 'persona-budget-props.json');
+    rmSync(file, { force: true });
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schema: 'cognition.persona',
+        version: 1,
+        revision: 1,
+        updatedAt: 1,
+        budget: { persona: 120, human: 120, total: 240 },
+        blocks: {
+          persona: { label: 'persona', limit: 120, value: '甲'.repeat(400), history: [] },
+          human: { label: 'human', limit: 120, value: '乙'.repeat(400), history: [] },
+        },
+      }),
+      'utf8',
+    );
+    const store = new PersonaStore({ filePath: file, proposalPath: propFile });
+    const rendered = store.render();
+    // 头 + 两个块；每块被截到 limit 附近
+    assert.ok(rendered.length < 120 + 120 + 120, `渲染总长应受控，实际 ${rendered.length}`);
+    const usage = store.usage();
+    assert.equal(usage.persona.limit, 120);
+    assert.ok(usage.rendered > 0);
+    rmSync(file, { force: true });
+    rmSync(propFile, { force: true });
   });
 
   await test('事件日志：追加、seq 连续、重新加载续接', () => {

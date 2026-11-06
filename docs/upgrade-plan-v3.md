@@ -332,6 +332,31 @@ cognition-playbook.json           ← 主存储（不变）
 - agent 调 `propose` 后，用户没 `confirm` → 不生效
 - 改动历史可查（`revision` 自增 + `history`）
 
+### 4.6 实现状态（2026-11-06）
+
+已实现 `src/persona.ts` + 4 个路由 + 4 条测试组（总测试 110 条全绿）。**默认关闭**：
+`cognition-persona.json` 不存在时 `render()` 返回空串，注入段不占一个 token。
+
+| 项 | 状态 |
+|---|---|
+| 文件读取/容错（坏 JSON、缺块都当「无人格」） | ✅ |
+| `render()` 注入在最前（order 100 vs 记忆段 900） | ✅ 真机验证：本人系统提示最前面出现过该段 |
+| `traits` / `slots` 只做审计、不注入 | ✅ 测试断言「directness」「0.8」不出现在渲染结果里 |
+| `lockedPhrases` 被删 → `confirm` 拒绝 | ✅ 真机验证：拒绝并指出缺了哪三条 |
+| agent 不能改 `human` 块 | ✅ 真机验证 |
+| propose 未 confirm 不生效 | ✅ revision 停在 1，confirm 后 → 2 |
+| revision + history 落盘 | ✅ |
+| 超预算截断（块 limit + 总量兜底） | ✅ |
+| `lint()` 给写作体检警告（不是硬拦） | ✅ 真机验证：报「缺边界段 / 缺 if-then」 |
+
+**未做（留给后续）**：给模型侧注册 `cognition_persona` 工具（现在只有 HTTP 路由），
+所以 agent 目前要提人格修改，得由用户手动调 `/persona/propose`。
+这是故意的——人格修改本来就该是低频、有人在场的事。
+
+**启用方式**：把 `docs/persona/cognition-persona.example.json` 拷到
+`~/.dsh/cognition-engine/cognition-persona.json` 即可，无需改配置；
+`personaEnabled: false` 可临时关掉注入但保留文件。
+
 ---
 
 ## 五、S4：风格指纹 + 语域分桶（1–2 天）

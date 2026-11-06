@@ -12,7 +12,20 @@
 |---|---|---|
 | **S1** | 真实反馈回路（注入快照 + 纠正/确认识别 + 自动打标） | ✅ 已实现，**v2 重做**（见下） |
 | **S2** | 准则事件日志（8 种事件，轻量事件溯源） | ✅ 已实现 |
+| **S3** | 轻人格块（persona/human 两块 + propose→confirm 闸门 + 预算截断） | ✅ 已实现，**默认关闭**（无人格文件就不占 token） |
 | **M1** | 反馈闭环里程碑 | ✅ 达成 |
+
+### 2026-11-06 真实数据核对（S1/S2 冻结验证）
+
+| 检查项 | 实测 | 结论 |
+|---|---|---|
+| `feedback.tracking` | true | `session/event` 挂载稳定（应用重启后仍在） |
+| 注入快照行 | 7 行，`turn` = 7/8/9/10 | 真实轮次号 |
+| 每轮行数 | 1–2 行 | 目标达成（v1 是 30 行/分钟） |
+| `sessionId` | `session-16ecf9b6-…` | 真实会话 id |
+| 面板轮询 | `total` 不涨 | 污染消除 |
+| 反馈判定 | 3 轮全 `neutral` | 「继续 继续」不该算确认，**误判率 0** |
+| 记忆 | 12 → 13（新增「单据照片排版」） | 有活干会记，不是空转 |
 
 ### 2026-11-05 的重要修正
 
@@ -124,10 +137,16 @@ Invoke-WebRequest "http://127.0.0.1:3111/cognition-engine/events" -UseBasicParsi
 
 | 顺序 | 阶段 | 状态 |
 |---|---|---|
-| 1 | **S3 Persona 块** | 待做（等观察结果） |
+| 1 | **S3 Persona 块** | ✅ 已实现（默认关闭，等你要用时再开） |
 | 2 | S4 风格指纹 + 语域分桶 | 待做 |
 | 3 | S5 CPE 回归闸门 | 待做 |
 | 4 | S6 学习预算 + shadow | 待做 |
+
+**要用人格块**：把 `docs/persona/cognition-persona.example.json` 拷到
+`~/.dsh/cognition-engine/cognition-persona.json`，然后
+`POST /cognition-engine/persona/propose?label=persona&value=...` 提改动、
+`POST /cognition-engine/persona/confirm?id=...` 确认。改完 `GET /persona` 能看到渲染结果，
+`GET /state` 的 `persona.chars` 是实际注入的字符数。
 
 **建议**：先观察 2–3 天。如果记忆条数确实不涨，**「会话摘要 → 候选提取」的优先级应该高于 S3**——
 因为那是「记得住」的地基，而 S3 是「说得像」。

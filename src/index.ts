@@ -18,6 +18,7 @@ import { GapStore } from './gaps.ts';
 import { PlaybookEventLog } from './events.ts';
 import { InjectionLog, TurnFeedbackTracker, classifyFeedback, extractUserText } from './injection_log.ts';
 import type { FeedbackKind } from './injection_log.ts';
+import { PersonaStore } from './persona.ts';
 import { TemporalMemoryStore } from './memory.ts';
 import type { TemporalFact } from './memory.ts';
 import { JsonStateStore } from './persist.ts';
@@ -191,6 +192,14 @@ export interface CognitionConfig {
   playbookFile?: string;
   /** 主题注册表的落盘路径，默认 `~/.dsh/cognition-engine/cognition-topics.json`。 */
   topicsFile?: string;
+  /**
+   * 人格块文件路径，默认 `~/.dsh/cognition-engine/cognition-persona.json`。
+   *
+   * 文件不存在 = 没有人格，注入段不占 token。要启用人格就把 schema 示例拷过去。
+   */
+  personaFile?: string;
+  /** 是否注入人格块（文件存在才生效），默认 true。 */
+  personaEnabled?: boolean;
   /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
   lockToken?: string;
   /** 真模型：显式指定 provider / model，不设则跟随当前默认模型。 */
@@ -202,12 +211,16 @@ export interface CognitionConfig {
 }
 
 type ResolvedConfig = Required<
-  Omit<CognitionConfig, 'tasksFile' | 'stateFile' | 'playbookFile' | 'topicsFile' | 'lockToken' | 'llmProvider' | 'llmModel'>
+  Omit<
+    CognitionConfig,
+    'tasksFile' | 'stateFile' | 'playbookFile' | 'topicsFile' | 'personaFile' | 'lockToken' | 'llmProvider' | 'llmModel'
+  >
 > & {
   tasksFile?: string;
   stateFile?: string;
   playbookFile?: string;
   topicsFile?: string;
+  personaFile?: string;
   lockToken?: string;
   llmProvider?: string;
   llmModel?: string;
@@ -276,6 +289,11 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
       typeof config.topicsFile === 'string' && config.topicsFile.trim().length > 0
         ? config.topicsFile
         : undefined,
+    personaFile:
+      typeof config.personaFile === 'string' && config.personaFile.trim().length > 0
+        ? config.personaFile
+        : undefined,
+    personaEnabled: config.personaEnabled !== false,
     lockToken:
       typeof config.lockToken === 'string' && config.lockToken.trim().length > 0
         ? config.lockToken
@@ -344,6 +362,11 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
   // 知识缺口：模型卡壳时登记，下次针对性补（P6 学习闭环）
   const gaps = new GapStore();
+
+  // 人格块（S3）：轻人格，文件不存在就等于没启用，注入段不占 token
+  const persona = new PersonaStore({
+    ...(config.personaFile === undefined ? {} : { filePath: config.personaFile }),
+  });
 
   // 准则事件日志（轻量事件溯源）：只追加，不改主存储
   const ruleEvents = new PlaybookEventLog();
@@ -921,6 +944,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         enabled: config.autoFeedback === true,
         tracking: turnTrackingSeen,
         ...injectionLog.statistics(),
+      },
+      persona: {
+        present: persona.present,
+        chars: persona.usage().rendered,
+        revision: persona.document?.revision ?? 0,
+        pending: persona.pending().length,
       },
       topics: topics.stats(),
       storageWarning: stateStore.warning,
@@ -1541,8 +1570,54 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     // 当前实际注入到系统提示的内容（排查「面板说有、模型看不到」这类问题用）
     route('/cognition-engine/injected', () => {
       const { text, source } = renderInjectedContext();
-      return { source, chars: text.length, text };
+      return { source, chars: text.length, text, persona: persona.render() };
     });
+
+    // 人格块（S3）：查看 / 提案 / 确认 / 拒绝。
+    // 设计上 agent 只能 propose，只有 confirm 才真的改写——人格被悄悄重写是最难查的退化。
+    route('/cognition-engine/persona', () => {
+      const doc = persona.document;
+      return {
+        present: doc !== undefined,
+        revision: doc?.revision ?? 0,
+        updatedAt: doc?.updatedAt ?? 0,
+        path: persona.path,
+        usage: persona.usage(),
+        render: persona.render(),
+        /** traits / slots 只做审计，不进注入段（BFI-2 不是文本分类器）。 */
+        audit:
+          doc === undefined
+            ? undefined
+            : { personaTraits: doc.blocks.persona.traits ?? {}, humanSlots: doc.blocks.human.slots ?? {} },
+        pending: persona.pending(),
+      };
+    });
+    route(
+      '/cognition-engine/persona/propose',
+      (url) => {
+        const raw = url.searchParams.get('label');
+        const label = raw === 'human' ? 'human' : 'persona';
+        const value = url.searchParams.get('value') ?? '';
+        const reason = url.searchParams.get('reason') ?? undefined;
+        const by = url.searchParams.get('by') === 'user' ? 'user' : 'agent';
+        const result = persona.propose({ label, value, by, ...(reason === undefined ? {} : { reason }) });
+        return { ...result, warnings: result.proposal === undefined ? [] : persona.lint(value) };
+      },
+      { method: 'POST' },
+    );
+    route(
+      '/cognition-engine/persona/confirm',
+      (url) => persona.confirm(url.searchParams.get('id') ?? '', 'user'),
+      { method: 'POST' },
+    );
+    route(
+      '/cognition-engine/persona/reject',
+      (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        return { id, ok: persona.reject(id) };
+      },
+      { method: 'POST' },
+    );
 
     // 审计日志（最近 N 条）
     route(
@@ -1703,6 +1778,29 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       );
     } catch (error) {
       ctx.logger?.warn?.(`cognition-engine: 系统提示段注册失败: ${messageOf(error)}`);
+    }
+  }
+
+  /**
+   * 人格段挂在最前面（order 100，记忆段是 900）。
+   *
+   * 顺序有讲究：人格是「谁在说话」，记忆是「知道什么」。
+   * 人格放在后面会被长记忆段稀释；放在最前面才能稳定住风格。
+   * 文件不存在时 `persona.render()` 返回空串，这个段实际不占任何 token。
+   */
+  if (config.personaEnabled && systemPrompt !== undefined && typeof systemPrompt.section === 'function') {
+    try {
+      const present = persona.loadSync();
+      disposers.push(
+        systemPrompt.section({
+          name: 'cognition-engine-persona',
+          order: 100,
+          text: () => persona.render(),
+        }),
+      );
+      ctx.logger?.info?.(present ? 'cognition-engine: 人格段已挂载' : 'cognition-engine: 人格段已就位（暂无人格文件）');
+    } catch (error) {
+      ctx.logger?.warn?.(`cognition-engine: 人格段注册失败: ${messageOf(error)}`);
     }
   }
 

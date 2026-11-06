@@ -89,6 +89,14 @@ export interface CognitionConfig {
     playbookFile?: string;
     /** 主题注册表的落盘路径，默认 `~/.dsh/cognition-engine/cognition-topics.json`。 */
     topicsFile?: string;
+    /**
+     * 人格块文件路径，默认 `~/.dsh/cognition-engine/cognition-persona.json`。
+     *
+     * 文件不存在 = 没有人格，注入段不占 token。要启用人格就把 schema 示例拷过去。
+     */
+    personaFile?: string;
+    /** 是否注入人格块（文件存在才生效），默认 true。 */
+    personaEnabled?: boolean;
     /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
     lockToken?: string;
     /** 真模型：显式指定 provider / model，不设则跟随当前默认模型。 */
