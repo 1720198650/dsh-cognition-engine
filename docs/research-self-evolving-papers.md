@@ -3,7 +3,11 @@
 > 两份并存、互不覆盖：**本文件是 11 篇扩展版**；
 > 只读任务指定 6 个来源的严格核验版见 [research-self-evolving-papers-6src.md](research-self-evolving-papers-6src.md)（152 行）。
 > 两者结论一致的地方可以直接用；不一致处以「严格六源版」为准（它的来源边界更清楚）。
-
+>
+> **引用抽查（2026-11-06）**：扩展版多出的 5 篇里抽了 3 篇回 arXiv 原始条目核对，编号与标题都对得上 ——
+> COVE [2608.01234](https://arxiv.org/abs/2608.01234)、Darwin-Claw [2610.23574](https://arxiv.org/abs/2610.23574)、
+> MemEvolve [2512.18746](https://arxiv.org/abs/2512.18746)。另两篇（2608.10299 / 2606.17628）未逐一核对，
+> 要用它们的结论先点链接确认。
 > **调研对象**：`dsh-cognition-engine` 0.11.0（零 npm 运行时依赖、纯 JSON、本地运行、无数据库/向量库/GPU/训练）
 > **调研日期**：2026-11-06
 > **方法**：逐篇读 arXiv HTML 全文 / ICML poster 页；查不到的一律写「未找到」，不补全。
@@ -48,6 +52,8 @@
 | 机制 | 数据结构 | 关键数字 | 实验设置 | 局限 | 零依赖可行性 | 我们能借什么 |
 |---|---|---|---|---|---|---|
 | 双记忆协同进化：**Experience Memory**（经验）+ **Asset Memory**（资产：工具/专家 agent）。前向推理「先复用、按需造」：子任务若能在 Asset Memory 匹配到高相似资产就复用，否则用 Experience Memory + 网页搜索指导创建新资产；任务结束后反向进化：验证通过的资产进 Asset Memory，成功/失败轨迹反思进 Experience Memory。 | `M_A = B_agt ∪ B_tool`。专家 agent：`m_agt = <ρ 角色, ε 专长, σ 行为建议, T_avail 可用工具集>`；工具：`m_tool = <n 名称, d_func 功能描述, c_impl 实现代码, ω_doc 输入输出文档>`（MCP 格式）。经验条目：`e = <h_title 标题, d_desc 上下文, U_case 适用场景, κ_content 核心知识>`，知识分「agent 经验」与「tool 经验」。 | 6 类任务 / 8 个 benchmark，平均 Pass@1 **70.24%**；比标准 LLM 最高 **+18.53%**、比纯经验进化（AFlow）**+11.80%**、比纯资产创建（Alita）**+6.46%**。消融：去掉工具创建 −10.28pp，去掉专家 agent 创建 −1.72pp，去掉 agent memory −4.73pp，去掉 tool memory −3.13pp。 | Backbone=GPT-5-chat；8 个 benchmark：GAIA、ALFWorld、WebShop、TravelPlanner、HotpotQA、2WikiMultihopQA、AIME24、AIME25；初始只有 Web Search 工具；工具执行用 SandboxFusion，检索用 Serper + Crawl4AI。 | 需要沙箱执行自动生成的代码，部署范围受限（作者明确说这是 limitation）；依赖外部搜索/执行服务；没有单独的失败案例章节（未找到）。 | 🟡 数据结构可借，执行不可借：我们不做代码生成/沙箱，但可以把「经验条目」四字段直接变成反思输出结构，把「资产」降级为 JSON 里的「方法卡/技能卡」注册表。 | ①`Experience Memory` 四字段：标题、上下文、适用场景、核心知识；②成功经验做「策略泛化」、失败经验做「反模式 + 失败-修复对」；③资产的概念可映射为「可复用方法卡」，但只存描述和步骤，不存可执行代码。 |
+
+**口径说明**：`+18.53% / +11.80% / +6.46%` 都是 **8 个 benchmark 的平均 Pass@1 相对差值**，不是某一个单独 benchmark 的数字；对应基线分别是「标准 LLM（最高）」「AFlow（纯经验进化）」「Alita（纯资产创建）」。
 
 **两者怎么互相促进**：经验 → 资产：创建工具/专家时检索 `E_tool` 相关经验，作为生成约束，提高首次成功率（GAIA 首次有效率 32.7%→51.0%，相对 +56.0%；AIME 修复迭代次数约 −68%）。资产 → 经验：新资产执行后的轨迹与评审又沉淀为经验条目；形成「能力扩张 ↔ 经验蒸馏」闭环。
 
@@ -114,7 +120,9 @@
 
 | 机制 | 数据结构 | 关键数字 | 实验设置 | 局限 | 零依赖可行性 | 我们能借什么 |
 |---|---|---|---|---|---|---|
-| 统一反馈闭环：**System Inputs → Agent System → Environment → Optimisers →（更新后的）Agent System**。输入给出任务/数据/约束；Agent 系统执行并与环境交互；环境返回任务指标或 LLM evaluator 等评价信号；优化器在定义好的空间里搜索并修改模型参数、提示、工具或结构；循环直到性能阈值或收敛。 | 四组件：**System Inputs**（任务、数据、实例）；**Agent System**（基础模型、prompts、memory、tools、workflow、multi-agent 的 communication/topology）；**Environment**（执行环境 + 评价信号）；**Optimisers**（搜索/更新机制：梯度、RL、进化算法、贝叶斯优化、LLM 驱动优化等）。 | —（综述，无新实验；“55 页”为二手介绍，未在原文逐页核实） | 文献综述；单 agent 优化、多 agent 优化、领域专用优化（生物医学/编程/金融/法律）三大部分。 | 框架是「概念地图」，不是可执行算法；不保证每个方法都包含全部组件；对评估/安全的讨论停留在原则层。 | 🟢 作为系统架构检查表完全可用；但它不会替我们选实现。 | 把我们的系统画成同一张图：**System Inputs = 用户消息 + 主题 + 项目约束；Agent System = 记忆/准则/主题/任务/缺口；Environment = 用户确认 + 运行结果 + 审计；Optimisers = 确定性规则蒸馏 + 人工审批（不是 RL）**。这张图可以直接放进设计文档，明确「我们不训练模型」。 |
+| 统一反馈闭环：**System Inputs → Agent System → Environment → Optimisers →（更新后的）Agent System**。输入给出任务设定；Agent 系统执行并与环境交互；环境返回任务指标或 LLM evaluator 等评价信号；优化器在定义好的搜索空间里修改模型参数、提示、工具或结构；循环直到性能阈值或收敛。 | 四组件：**System Inputs**（任务级 `I={T,D_train[,D_test]}`；实例级 `I={x,y,C}`）；**Agent System**（基础模型、prompts、memory、tool-use policy、workflow、multi-agent 的 communication/topology）；**Environment**（执行环境 + 评价信号，如 accuracy/F1/success rate 或 LLM evaluator）；**Optimisers**（搜索空间 `S` + 优化算法 `H`：规则启发式、梯度、贝叶斯、MCTS、RL、进化策略、学习型策略）。 | **55 页**（PDF 实际页数）；四组件 + 3 条安全律（Endure 安全稳定 / Excel 性能保持 / Evolve 自主演化）；无新实验。 | 文献综述；单 agent 优化（prompt/memory/tool）、多 agent 优化（prompt/workflow/topology/communication）、领域专用优化（生物医学/编程/金融/法律）三大部分。 | 框架是「概念地图」，不是可执行算法；不保证每个方法都包含全部组件；对评估/安全的讨论停留在原则层。 | 🟢 作为系统架构检查表完全可用；但它不会替我们选实现。 | 把我们的系统画成同一张图：**System Inputs = 用户消息 + 主题 + 项目约束；Agent System = 记忆/准则/主题/任务/缺口；Environment = 用户确认 + 运行结果 + 审计；Optimisers = 确定性规则蒸馏 + 人工审批（不是 RL）**。这张图可以直接放进设计文档，明确「我们不训练模型」。 |
+
+**五步反馈环（原文 Section 3.1）**：①System Inputs 指定任务/数据/约束；②单或多 agent 系统在环境中执行；③环境给出评价信号（指标或 LLM evaluator）；④Optimiser 在搜索空间 `S` 中按算法 `H` 更新 Agent System（可改参数、提示、记忆、工具、结构，也可反过来合成训练样例扩充输入）；⑤更新后的系统再次执行，循环到性能阈值或收敛。这也是我们设计「记忆/准则更新闭环」时最该照抄的骨架：**输入 → 执行 → 评价 → 更新 → 再执行**。
 
 #### 1.4.3 Self-Evolving Agents as Dynamic Graph Transformation（arXiv 2608.18104）
 
@@ -278,5 +286,6 @@
 
 **核查说明（避免误导）**：
 1. 以上所有“关键数字”均来自对应论文的 HTML/摘要或 alphaXiv 结构化摘要，未使用二手博客数字（2508 的四组件定义除 arXiv 摘要外，还核对了 alphaXiv 对 Figure 3 的五步循环描述）。
-2. **未找到**：SEAgent v1 正文的 AndroidWorld 具体数字（摘要提到该 benchmark，但正文 Table 2/5 只报告 OSWorld 与 ScienceBoard）；Mem²Evolve 自身的失败案例专节（只有 limitation 与基线失败对照）；2508 的完整 PDF 因网络限速未逐页读完（四组件定义与摘要一致，未引用其正文数字）。
+2. **未找到**：SEAgent v1 正文的 AndroidWorld 具体数字（摘要提到该 benchmark，但正文 Table 2/5 只报告 OSWorld 与 ScienceBoard）；Mem²Evolve 自身的失败案例专节（只有 limitation 与基线失败对照）。2508 的 55 页 PDF 已下载并抽取全文核对，四组件定义、五步循环与三条安全律均来自原文（Section 3.2–3.5）。
 3. 本报告没有把「综述里的二手引用」当成这些论文自己的实验结果；所有实验数字都来自对应论文的实验章节。
+
