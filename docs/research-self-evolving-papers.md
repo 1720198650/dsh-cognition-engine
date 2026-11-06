@@ -1,5 +1,9 @@
 # 2026「自我进化 / 自我学习 Agent」核心论文精读与零依赖插件技术选型
 
+> 两份并存、互不覆盖：**本文件是 11 篇扩展版**；
+> 只读任务指定 6 个来源的严格核验版见 [research-self-evolving-papers-6src.md](research-self-evolving-papers-6src.md)（152 行）。
+> 两者结论一致的地方可以直接用；不一致处以「严格六源版」为准（它的来源边界更清楚）。
+
 > **调研对象**：`dsh-cognition-engine` 0.11.0（零 npm 运行时依赖、纯 JSON、本地运行、无数据库/向量库/GPU/训练）
 > **调研日期**：2026-11-06
 > **方法**：逐篇读 arXiv HTML 全文 / ICML poster 页；查不到的一律写「未找到」，不补全。
