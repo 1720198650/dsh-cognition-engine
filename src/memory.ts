@@ -862,13 +862,20 @@ export class TemporalMemoryStore {
   /**
    * 冲突检测：同一 subject 下，两条内容不同的事实其有效区间发生重叠，
    * 说明系统同时持有两个互斥的「当前真值」。
+   *
+   * **只统计还活着的事实**：已删除 / 已被取代的不算冲突。
+   * 早期版本没过滤，删掉的测试条目会一直挂在 conflicts 里（实测 3 条冲突中 2 条是已删条目），
+   * 让 `cognition_state` 报出一个永远降不下来的数字。
    */
   conflicts(): Conflict[] {
     const out: Conflict[] = [];
     for (const [subject, ids] of this.bySubject) {
       const list = [...ids]
         .map((id) => this.facts.get(id))
-        .filter((fact): fact is TemporalFact => fact !== undefined)
+        .filter(
+          (fact): fact is TemporalFact =>
+            fact !== undefined && fact.deletedAt === undefined && fact.supersededAt === null && fact.archived !== true,
+        )
         .sort((a, b) => a.validFrom - b.validFrom);
       for (let i = 0; i < list.length; i += 1) {
         for (let j = i + 1; j < list.length; j += 1) {

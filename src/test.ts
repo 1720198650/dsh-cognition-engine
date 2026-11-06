@@ -266,6 +266,19 @@ async function main(): Promise<void> {
     assert.equal(store.stats().current, 1);
   });
 
+  await test('删除后冲突消失：已删条目不该一直挂在 conflicts 里', () => {
+    const store = new TemporalMemoryStore({ now: () => 10_000 });
+    const a = store.ingest({ content: '测试条目：周三点检', subject: '测试条目', validFrom: 1_000 });
+    const b = store.ingest({ content: '测试条目：周五点检', subject: '测试条目', validFrom: 2_000 });
+    assert.equal(store.stats().conflicts, 1);
+
+    store.softDelete(a.id);
+    assert.equal(store.stats().conflicts, 0, '删掉一条后不该再有冲突');
+    store.softDelete(b.id);
+    assert.equal(store.conflicts().length, 0);
+    assert.equal(store.stats().current, 0, '两条都不再是当前真值');
+  });
+
   await test('相同内容重复写入不产生第二条事实', () => {
     const store = new TemporalMemoryStore({ now: () => 7 });
     const first = store.ingest({ content: '偏好：深色主题', subject: '偏好', validFrom: 7 });
