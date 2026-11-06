@@ -575,6 +575,47 @@ shortRatio / tonePerK / firstPersonPerK / punctPer100 / emojiPerK / catchphraseP
 - 正常变更（改进措辞）→ 回归集通过 → 接受
 - 回归集覆盖率：所有 `topicIds` 都有至少 3 条案例
 
+### 6.6 实现状态（2026-11-06）
+
+已实现 `src/cpe.ts` + 8 个路由 + 4 组测试（总测试 120 → **124 条**）。
+
+**「回归」怎么测（零成本、不调模型）**
+
+每条用例是「一个问题 + 期望被检索到的准则 id」。评测 = 把**当前生效**准则按与问题的
+`textSimilarity` 排序，看期望的 id 是否还在前 `topK`（默认 3）名。
+
+它测的是一件很具体的事：**加了新准则后，原来该命中的准则有没有被挤出去**。
+不混入有效分/衰减/主题——变量单一，才看得出是不是「变差」。
+
+**闸门接在哪**：`POST /playbook/act?action=accept`。启用一条新准则前先快照
+`cognition-playbook.json`，启用后跑回归集；`red` 就恢复文件 + `playbook.loadSync()` +
+记 incident + 拒绝本次启用（响应里带 `gate` 说明原因）。`insufficient`（用例不够）不拦截——
+没数据时不做判断，但也**不会假装通过**。
+
+**证据门控（CPE 的另一半）**：`playbook.markUsage` 的自动退场加了一道理性检查——
+**用户来源 + 证据完好（或无证据链）的准则不许被自动打分退场**，只标注「需人工裁决」。
+理由很直接：能力侵蚀里最典型的路径就是「高证据知识被低置信度的自动信号驱逐」。
+模型自产的准则照旧按 5 样本 / 30% 好评率退场。
+
+**接口**
+
+| 路由 | 作用 |
+|---|---|
+| `GET /cpe` | 用例数、阈值、基线、上次检查、最近 5 条 incident、**实时通过率** |
+| `POST /cpe/case?question=&rules=a,b` | 加用例（冻结后拒绝） |
+| `POST /cpe/case/remove?id=` | 删用例（冻结后拒绝） |
+| `POST /cpe/seed` | 从当前生效准则派生起步用例（标 `derivedFrom: rules`，弱数据） |
+| `POST /cpe/freeze` / `unfreeze` | 冻结 / 解冻回归集 |
+| `POST /cpe/baseline` | 测一次写基线（用例 < `minCases` 直接拒绝） |
+| `POST /cpe/check` | 按阈值判 `green/yellow/red/insufficient` |
+
+**真机验证**：`seed` → 5 条；`check` → `status=insufficient, note=用例不足（5/20），不做判断`；
+`baseline` → `ok=false, reason=用例太少（5/20），此时打基线等于把噪声当标准`。
+**它在该说「不知道」的时候，说的就是「不知道」**。验证后已删除测试用的 `cognition-cpe.json`，回到空集。
+
+**还没做**：UI 页面（现在是纯接口）；用例需要你标 20–50 条真实「问题→该命中的准则」。
+自动派生只能防回归，不能证明正确性——它是开卷考试，别当验收标准。
+
 ---
 
 ## 七、S6：学习预算 + shadow（1–2 天）

@@ -19,9 +19,10 @@ import { PlaybookEventLog } from './events.ts';
 import { InjectionLog, TurnFeedbackTracker, classifyFeedback, extractUserText } from './injection_log.ts';
 import type { FeedbackKind } from './injection_log.ts';
 import { PersonaStore } from './persona.ts';
+import { CpeStore } from './cpe.ts';
 import { StyleStore } from './style.ts';
 import type { StyleBucket } from './style.ts';
-import { TemporalMemoryStore } from './memory.ts';
+import { TemporalMemoryStore, textSimilarity } from './memory.ts';
 import type { TemporalFact } from './memory.ts';
 import { JsonStateStore } from './persist.ts';
 import { buildDetail, buildCoreDigest } from './views.ts';
@@ -394,6 +395,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     ...(config.styleMinTurns === undefined ? {} : { minTurns: config.styleMinTurns }),
     ...(config.styleMinChars === undefined ? {} : { minChars: config.styleMinChars }),
   });
+
+  // CPE 回归闸门（S5）：冻结回归集 + 变更闸门
+  const cpe = new CpeStore();
 
   // 准则事件日志（轻量事件溯源）：只追加，不改主存储
   const ruleEvents = new PlaybookEventLog();
@@ -1026,6 +1030,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         status: styleStore.sampleSummary().sufficient ? styleStore.compare().status : 'insufficient',
         chars: styleStore.sampleSummary().chars,
       },
+      cpe: {
+        cases: cpe.document.holdout.cases.length,
+        frozenAt: cpe.document.holdout.frozenAt,
+        baseline: cpe.document.baseline?.passRate ?? null,
+        status: cpe.document.lastCheck?.status ?? 'insufficient',
+      },
       topics: topics.stats(),
       storageWarning: stateStore.warning,
       rules: memory.getRules(),
@@ -1049,6 +1059,21 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       },
     },
   });
+
+  /**
+   * CPE 评测用的「准则排名」：按与问题的相似度给**当前生效**准则排序。
+   *
+   * 为什么不复用准则本的注入排序：注入排序混了有效分、衰减、主题，
+   * 用来做「该命中的有没有被挤掉」的回归测试会引入无关波动。
+   * 这里只按文本相关度排，测的是检索面，变量单一。
+   */
+  const ruleRankResolver = (question: string): string[] =>
+    playbook
+      .all()
+      .filter((entry) => entry.status === 'active')
+      .map((entry) => ({ id: entry.id, score: textSimilarity(question, entry.content) }))
+      .sort((a, b) => b.score - a.score)
+      .map((item) => item.id);
 
   // 宿主 → 页面 的数据桥：Client 半区 fetch('/cognition-engine/state')
   // 注意：不能放在 /api 前缀下——那条前缀归 API 网关所有，会先被它 401 掉。
@@ -1554,11 +1579,36 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         const id = url.searchParams.get('id') ?? '';
         const action = url.searchParams.get('action') ?? '';
         let ok = false;
+        /** 如果这一步触发过 CPE 回归检查，把结果带回去（页面据此解释「为什么被回滚」）。 */
+        let gate: unknown;
         switch (action) {
-          case 'accept':
+          case 'accept': {
+            // CPE 闸门：启用一条新准则前先快照，启用后跑回归集；
+            // 掉分超阈值就回滚文件并拒绝本次启用——这是「越学越稳」的落点。
+            const snap = cpe.snapshotFiles([playbook.path]);
             ok = playbook.accept(id);
-            if (ok) ruleEvents.append({ type: 'RuleAccepted', ruleId: id, by: 'user' });
+            if (ok) {
+              await playbook.flush();
+              const check = cpe.check(ruleRankResolver);
+              gate = check;
+              if (check.status === 'red') {
+                cpe.restoreFiles(snap);
+                playbook.loadSync();
+                cpe.recordIncident({
+                  label: `accept ${id}`,
+                  before: check.passRate === null || check.delta === null ? null : check.passRate - check.delta,
+                  after: check.passRate,
+                  dropped: check.delta,
+                  rolledBack: true,
+                  detail: check.note,
+                });
+                ok = false;
+              } else {
+                ruleEvents.append({ type: 'RuleAccepted', ruleId: id, by: 'user' });
+              }
+            }
             break;
+          }
           case 'reject': ok = playbook.reject(id); break;
           case 'retire':
             ok = playbook.retire(id, '手动停用');
@@ -1637,7 +1687,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         }
         if (!ok) throw new Error(`准则本操作失败：${action} ${id}`);
         await playbook.flush();
-        return { id, action, ok };
+        return { id, action, ok, ...(gate === undefined ? {} : { gate }) };
       },
       { method: 'POST', requireAuth: explicitLock },
     );
@@ -1710,6 +1760,54 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         }),
       { method: 'POST' },
     );
+
+    // CPE 回归闸门（S5）
+    route('/cognition-engine/cpe', () => {
+      const doc = cpe.document;
+      return {
+        path: cpe.path,
+        thresholds: doc.thresholds,
+        holdout: {
+          cases: doc.holdout.cases.length,
+          frozenAt: doc.holdout.frozenAt,
+          neverUsedForGeneration: doc.holdout.neverUsedForGeneration,
+          derivedFromRules: doc.holdout.cases.filter((item) => item.derivedFrom === 'rules').length,
+        },
+        baseline: doc.baseline,
+        lastCheck: doc.lastCheck,
+        incidents: doc.incidents.slice(-5),
+        /** 实时算一遍，不写盘：看一眼当前回归通过率 */
+        live: cpe.evaluate(ruleRankResolver),
+        saveError: cpe.lastSaveError ?? null,
+      };
+    });
+    route(
+      '/cognition-engine/cpe/case',
+      (url) => {
+        const question = url.searchParams.get('question') ?? '';
+        const rules = (url.searchParams.get('rules') ?? '')
+          .split(',')
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0);
+        const note = url.searchParams.get('note');
+        return cpe.addCase({ question, expectedRuleIds: rules, ...(note === null ? {} : { note }), by: 'user' });
+      },
+      { method: 'POST' },
+    );
+    route(
+      '/cognition-engine/cpe/case/remove',
+      (url) => ({ id: url.searchParams.get('id') ?? '', ok: cpe.removeCase(url.searchParams.get('id') ?? '') }),
+      { method: 'POST' },
+    );
+    route(
+      '/cognition-engine/cpe/seed',
+      () => cpe.seedFromRules(playbook.all().filter((entry) => entry.status === 'active').map((entry) => ({ id: entry.id, content: entry.content }))),
+      { method: 'POST' },
+    );
+    route('/cognition-engine/cpe/freeze', () => cpe.freeze(), { method: 'POST' });
+    route('/cognition-engine/cpe/unfreeze', () => cpe.unfreeze(), { method: 'POST' });
+    route('/cognition-engine/cpe/baseline', () => cpe.measureBaseline(ruleRankResolver), { method: 'POST' });
+    route('/cognition-engine/cpe/check', () => cpe.check(ruleRankResolver), { method: 'POST' });
     route(
       '/cognition-engine/persona/undo',
       (url) => persona.undo(url.searchParams.get('hash') ?? undefined),

@@ -369,6 +369,15 @@ export declare class PlaybookStore {
      */
     markUsage(id: string, kind: UsageKind, trace?: string): boolean;
     /**
+     * 是否受证据门控保护。
+     *
+     * 判据只有两条，都可代码判定（不让模型自评）：
+     *   1. 来源是用户（origin === 'human'）——人说过的话不该被统计噪声推翻；
+     *   2. 证据链完好或没有证据链（undefined 视为未建立，不惩罚）。
+     * 证据链已 weakened / orphaned 的**不**保护——它的支撑确实没了。
+     */
+    isEvidenceProtected(entry: PlaybookEntry): boolean;
+    /**
      * 证据强度（confidence）——冲突裁决的依据。
      *
      * 由**代码算**，不让模型自报（LeAP：层级由代码控制，而非模型输出）。
