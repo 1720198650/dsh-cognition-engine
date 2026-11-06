@@ -154,6 +154,10 @@ Invoke-WebRequest "http://127.0.0.1:3111/cognition-engine/events" -UseBasicParsi
 样本没到 60 轮 / 6000 字之前它只会回 `insufficient` —— 这不是坏了，是拒绝给假分数。
 等样本够了先 `POST /cognition-engine/style/baseline` 冻结基线，之后才谈「有没有漂」。
 
+**学习面板**：浮层顶部新增「学习」页签（记忆 / 主题 / 准则 / 人格 / 学习 / 设置），一屏看完
+预算（周配额与已用）、CPE 回归（用例/基线/状态）、shadow（在册/已转正/够格）、
+主动提醒（wouldDo 可直接「我去处理」或「不用」）、检索度量（召回次数/零结果率/Top-1/Top-3）、
+反馈闭环（轮次/纠正/确认）与风格指纹状态。纯读接口 + 几个动作按钮，不动模型上下文。
 **要用人格块**：打开 **设置 → 人格**（`settings.section`，id `cognition-persona`）。
 页面上能编辑人格与用户画像、创建/保存/撤销、确认 agent 提案、预览实际注入内容。
 也可以走接口：
