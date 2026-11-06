@@ -278,6 +278,7 @@ export declare function contentHash(...parts: readonly string[]): string;
 /** 从正文推导主题键：优先取冒号前的短语，否则取前 16 个字符。 */
 export declare function deriveSubject(content: string): string;
 export declare class TemporalMemoryStore {
+    #private;
     private readonly facts;
     private readonly bySubject;
     /** 用户可配置的准入规则。 */
@@ -420,6 +421,19 @@ export declare class TemporalMemoryStore {
     softDelete(id: string): boolean;
     /** 恢复一条软删除的记忆。 */
     restoreDeleted(id: string): boolean;
+    /**
+     * 体检：找出「取代者已经不存在，但自己还被标成已取代」的事实。
+     *
+     * 这是历史数据里的常见坏味道（删掉新版本后旧版永久失效）。
+     * 返回 id 供页面提示，`repairOrphans()` 才是修。
+     */
+    orphans(): Array<{
+        id: string;
+        subject: string;
+        missingBy: string;
+    }>;
+    /** 修掉所有孤儿取代关系（把被取代者放回 current）。返回修了几条。 */
+    repairOrphans(): number;
     /** 设置准入规则（页面上的开关）。 */
     setRules(rules: Partial<AdmissionRules>): AdmissionRules;
     /** 当前准入规则。 */

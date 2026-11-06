@@ -1057,7 +1057,32 @@ export class TemporalMemoryStore {
     if (fact === undefined) return false;
     this.emit({ op: 'delete', id, subject: fact.subject });
     this.facts.set(id, Object.freeze({ ...fact, deletedAt: this.clock() }));
+    // 作废会传染（TMS）：被这条取代过的事实，现在失去了「取代者」。
+    // 它们的 supersededBy 指向一条不存在的记录，于是永远不生效、也永远说不清为什么。
+    // 正确语义：取代者被删 → 被取代者回到 current。
+    this.#reviveOrphansOf(id);
     return true;
+  }
+
+  /**
+   * 取代者消失后，让被它取代的事实回到 current。
+   *
+   * 只解除 supersede 关系，**不改 validFrom** —— 时间线不动，
+   * 只是「当前真值」这一列重新有主人。同时清掉 supersededBy，
+   * 免得它还指着一条已经没有的记录。
+   */
+  #reviveOrphansOf(goneId: string): number {
+    let revived = 0;
+    for (const [factId, fact] of this.facts) {
+      if (fact.supersededBy !== goneId) continue;
+      this.facts.set(
+        factId,
+        Object.freeze({ ...fact, supersededAt: null, supersededBy: null, validTo: null }),
+      );
+      this.emit({ op: 'restore', id: factId, subject: fact.subject });
+      revived += 1;
+    }
+    return revived;
   }
 
   /** 恢复一条软删除的记忆。 */
@@ -1068,6 +1093,39 @@ export class TemporalMemoryStore {
     const { deletedAt: _drop, ...rest } = fact;
     this.facts.set(id, Object.freeze(rest as TemporalFact));
     return true;
+  }
+
+  /**
+   * 体检：找出「取代者已经不存在，但自己还被标成已取代」的事实。
+   *
+   * 这是历史数据里的常见坏味道（删掉新版本后旧版永久失效）。
+   * 返回 id 供页面提示，`repairOrphans()` 才是修。
+   */
+  orphans(): Array<{ id: string; subject: string; missingBy: string }> {
+    const out: Array<{ id: string; subject: string; missingBy: string }> = [];
+    for (const [id, fact] of this.facts) {
+      if (fact.supersededBy === null) continue;
+      const killer = this.facts.get(fact.supersededBy);
+      if (killer === undefined || killer.deletedAt !== undefined) {
+        out.push({ id, subject: fact.subject, missingBy: fact.supersededBy });
+      }
+    }
+    return out;
+  }
+
+  /** 修掉所有孤儿取代关系（把被取代者放回 current）。返回修了几条。 */
+  repairOrphans(): number {
+    const targets = this.orphans();
+    for (const target of targets) {
+      const fact = this.facts.get(target.id);
+      if (fact === undefined) continue;
+      this.facts.set(
+        target.id,
+        Object.freeze({ ...fact, supersededAt: null, supersededBy: null, validTo: null }),
+      );
+      this.emit({ op: 'restore', id: target.id, subject: fact.subject });
+    }
+    return targets.length;
   }
 
   /** 设置准入规则（页面上的开关）。 */

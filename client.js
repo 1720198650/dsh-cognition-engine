@@ -2228,6 +2228,12 @@ window.__ModuleLoader__.load({
         top3: '前三条里有',
         feedback: '你的反馈记到了吗',
         feedbackHint: '我注入了多少轮内容、你说过几次「不对」「没错」。',
+        audit: '体检报告',
+        auditHint: '分四项看，不给总分——不同维度本来就是不同的事。',
+        evaluator: '谁评的',
+        provider: '谁评的',
+        repair: '修一下',
+        reparired: '已修复',
         turns: '轮',
         corrected: '说不对',
         confirmed: '说没错',
@@ -2365,6 +2371,7 @@ window.__ModuleLoader__.load({
         const [cpe, setCpe] = React.useState(null);
         const [retrieval, setRetrieval] = React.useState(null);
         const [shadow, setShadow] = React.useState(null);
+        const [audit, setAudit] = React.useState(null);
         const [error, setError] = React.useState(null);
         const [busy, setBusy] = React.useState(false);
         const [notice, setNotice] = React.useState(null);
@@ -2383,6 +2390,11 @@ window.__ModuleLoader__.load({
             setCpe(c);
             setRetrieval(d);
             setShadow(e);
+            try {
+              setAudit(await fetch('/cognition-engine/audit/dimensions', { cache: 'no-store' }).then((r) => r.json()));
+            } catch {
+              setAudit(null);
+            }
             setError(null);
           } catch (err) {
             setError(err && err.message ? err.message : String(err));
@@ -2559,6 +2571,44 @@ window.__ModuleLoader__.load({
               h('span', { style: LS.badge((retInfo.eval && retInfo.eval.status) || 'insufficient') }, statusWord(dict, (retInfo.eval && retInfo.eval.status) || 'insufficient')),
             ),
           ),
+
+          // —— 体检报告（分维度，不给总分）——
+          audit && audit.dimensions
+            ? card(
+                dict.audit,
+                dict.auditHint,
+                h(
+                  'div',
+                  { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                  audit.dimensions.map((dim) =>
+                    h(
+                      'div',
+                      { style: LS.item, key: dim.key },
+                      h(
+                        'div',
+                        { style: { display: 'flex', alignItems: 'baseline', gap: 8 } },
+                        h('span', { style: { fontSize: 12, fontWeight: 600 } }, dim.title),
+                        h('span', { style: LS.badge(dim.status === 'attention' ? 'red' : dim.status) }, statusWord(dict, dim.status)),
+                        h('span', { style: { fontSize: 10, color: 'var(--dsw-alias-label-secondary)' } }, dim.evaluator),
+                      ),
+                      h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, dim.note),
+                      dim.key === 'memory' && dim.facts && dim.facts.orphans > 0
+                        ? h(
+                            'button',
+                            {
+                              type: 'button',
+                              style: PS.btn,
+                              disabled: busy,
+                              onClick: () => post('/cognition-engine/memory/repair'),
+                            },
+                            dict.repair + '（' + dim.facts.orphans + '）',
+                          )
+                        : null,
+                    ),
+                  ),
+                ),
+              )
+            : null,
 
           // —— 反馈闭环 + 风格 ——
           card(
