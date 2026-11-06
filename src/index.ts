@@ -20,6 +20,9 @@ import { InjectionLog, TurnFeedbackTracker, classifyFeedback, extractUserText } 
 import type { FeedbackKind } from './injection_log.ts';
 import { PersonaStore } from './persona.ts';
 import { CpeStore } from './cpe.ts';
+import { BudgetStore } from './budget.ts';
+import { ShadowStore } from './shadow.ts';
+import { shouldReject, summarize } from './notlearn.ts';
 import { StyleStore } from './style.ts';
 import type { StyleBucket } from './style.ts';
 import { TemporalMemoryStore, textSimilarity } from './memory.ts';
@@ -399,6 +402,11 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   // CPE 回归闸门（S5）：冻结回归集 + 变更闸门
   const cpe = new CpeStore();
 
+  // 学习预算（S6）：每周名额 + 五条停止信号
+  const budget = new BudgetStore();
+  // shadow 试运行（S6）：先进 shadow 不进注入，够格再转正
+  const shadow = new ShadowStore();
+
   // 准则事件日志（轻量事件溯源）：只追加，不改主存储
   const ruleEvents = new PlaybookEventLog();
   // 注入快照：记录每轮注入了哪些准则，用于把用户反馈回写到准则。
@@ -605,7 +613,21 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
     // 候选进 pending，必须人工审核
     const submitted: Array<Record<string, unknown>> = [];
+    const blocked: Array<Record<string, unknown>> = [];
     for (const candidate of parsed.candidates) {
+      // 「八类不学」硬过滤（S6）：无依据 / 含密钥 / 一次性事实 / 环境绑定 直接不进库。
+      // soft 命中的照常提交，只是把标记带出去让人看一眼——一刀切会误杀有用内容。
+      const verdict = shouldReject(candidate.content, {
+        hasUserEvidence: (candidate.sourceIds ?? []).length > 0,
+      });
+      if (verdict.reject) {
+        blocked.push({
+          content: candidate.content,
+          code: summarize(verdict.hits),
+          reason: verdict.hits.filter((hit) => hit.severity === 'hard').map((hit) => hit.reason).join('；'),
+        });
+        continue;
+      }
       // 相对表达（"7d"）与 ISO 日期都由 parseMoment 归一成毫秒；解析不了就当长期有效。
       const validTo = candidate.validUntil === undefined ? null : (parseMoment(candidate.validUntil) ?? null);
       const outcome = playbook.submit({
@@ -623,6 +645,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         ...(outcome.entry === undefined ? {} : { id: outcome.entry.id }),
         ...(validTo === null ? {} : { validTo }),
         ...(outcome.entry?.conflictWith === undefined ? {} : { conflictWith: outcome.entry.conflictWith }),
+        // soft 标记：超粒度/平手冲突/口误/投机主题，提交了但要标注
+        ...(verdict.hits.length === 0 ? {} : { softFlags: summarize(verdict.hits) }),
       });
     }
     await playbook.flush();
@@ -631,6 +655,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       reflection: parsed.reflection,
       marked,
       candidates: submitted,
+      /** 被「八类不学」拦下的候选（含命中原因），让人知道模型想学什么但被拒。 */
+      blocked,
       uncoveredMemories: uncovered.length,
       parseFailed: parsed.raw !== undefined,
       // 解析失败时把模型原文前 600 字带出来，否则无法判断是格式问题还是内容问题。
@@ -1036,6 +1062,19 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         baseline: cpe.document.baseline?.passRate ?? null,
         status: cpe.document.lastCheck?.status ?? 'insufficient',
       },
+      budget: (() => {
+        budget.syncActiveRules(playbook.stats().active);
+        const status = budget.status();
+        return {
+          week: status.week,
+          quota: status.quota,
+          used: status.used,
+          remaining: status.remaining,
+          paused: status.paused,
+          pauseReason: status.pauseReason,
+        };
+      })(),
+      shadow: shadow.stats(),
       topics: topics.stats(),
       storageWarning: stateStore.warning,
       rules: memory.getRules(),
@@ -1581,8 +1620,27 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         let ok = false;
         /** 如果这一步触发过 CPE 回归检查，把结果带回去（页面据此解释「为什么被回滚」）。 */
         let gate: unknown;
+        /** true 表示「没成功但不是故障」（预算用尽转 shadow / 回归回滚），不要抛 500。 */
+        let softFail = false;
         switch (action) {
           case 'accept': {
+            // 学习预算（S6）：名额用尽时**转进 shadow 试运行**，而不是硬拒。
+            // 这样「想学」和「别污染上下文」两件事都满足。
+            budget.syncActiveRules(playbook.stats().active);
+            const budgetCheck = budget.canLearn('new');
+            if (!budgetCheck.ok) {
+              const candidate = playbook.get(id);
+              const shadowed = shadow.add({
+                text: candidate?.content ?? '',
+                subject: candidate?.section ?? '未分类',
+                source: 'budget-overflow',
+                note: budgetCheck.reason ?? '本周名额已用完',
+              });
+              ok = playbook.reject(id); // 移出待审，进 shadow 观察
+              softFail = true;
+              gate = { budget: budgetCheck, shadowId: shadowed.entry?.id ?? null, movedToShadow: true };
+              break;
+            }
             // CPE 闸门：启用一条新准则前先快照，启用后跑回归集；
             // 掉分超阈值就回滚文件并拒绝本次启用——这是「越学越稳」的落点。
             const snap = cpe.snapshotFiles([playbook.path]);
@@ -1603,8 +1661,10 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
                   detail: check.note,
                 });
                 ok = false;
+                softFail = true;
               } else {
                 ruleEvents.append({ type: 'RuleAccepted', ruleId: id, by: 'user' });
+                budget.consume('new');
               }
             }
             break;
@@ -1615,7 +1675,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
             if (ok) ruleEvents.append({ type: 'RuleRetired', ruleId: id, reason: '手动停用', by: 'user' });
             break;
           case 'revive': ok = playbook.revive(id); break;
-          case 'revise': ok = playbook.revise(id, url.searchParams.get('content') ?? ''); break;
+          case 'revise': {
+            ok = playbook.revise(id, url.searchParams.get('content') ?? '');
+            // 修旧也占名额（但不拦：改错比不改好）
+            if (ok) budget.consume('revise');
+            break;
+          }
           case 'extend': {
             const raw = url.searchParams.get('validTo');
             ok = playbook.extend(id, raw === null ? null : (parseMoment(raw) ?? null));
@@ -1685,7 +1750,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
               'action 只能是 accept/reject/retire/revive/revise/extend/helpful/harmful/delete/flags',
             );
         }
-        if (!ok) throw new Error(`准则本操作失败：${action} ${id}`);
+        if (!ok && !softFail) throw new Error(`准则本操作失败：${action} ${id}`);
         await playbook.flush();
         return { id, action, ok, ...(gate === undefined ? {} : { gate }) };
       },
@@ -1808,6 +1873,84 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     route('/cognition-engine/cpe/unfreeze', () => cpe.unfreeze(), { method: 'POST' });
     route('/cognition-engine/cpe/baseline', () => cpe.measureBaseline(ruleRankResolver), { method: 'POST' });
     route('/cognition-engine/cpe/check', () => cpe.check(ruleRankResolver), { method: 'POST' });
+
+    // 学习预算（S6）
+    route('/cognition-engine/budget', () => {
+      budget.syncActiveRules(playbook.stats().active);
+      return { path: budget.path, ...budget.status(), saveError: budget.lastSaveError ?? null };
+    });
+    route('/cognition-engine/budget/signals', () => {
+      // 只喂能算出来的指标，其余留空（宁可漏报也不误停）
+      const stats = playbook.stats();
+      const orphaned = playbook.all().filter((entry) => entry.evidence?.status === 'orphaned').length;
+      return budget.evaluateSignals({ activeRules: stats.active, orphanedRules: orphaned });
+    });
+    route('/cognition-engine/budget/pause', (url) => {
+      const code = url.searchParams.get('code') ?? 'futile';
+      budget.pause({
+        code: (['futile', 'still-wrong', 'overcrowded', 'flip-flop', 'idle-quota'].includes(code) ? code : 'futile') as never,
+        reason: url.searchParams.get('reason') ?? '手动暂停学习',
+        action: 'pause-new',
+      });
+      return budget.status();
+    }, { method: 'POST' });
+    route('/cognition-engine/budget/resume', () => {
+      budget.resume();
+      return budget.status();
+    }, { method: 'POST' });
+
+    // shadow 试运行（S6）
+    route('/cognition-engine/shadow', () => ({
+      path: shadow.path,
+      stats: shadow.stats(),
+      entries: shadow.all().slice(-30),
+      saveError: shadow.lastSaveError ?? null,
+    }));
+    route('/cognition-engine/shadow/add', (url) => {
+      const result = shadow.add({
+        text: url.searchParams.get('text') ?? '',
+        subject: url.searchParams.get('subject') ?? undefined,
+        source: url.searchParams.get('source') ?? 'manual',
+      });
+      return result;
+    }, { method: 'POST' });
+    route('/cognition-engine/shadow/record', (url) => {
+      const id = url.searchParams.get('id') ?? '';
+      const flag = (name: string): boolean => url.searchParams.get(name) === 'true';
+      return {
+        id,
+        ok: shadow.record(id, {
+          occurrence: flag('occurrence'),
+          hit: flag('hit'),
+          helpful: flag('helpful'),
+          harmful: flag('harmful'),
+        }),
+      };
+    }, { method: 'POST' });
+    route('/cognition-engine/shadow/promote', async (url) => {
+      const id = url.searchParams.get('id') ?? '';
+      const promoted = shadow.promote(id);
+      if (!promoted.ok || promoted.entry === undefined) return promoted;
+      // 转正 = 走正常提交路径（仍需人工在准则本里 accept，不绕过审核）
+      const outcome = playbook.submit({ section: promoted.entry.subject, content: promoted.entry.text });
+      await playbook.flush();
+      return { ...promoted, submitted: outcome.accepted, ruleId: outcome.entry?.id ?? null };
+    }, { method: 'POST' });
+    route('/cognition-engine/shadow/reject', (url) => ({
+      id: url.searchParams.get('id') ?? '',
+      ok: shadow.reject(url.searchParams.get('id') ?? '', url.searchParams.get('note') ?? undefined),
+    }), { method: 'POST' });
+    route('/cognition-engine/shadow/sweep', () => ({ expired: shadow.sweepExpired().map((entry) => entry.id) }), { method: 'POST' });
+
+    // 八类不学：给候选做个检查（不改数据，只回答「该不该学」）
+    route('/cognition-engine/learn/check', (url) => {
+      const text = url.searchParams.get('text') ?? '';
+      const sourceIds = url.searchParams.get('sourceIds');
+      // 只在调用方**明确**说了 sourceIds 时才判「无用户依据」；
+      // 不说 = 不知道，不能当成「没有」（否则每句正常准则都会被误拒）。
+      const verdict = shouldReject(text, sourceIds === null ? {} : { hasUserEvidence: sourceIds.length > 0 });
+      return { text: text.slice(0, 80), reject: verdict.reject, hits: verdict.hits };
+    });
     route(
       '/cognition-engine/persona/undo',
       (url) => persona.undo(url.searchParams.get('hash') ?? undefined),

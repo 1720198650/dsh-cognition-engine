@@ -146,7 +146,7 @@ Invoke-WebRequest "http://127.0.0.1:3111/cognition-engine/events" -UseBasicParsi
 | 1 | **S3 Persona 块** | ✅ 已实现（默认关闭，等你要用时再开） |
 | 2 | **S4 风格指纹** | ✅ 已实现（只落统计量、不落原文；样本不足会明说） |
 | 3 | S5 CPE 回归闸门 | ✅ 已实现（闸门接在准则 accept；证据门控防误退场；需你标 20–50 条用例才有意义） |
-| 4 | S6 学习预算 + shadow | 待做 |
+| 4 | S6 学习预算 + shadow | ✅ 已实现（周配额 8；超预算自动转 shadow 试运行；八类不学分级过滤） |
 
 **风格审计怎么用**：`GET /cognition-engine/style` 看 `sample.turns` 与 `comparison.status`。
 样本没到 60 轮 / 6000 字之前它只会回 `insufficient` —— 这不是坏了，是拒绝给假分数。

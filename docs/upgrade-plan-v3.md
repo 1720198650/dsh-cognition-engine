@@ -691,6 +691,48 @@ W = clamp(ceil(N × 1%), 4, 12)     N = 当前 active 准则数
 - 构造「3 周零命中」→ `paused = true`
 - 8 类不学各造 2 例，`rejected.jsonl` 命中率 100%
 
+### 7.6 实现状态（2026-11-06）
+
+已实现三个模块 + 12 个路由 + 5 组测试（总测试 124 → **128 条**）。
+
+| 模块 | 内容 |
+|---|---|
+| `src/budget.ts` | 周配额（`clamp(max(ceil(N×1%),8),4,12)`，N=5 时 8 = 修旧 5 + 学新 2 + 预留 1）、跨周重置、暂停/恢复、五条停止信号 |
+| `src/shadow.ts` | 试运行池：去重、`occurrence/hit/helpful/harmful` 计数、命中≥3 且 helpful≥harmful 才可转正、21 天零命中自动 `expired` |
+| `src/notlearn.ts` | 八类不学，分 **hard**（密钥/一次性/环境绑定/无用户依据，直接不学）与 **soft**（超粒度/平手冲突/同轮口误/投机主题，可学但标注） |
+
+**一个关键设计：预算用尽不硬拒，转进 shadow。**
+
+「想学」和「别污染上下文」本来是矛盾的。解法是超预算的候选不直接启用，
+而是进 shadow 观察——命中够了再转正。这样 `used.total ≤ quota.total` 恒成立，
+学习也没被堵死。
+
+**闸门接线**
+
+- `POST /playbook/act?action=accept`：先查预算 → 名额够才走 CPE 闸门 → 成功才算 `used.new +1`；
+  名额不够就把候选移入 shadow（`source: budget-overflow`）并移出待审。
+- `action=revise`：成功计 `used.revise +1`（只记账，不拦——改错比不改好）。
+- `POST /playbook/distill`：候选先过「八类不学」，hard 命中的**不进库**，随响应 `blocked` 数组返回原因；soft 命中的照常提交但带 `softFlags`。
+
+**分级的原因**：hard 错了直接有害；soft 只是「可能不值一个名额」，一刀切会误杀真正有用的长准则。
+
+**真机验证**
+
+```
+GET /budget      → week=2026-W45 quota={8,5,2,1} used=0 paused=false
+GET /budget/signals → []（没数据就不误停）
+GET /learn/check?text=发布时把 token 写进 README → reject=true, secret
+GET /learn/check?text=发版前依次执行六步…        → reject=false（正常准则不误拒）
+POST /shadow/add + 3×record(hit,helpful) → readyToPromote=1
+```
+
+最后一条验证里修掉一个自己写出来的 bug：`/learn/check` 在没传 `sourceIds` 时
+把「不知道有没有依据」当成「没有依据」，导致**任何正常准则都被判 hard 拒绝**。
+现在只在调用方明确传 `sourceIds=` 时才判这一条。
+
+**还没做**：预算/shadow 的 UI（现在纯接口）；五条停止信号里依赖历史数据的
+（零命中周数、连续两周额度使用率）需要跨周数据积累后才有意义，现在只算得出来的那部分。
+
 ---
 
 ## 八、S7：主动闸门接火（3–5 天）
