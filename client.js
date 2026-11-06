@@ -90,6 +90,7 @@ window.__ModuleLoader__.load({
         cleared: '已清空',
         playbookTab: '准则',
         personaTab: '人格',
+        learnTab: '学习',
         playbookPending: '待审',
         playbookActive: '已生效',
         playbookRetired: '已停用',
@@ -172,6 +173,7 @@ window.__ModuleLoader__.load({
         schemas: 'Topics',
         playbookTab: 'Rules',
         personaTab: 'Persona',
+        learnTab: 'Learning',
         refresh: 'Refresh',
         close: 'Close',
         empty: 'Nothing here',
@@ -408,6 +410,8 @@ window.__ModuleLoader__.load({
     function createDock(ctx, options) {
       // 人格页签复用设置页那套组件，只是换成嵌入式排版
       const PersonaEmbedded = createPersonaPage(ctx);
+      // 学习面板：预算 / shadow / CPE / 提醒 / 检索一屏看完
+      const LearningEmbedded = createLearningPage(ctx);
       return function MoodDock(props) {
         const opts = { ...(options || {}), ...(props || {}) };
         const [state, setState] = React.useState(null);
@@ -838,6 +842,7 @@ window.__ModuleLoader__.load({
           ['schemas', `${dict.schemas} ${topicsData && topicsData.stats ? topicsData.stats.active : 0}`.trim()],
           ['playbook', `${dict.playbookTab}${detail && detail.playbook ? ' ' + detail.playbook.active : ''}`.trim()],
           ['persona', dict.personaTab],
+          ['learning', dict.learnTab],
           ['settings', dict.settings],
         ];
 
@@ -1085,6 +1090,8 @@ window.__ModuleLoader__.load({
           );
         } else if (tab === 'persona') {
           body = h(PersonaEmbedded, { variant: 'embedded' });
+        } else if (tab === 'learning') {
+          body = h(LearningEmbedded, { variant: 'embedded' });
         } else if (tab === 'memories') {
           body = renderList(detail.memories, (item) => {
             if (editingId === item.id) {
@@ -2180,6 +2187,376 @@ window.__ModuleLoader__.load({
                 ),
               )
             : null,
+        );
+      };
+    }
+
+    /* ---------------- 学习面板（预算 / shadow / CPE / 提醒 / 检索） ---------------- */
+
+    const LEARN_TEXT = {
+      zh: {
+        nav: '学习',
+        title: '学习',
+        budget: '本周学习预算',
+        budgetHint: '名额用尽时新准则会先进 shadow 试运行，不会硬塞进注入段。',
+        used: '已用',
+        remaining: '剩余',
+        revise: '修旧',
+        fresh: '学新',
+        paused: '已暂停',
+        cpe: 'CPE 回归闸门',
+        cpeHint: '启用新准则前后跑冻结回归集，掉分超阈值自动回滚。',
+        cases: '用例',
+        baseline: '基线',
+        lastCheck: '上次检查',
+        shadow: 'shadow 试运行',
+        shadowHint: '不进注入段；命中 ≥3 且 helpful ≥ harmful 才可转正。',
+        active: '在册',
+        promoted: '已转正',
+        ready: '够格转正',
+        wouldDo: '主动提醒（只记录，不发送）',
+        wouldDoHint: '默认 P1：只记「本来会提醒什么」，不会主动给你发消息。',
+        adopt: '我去处理',
+        dismiss: '不用',
+        noWouldDo: '暂时没有要提醒的事',
+        retrieval: '检索度量',
+        retrievalHint: '用真实查询 + 人工标注算 Top-1/Top-3；样本不足时不下结论。',
+        logged: '召回次数',
+        zeroRate: '零结果率',
+        top1: 'Top-1',
+        top3: 'Top-3',
+        feedback: '反馈闭环',
+        feedbackHint: '注入了多少轮、你确认/纠正了几次。',
+        turns: '轮次',
+        corrected: '纠正',
+        confirmed: '确认',
+        style: '风格指纹',
+        styleHint: '只记统计量不记原文；样本不足会明说。',
+        insufficient: '样本不足',
+        green: '正常',
+        yellow: '轻度',
+        red: '异常',
+        loading: '加载中…',
+        failed: '加载失败',
+        refresh: '刷新',
+        checkpoint: '跑一次检查',
+        done: '已记录',
+      },
+      en: {
+        nav: 'Learning',
+        title: 'Learning',
+        budget: 'This week budget',
+        budgetHint: 'When quota runs out, new rules go to shadow first instead of being injected.',
+        used: 'used',
+        remaining: 'remaining',
+        revise: 'revise',
+        fresh: 'new',
+        paused: 'paused',
+        cpe: 'CPE regression gate',
+        cpeHint: 'Runs a frozen regression set before/after enabling a rule; rolls back on regression.',
+        cases: 'cases',
+        baseline: 'baseline',
+        lastCheck: 'last check',
+        shadow: 'Shadow trial',
+        shadowHint: 'Not injected; promote after 3+ hits and helpful ≥ harmful.',
+        active: 'active',
+        promoted: 'promoted',
+        ready: 'ready',
+        wouldDo: 'Proactive (record only)',
+        wouldDoHint: 'P1 by default: records what it would remind, sends nothing.',
+        adopt: 'Handle it',
+        dismiss: 'Skip',
+        noWouldDo: 'Nothing to remind right now',
+        retrieval: 'Retrieval metrics',
+        retrievalHint: 'Real queries + human labels for Top-1/Top-3; no verdict on small samples.',
+        logged: 'recalls',
+        zeroRate: 'zero-rate',
+        top1: 'Top-1',
+        top3: 'Top-3',
+        feedback: 'Feedback loop',
+        feedbackHint: 'Turns injected, how many you confirmed/corrected.',
+        turns: 'turns',
+        corrected: 'corrected',
+        confirmed: 'confirmed',
+        style: 'Style fingerprint',
+        styleHint: 'Metrics only, no raw text; says insufficient when sample is small.',
+        insufficient: 'insufficient',
+        green: 'ok',
+        yellow: 'mild',
+        red: 'alert',
+        loading: 'Loading…',
+        failed: 'Load failed',
+        refresh: 'Refresh',
+        checkpoint: 'Run check',
+        done: 'Recorded',
+      },
+    };
+
+    function learnText(ctx) {
+      let id = 'zh';
+      try {
+        const snap = ctx && ctx.locale && typeof ctx.locale.getLocale === 'function' ? ctx.locale.getLocale() : null;
+        id = (snap && (snap.id || snap.locale || snap.language)) || 'zh';
+      } catch {
+        id = 'zh';
+      }
+      return String(id).toLowerCase().startsWith('en') ? LEARN_TEXT.en : LEARN_TEXT.zh;
+    }
+
+    const LS = {
+      barTrack: {
+        position: 'relative',
+        height: 8,
+        borderRadius: 4,
+        background: 'var(--dsw-alias-bg-layer-2)',
+        overflow: 'hidden',
+        border: '1px solid var(--dsw-alias-border-l1)',
+      },
+      barFill: { position: 'absolute', left: 0, top: 0, bottom: 0, background: 'var(--dsw-alias-brand-primary)' },
+      kv: { display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 11, color: 'var(--dsw-alias-label-secondary)' },
+      badge: (kind) => ({
+        fontSize: 11,
+        padding: '1px 8px',
+        borderRadius: 999,
+        border: '1px solid var(--dsw-alias-border-l1)',
+        color:
+          kind === 'green'
+            ? 'var(--dsw-alias-state-success-primary)'
+            : kind === 'yellow'
+              ? 'var(--dsw-alias-state-warn-primary)'
+              : kind === 'red'
+                ? 'var(--dsw-alias-state-error-primary)'
+                : 'var(--dsw-alias-label-secondary)',
+      }),
+      item: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        padding: '8px 10px',
+        borderRadius: 8,
+        background: 'var(--dsw-alias-bg-layer-2)',
+        border: '1px solid var(--dsw-alias-border-l1)',
+      },
+    };
+
+    function statusWord(dict, status) {
+      if (status === 'green') return dict.green;
+      if (status === 'yellow' || status === 'orange') return dict.yellow;
+      if (status === 'red') return dict.red;
+      return dict.insufficient;
+    }
+
+    function createLearningPage(ctx) {
+      return function LearningPage(props) {
+        const dict = learnText(ctx);
+        const embedded = props && props.variant === 'embedded';
+        const pageStyle = embedded ? PS.pageEmbedded : PS.page;
+        const [state, setState] = React.useState(null);
+        const [proactive, setProactive] = React.useState(null);
+        const [cpe, setCpe] = React.useState(null);
+        const [retrieval, setRetrieval] = React.useState(null);
+        const [shadow, setShadow] = React.useState(null);
+        const [error, setError] = React.useState(null);
+        const [busy, setBusy] = React.useState(false);
+        const [notice, setNotice] = React.useState(null);
+
+        const load = React.useCallback(async () => {
+          try {
+            const [a, b, c, d, e] = await Promise.all([
+              fetch('/cognition-engine/state', { cache: 'no-store' }).then((r) => r.json()),
+              fetch('/cognition-engine/proactive', { cache: 'no-store' }).then((r) => r.json()),
+              fetch('/cognition-engine/cpe', { cache: 'no-store' }).then((r) => r.json()),
+              fetch('/cognition-engine/retrieval', { cache: 'no-store' }).then((r) => r.json()),
+              fetch('/cognition-engine/shadow', { cache: 'no-store' }).then((r) => r.json()),
+            ]);
+            setState(a);
+            setProactive(b);
+            setCpe(c);
+            setRetrieval(d);
+            setShadow(e);
+            setError(null);
+          } catch (err) {
+            setError(err && err.message ? err.message : String(err));
+          }
+        }, []);
+
+        React.useEffect(() => {
+          load();
+        }, [load]);
+
+        const post = async (path) => {
+          setBusy(true);
+          setNotice(null);
+          try {
+            const res = await fetch(path, { method: 'POST', cache: 'no-store' });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(json.error || 'HTTP ' + res.status);
+            setNotice(dict.done);
+            await load();
+            return json;
+          } catch (err) {
+            setNotice('✗ ' + (err && err.message ? err.message : String(err)));
+          } finally {
+            setBusy(false);
+          }
+        };
+
+        if (state === null && error === null) {
+          return h('div', { style: pageStyle }, h('p', { style: PS.hint }, dict.loading));
+        }
+        if (error !== null && state === null) {
+          return h(
+            'div',
+            { style: pageStyle },
+            h('p', { style: PS.err }, dict.failed + '：' + error),
+            h('button', { type: 'button', style: PS.btn, onClick: () => { setError(null); load(); } }, dict.refresh),
+          );
+        }
+
+        const budget = state.budget || {};
+        const quota = budget.quota || { total: 0, revise: 0, new: 0 };
+        const used = budget.used || { total: 0, revise: 0, new: 0 };
+        const ratio = quota.total > 0 ? Math.min(1, used.total / quota.total) : 0;
+        const cpeInfo = cpe || {};
+        const retInfo = retrieval || {};
+        const shadowInfo = shadow || {};
+        const pending = (proactive && proactive.pending) || [];
+        const fb = state.feedback || {};
+        const st = state.style || {};
+
+        const card = (title, hint, children) =>
+          h(
+            'div',
+            { style: PS.card },
+            h(
+              'div',
+              { style: PS.blockHead },
+              h('span', { style: PS.label }, title),
+              hint ? h('span', { style: PS.counter }, hint) : null,
+            ),
+            children,
+          );
+
+        return h(
+          'div',
+          { style: pageStyle },
+          embedded
+            ? null
+            : h(
+                'div',
+                { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                h('h2', { style: PS.title }, dict.title),
+              ),
+          notice ? h('div', { style: notice.startsWith('✗') ? PS.err : PS.ok }, notice) : null,
+          h(
+            'div',
+            { style: PS.rowFlex },
+            h('button', { type: 'button', style: PS.btn, onClick: () => load(), disabled: busy }, dict.refresh),
+            h('button', { type: 'button', style: PS.btn, onClick: () => post('/cognition-engine/cpe/check'), disabled: busy }, dict.checkpoint),
+          ),
+
+          // —— 本周预算 ——
+          card(
+            dict.budget + (budget.paused ? ' · ' + dict.paused : ''),
+            dict.budgetHint,
+            h(
+              'div',
+              { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+              h('div', { style: LS.barTrack }, h('div', { style: { ...LS.barFill, width: Math.round(ratio * 100) + '%' } })),
+              h(
+                'div',
+                { style: LS.kv },
+                h('span', null, `${dict.used} ${used.total}/${quota.total}`),
+                h('span', null, `${dict.revise} ${used.revise}/${quota.revise}`),
+                h('span', null, `${dict.fresh} ${used.new}/${quota.new}`),
+              ),
+              budget.pauseReason ? h('div', { style: PS.err }, budget.pauseReason) : null,
+            ),
+          ),
+
+          // —— CPE ——
+          card(
+            dict.cpe,
+            dict.cpeHint,
+            h(
+              'div',
+              { style: LS.kv },
+              h('span', null, `${dict.cases} ${(cpeInfo.holdout && cpeInfo.holdout.cases) || 0}`),
+              h('span', null, `${dict.baseline} ${cpeInfo.baseline ? cpeInfo.baseline.passRate : '-'}`),
+              h('span', null, `${dict.lastCheck} ${(cpeInfo.lastCheck && cpeInfo.lastCheck.status) || '-'}`),
+              h('span', { style: LS.badge((cpeInfo.lastCheck && cpeInfo.lastCheck.status) || 'insufficient') }, statusWord(dict, (cpeInfo.lastCheck && cpeInfo.lastCheck.status) || 'insufficient')),
+            ),
+          ),
+
+          // —— shadow ——
+          card(
+            dict.shadow,
+            dict.shadowHint,
+            h(
+              'div',
+              { style: LS.kv },
+              h('span', null, `${dict.active} ${(shadowInfo.stats && shadowInfo.stats.active) || 0}`),
+              h('span', null, `${dict.promoted} ${(shadowInfo.stats && shadowInfo.stats.promoted) || 0}`),
+              h('span', null, `${dict.ready} ${(shadowInfo.stats && shadowInfo.stats.readyToPromote) || 0}`),
+            ),
+          ),
+
+          // —— 主动提醒 ——
+          card(
+            dict.wouldDo + ' (P' + ((proactive && proactive.phase) || '1') + ')',
+            dict.wouldDoHint,
+            pending.length === 0
+              ? h('span', { style: PS.hint }, dict.noWouldDo)
+              : h(
+                  'div',
+                  { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                  pending.slice(0, 6).map((item) =>
+                    h(
+                      'div',
+                      { style: LS.item, key: item.id },
+                      h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-primary)' } }, item.action),
+                      h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, item.userAction + ' · ' + item.benefit),
+                      h(
+                        'div',
+                        { style: PS.rowFlex },
+                        h('button', { type: 'button', style: PS.btn, disabled: busy, onClick: () => post('/cognition-engine/proactive/adopt?id=' + encodeURIComponent(item.id)) }, dict.adopt),
+                        h('button', { type: 'button', style: PS.btn, disabled: busy, onClick: () => post('/cognition-engine/proactive/dismiss?id=' + encodeURIComponent(item.id)) }, dict.dismiss),
+                      ),
+                    ),
+                  ),
+                ),
+          ),
+
+          // —— 检索度量 ——
+          card(
+            dict.retrieval,
+            dict.retrievalHint,
+            h(
+              'div',
+              { style: LS.kv },
+              h('span', null, `${dict.logged} ${(retInfo.logs && retInfo.logs.total) || 0}`),
+              h('span', null, `${dict.zeroRate} ${retInfo.logs ? Math.round((retInfo.logs.zeroRate || 0) * 100) + '%' : '-'}`),
+              h('span', null, `${dict.top1} ${retInfo.eval && retInfo.eval.top1 !== null ? Math.round(retInfo.eval.top1 * 100) + '%' : '-'}`),
+              h('span', null, `${dict.top3} ${retInfo.eval && retInfo.eval.top3 !== null ? Math.round(retInfo.eval.top3 * 100) + '%' : '-'}`),
+              h('span', { style: LS.badge((retInfo.eval && retInfo.eval.status) || 'insufficient') }, statusWord(dict, (retInfo.eval && retInfo.eval.status) || 'insufficient')),
+            ),
+          ),
+
+          // —— 反馈闭环 + 风格 ——
+          card(
+            dict.feedback,
+            dict.feedbackHint,
+            h(
+              'div',
+              { style: LS.kv },
+              h('span', null, `${dict.turns} ${fb.total || 0}`),
+              h('span', null, `${dict.corrected} ${fb.corrected || 0}`),
+              h('span', null, `${dict.confirmed} ${fb.confirmed || 0}`),
+              h('span', null, `tracking ${fb.tracking ? '✓' : '✗'}`),
+              h('span', null, `${dict.style} ${st.turns || 0} ${dict.turns}`),
+              h('span', { style: LS.badge(st.status || 'insufficient') }, statusWord(dict, st.status || 'insufficient')),
+            ),
+          ),
         );
       };
     }
