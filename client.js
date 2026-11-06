@@ -355,12 +355,10 @@ window.__ModuleLoader__.load({
         fontFamily: 'inherit',
       },
       // 列表与卡片：面板形态下不再限制高度（整列都能滚），浮层形态保持 280 的帽子
-      list: { padding: '10px 16px 32px', display: 'flex', flexDirection: 'column', gap: 8 },
+      list: { padding: '12px 20px 40px', display: 'flex', flexDirection: 'column', gap: 0, maxWidth: 880 },
       item: {
-        padding: '10px 12px',
-        borderRadius: 8,
-        border: '1px solid var(--dsw-alias-border-l1)',
-        background: 'var(--dsw-alias-bg-layer-1)',
+        padding: '12px 0',
+        borderBottom: '1px solid var(--dsw-alias-border-l1)',
         display: 'flex',
         flexDirection: 'column',
         gap: 6,
@@ -1887,10 +1885,10 @@ window.__ModuleLoader__.load({
       title: { fontSize: 18, fontWeight: 600, margin: 0 },
       sub: { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-secondary)', margin: 0 },
       card: {
-        border: '1px solid var(--dsw-alias-border-l1)',
-        borderRadius: 12,
-        background: 'var(--dsw-alias-bg-layer-1)',
-        padding: '14px 16px',
+        // 不加底色块：面板本身已经是底，再叠一层 layer-1 只会发灰。
+        // 用「上细线 + 上下留白」分组，视觉更轻，也和宿主其它设置页一致。
+        borderTop: '1px solid var(--dsw-alias-border-l1)',
+        padding: '14px 0 4px',
         display: 'flex',
         flexDirection: 'column',
         gap: 10,
@@ -1906,8 +1904,10 @@ window.__ModuleLoader__.load({
         boxSizing: 'border-box',
         padding: '10px 12px',
         borderRadius: 8,
-        border: '1px solid var(--dsw-alias-border-l1)',
-        background: 'var(--dsw-alias-bg-layer-2)',
+        border: '1px solid var(--dsw-alias-border-l2)',
+        // 输入框用 bg-base（和面板同底）而不是 layer-2：
+        // layer-2 在深色主题下是一大块浅灰，整页会显得发白/发灰。
+        background: 'var(--dsw-alias-bg-base)',
         color: 'var(--dsw-alias-label-primary)',
         fontFamily: 'inherit',
         fontSize: 13,
@@ -1917,8 +1917,8 @@ window.__ModuleLoader__.load({
       btn: {
         padding: '6px 14px',
         borderRadius: 8,
-        border: '1px solid var(--dsw-alias-border-l1)',
-        background: 'var(--dsw-alias-bg-layer-2)',
+        border: '1px solid var(--dsw-alias-border-l2)',
+        background: 'transparent',
         color: 'var(--dsw-alias-label-primary)',
         cursor: 'pointer',
         fontSize: 12,
@@ -1927,12 +1927,12 @@ window.__ModuleLoader__.load({
       primary: {
         // 不能假设 brand-primary 是饱和色：本主题里它接近白色，
         // 之前的「brand 底 + #fff 字」就渲染成一整块白（字看不见）。
-        // 改成描边式主按钮：透明底 + brand 边框与文字，深浅主题都安全。
+        // 现在主按钮用「label-primary 反色」：深浅主题都自动对比正确。
         padding: '6px 14px',
         borderRadius: 8,
-        border: '1px solid var(--dsw-alias-brand-primary)',
-        background: 'transparent',
-        color: 'var(--dsw-alias-brand-primary)',
+        border: '1px solid var(--dsw-alias-label-primary)',
+        background: 'var(--dsw-alias-label-primary)',
+        color: 'var(--dsw-alias-bg-base)',
         cursor: 'pointer',
         fontSize: 12,
         fontWeight: 600,
@@ -1943,9 +1943,9 @@ window.__ModuleLoader__.load({
         fontSize: 11,
         padding: '2px 8px',
         borderRadius: 999,
-        background: 'var(--dsw-alias-bg-layer-2)',
+        background: 'transparent',
         color: 'var(--dsw-alias-label-secondary)',
-        border: '1px solid var(--dsw-alias-border-l1)',
+        border: '1px solid var(--dsw-alias-border-l2)',
       },
       pre: {
         margin: 0,
@@ -1954,7 +1954,8 @@ window.__ModuleLoader__.load({
         fontSize: 12,
         lineHeight: 1.65,
         color: 'var(--dsw-alias-label-secondary)',
-        background: 'var(--dsw-alias-bg-layer-2)',
+        background: 'transparent',
+        border: '1px solid var(--dsw-alias-border-l1)',
         padding: '10px 12px',
         borderRadius: 8,
       },
@@ -2431,14 +2432,14 @@ window.__ModuleLoader__.load({
     const LS = {
       barTrack: {
         position: 'relative',
-        height: 8,
-        borderRadius: 4,
-        background: 'var(--dsw-alias-bg-layer-2)',
+        height: 6,
+        borderRadius: 3,
+        background: 'transparent',
         overflow: 'hidden',
-        border: '1px solid var(--dsw-alias-border-l1)',
+        border: '1px solid var(--dsw-alias-border-l2)',
       },
-      barFill: { position: 'absolute', left: 0, top: 0, bottom: 0, background: 'var(--dsw-alias-brand-primary)' },
-      kv: { display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 11, color: 'var(--dsw-alias-label-secondary)' },
+      barFill: { position: 'absolute', left: 0, top: 0, bottom: 0, background: 'var(--dsw-alias-label-primary)' },
+      kv: { display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 11, color: 'var(--dsw-alias-label-secondary)', fontVariantNumeric: 'tabular-nums' },
       badge: (kind) => ({
         fontSize: 11,
         padding: '1px 8px',
@@ -2457,10 +2458,8 @@ window.__ModuleLoader__.load({
         display: 'flex',
         flexDirection: 'column',
         gap: 4,
-        padding: '8px 10px',
-        borderRadius: 8,
-        background: 'var(--dsw-alias-bg-layer-2)',
-        border: '1px solid var(--dsw-alias-border-l1)',
+        padding: '8px 0 8px 10px',
+        borderLeft: '2px solid var(--dsw-alias-border-l2)',
       },
     };
 
@@ -2832,20 +2831,8 @@ window.__ModuleLoader__.load({
         if (!ctx || !ctx.slots || typeof ctx.slots.register !== 'function') {
           return;
         }
-        try {
-          const Dock = createDock(ctx);
-          // 输入框上方全宽入口（居中、透明浮层，展开不挤压对话框）
-          const Wide = (props) => h(Dock, { ...props, defaultOpen: false, variant: 'wide' });
-          ctx.slots.inject('conversation.input.dock', () =>
-            ctx.slots.register({ name: 'conversation.input.dock', id: 'cognition-engine', order: 5 }, Wide),
-          );
-          // 侧边栏图标 + 整页面板已移除：侧边栏 UI 使用频率低，只保留输入框上方的浮层。
-        } catch (error) {
-          // 槽位被占用或宿主不支持：静默跳过，工具与记忆功能不受影响
-          if (ctx.logger && typeof ctx.logger.warn === 'function') {
-            ctx.logger.warn('cognition-engine: 状态条槽位注册失败，已降级为不显示');
-          }
-        }
+        // 输入框上方的浮层入口已移除：东西太多反而挡视线，
+        // 认知引擎统一走侧边栏一级面板（下方注册）。工具与记忆功能完全不受影响。
 
         // 侧边栏一级面板：整列铺满，六个页签不再挤在输入框上方的小浮层里。
         //
@@ -2884,36 +2871,8 @@ window.__ModuleLoader__.load({
           }
         }
 
-        // 人格页面：设置里的一整页（settings.section），与「通用/模型/插件」并列
-        try {
-          const Page = createPersonaPage(ctx);
-          const PersonaIcon = (props) =>
-            h(
-              'svg',
-              {
-                width: (props && props.size) || 16,
-                height: (props && props.size) || 16,
-                viewBox: '0 0 16 16',
-                fill: 'none',
-                'aria-hidden': true,
-              },
-              h('circle', { cx: 8, cy: 5, r: 2.6, stroke: 'currentColor', strokeWidth: 1.4 }),
-              h('path', { d: 'M2.8 13.6c0-2.6 2.3-4.2 5.2-4.2s5.2 1.6 5.2 4.2', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round' }),
-            );
-          ctx.slots.inject('settings.section', () => [
-            ctx.slots.register(
-              { name: 'settings.section', id: 'cognition-persona', order: 45, label: () => personaText(ctx).nav },
-              Page,
-            ),
-          ]);
-          ctx.slots.inject('settings.section.icon', () => [
-            ctx.slots.register({ name: 'settings.section.icon', id: 'cognition-persona', order: 45 }, PersonaIcon),
-          ]);
-        } catch (error) {
-          if (ctx.logger && typeof ctx.logger.warn === 'function') {
-            ctx.logger.warn('cognition-engine: 人格页面槽位注册失败，已跳过');
-          }
-        }
+        // 设置里的人格页签已移除：人格就在侧边栏面板的「人格」页签里，
+        // 两处入口只会让人困惑「改哪边生效」。设置页保持干净。
       },
     };
   },
