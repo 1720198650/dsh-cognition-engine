@@ -374,8 +374,10 @@ cognition-playbook.json           ← 主存储（不变）
 
 ### 4.8 页面（2026-11-06）
 
-人格不再是「只能改 JSON 文件」——设置里多了一整页：**设置 → 人格**（`settings.section`，
-`id: cognition-persona`，`order: 45`），侧栏图标用一个人形轮廓。
+人格不再是「只能改 JSON 文件」——两个入口，同一套逻辑（`createPersonaPage`，靠 `variant` 切换排版）：
+
+1. **设置 → 人格**（`settings.section`，`id: cognition-persona`，`order: 45`），整页，侧栏一个人形图标。
+2. **输入框上方浮层 → 人格页签**（与 记忆 / 主题 / 准则 / 设置 并列），随手点开就能改。
 
 | 能力 | 说明 |
 |---|---|
@@ -399,6 +401,11 @@ cognition-playbook.json           ← 主存储（不变）
 的 occupants 出现 `{id: cognition-persona, order: 45, active: true}`；`settings.section.icon` 同 id 也在。
 接口侧：`create → present=true, lockedPhrases 自动从「边界：」行派生出 2 条 → 删边界的提案被 confirm 拒绝 →
 删除文件并重载后 present=false`。测试 114 → 120 条。
+
+**顺手修的两个小问题**：
+- 浮层默认页签是早已删除的 `'tasks'`，导致打开时没有任何页签高亮（body 走 else 落到「主题」）。
+  改成默认 `'memories'`。
+- `en` 字典缺 `playbookTab`，英文界面下「准则」页签会显示空标签；补上 `personaTab` 时一并补齐。
 
 **启用方式**：把 `docs/persona/cognition-persona.example.json` 拷到
 `~/.dsh/cognition-engine/cognition-persona.json` 即可，无需改配置；

@@ -89,6 +89,7 @@ window.__ModuleLoader__.load({
         applyToken: '保存口令',
         cleared: '已清空',
         playbookTab: '准则',
+        personaTab: '人格',
         playbookPending: '待审',
         playbookActive: '已生效',
         playbookRetired: '已停用',
@@ -169,6 +170,8 @@ window.__ModuleLoader__.load({
         tasks: 'Tasks',
         memories: 'Memories',
         schemas: 'Topics',
+        playbookTab: 'Rules',
+        personaTab: 'Persona',
         refresh: 'Refresh',
         close: 'Close',
         empty: 'Nothing here',
@@ -403,12 +406,15 @@ window.__ModuleLoader__.load({
     }
 
     function createDock(ctx, options) {
+      // 人格页签复用设置页那套组件，只是换成嵌入式排版
+      const PersonaEmbedded = createPersonaPage(ctx);
       return function MoodDock(props) {
         const opts = { ...(options || {}), ...(props || {}) };
         const [state, setState] = React.useState(null);
         const [failure, setFailure] = React.useState(null);
         const [open, setOpen] = React.useState(opts.defaultOpen === true);
-        const [tab, setTab] = React.useState('tasks');
+        // 默认停在「记忆」页签：早先默认值是已删除的 'tasks'，导致打开时没有任何页签高亮
+        const [tab, setTab] = React.useState('memories');
         const [formOpen, setFormOpen] = React.useState(null);
         const [editingId, setEditingId] = React.useState(null);
         const [expandedSchema, setExpandedSchema] = React.useState(null);
@@ -831,6 +837,7 @@ window.__ModuleLoader__.load({
           ['memories', `${dict.memories} ${detail ? detail.memories.length : ''}`.trim()],
           ['schemas', `${dict.schemas} ${topicsData && topicsData.stats ? topicsData.stats.active : 0}`.trim()],
           ['playbook', `${dict.playbookTab}${detail && detail.playbook ? ' ' + detail.playbook.active : ''}`.trim()],
+          ['persona', dict.personaTab],
           ['settings', dict.settings],
         ];
 
@@ -1076,6 +1083,8 @@ window.__ModuleLoader__.load({
             h('div', { style: S.item }, h('div', { style: S.itemTitle }, `${dict.schema} ${(detail.counts || {}).schemas || 0}`)),
             h('div', { style: S.item }, h('div', { style: S.itemTitle }, `${dict.tasks} ${(detail.counts || {}).tasks || 0}`)),
           );
+        } else if (tab === 'persona') {
+          body = h(PersonaEmbedded, { variant: 'embedded' });
         } else if (tab === 'memories') {
           body = renderList(detail.memories, (item) => {
             if (editingId === item.id) {
@@ -1760,6 +1769,15 @@ window.__ModuleLoader__.load({
         boxSizing: 'border-box',
         color: 'var(--dsw-alias-label-primary)',
       },
+      pageEmbedded: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        padding: '2px 0 8px',
+        width: '100%',
+        boxSizing: 'border-box',
+        color: 'var(--dsw-alias-label-primary)',
+      },
       title: { fontSize: 18, fontWeight: 600, margin: 0 },
       sub: { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-secondary)', margin: 0 },
       card: {
@@ -1845,8 +1863,10 @@ window.__ModuleLoader__.load({
     const PERSONA_DEFAULT_HUMAN = '做<你的行业>，中文为主；<你的偏好>。';
 
     function createPersonaPage(ctx) {
-      return function PersonaPage() {
+      return function PersonaPage(props) {
         const dict = personaText(ctx);
+        // 两种挂载点共用一套逻辑：设置里的整页（默认）与输入框浮层里的页签（embedded）
+        const pageStyle = props && props.variant === 'embedded' ? PS.pageEmbedded : PS.page;
         const [data, setData] = React.useState(null);
         const [error, setError] = React.useState(null);
         const [busy, setBusy] = React.useState(false);
@@ -2014,12 +2034,12 @@ window.__ModuleLoader__.load({
         };
 
         if (data === null && error === null) {
-          return h('div', { style: PS.page }, h('p', { style: PS.hint }, dict.loading));
+          return h('div', { style: pageStyle }, h('p', { style: PS.hint }, dict.loading));
         }
         if (error !== null && data === null) {
           return h(
             'div',
-            { style: PS.page },
+            { style: pageStyle },
             h('p', { style: PS.err }, dict.failed + '：' + error),
             h(
               'button',
@@ -2037,13 +2057,15 @@ window.__ModuleLoader__.load({
 
         return h(
           'div',
-          { style: PS.page },
-          h(
-            'div',
-            { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-            h('h2', { style: PS.title }, dict.title),
-            h('p', { style: PS.sub }, dict.subtitle),
-          ),
+          { style: pageStyle },
+          props && props.variant === 'embedded'
+            ? null
+            : h(
+                'div',
+                { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                h('h2', { style: PS.title }, dict.title),
+                h('p', { style: PS.sub }, dict.subtitle),
+              ),
           notice
             ? h('div', { style: notice.kind === 'err' ? PS.err : PS.ok }, (notice.kind === 'err' ? '✗ ' : '✓ ') + notice.text)
             : null,
