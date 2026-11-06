@@ -44,6 +44,25 @@ export interface ScanInput {
 
 export type WouldDoKind = 'pending-due' | 'unresolved-gap' | 'broken-evidence' | 'expired-rule';
 
+/**
+ * 工单阶段（S10）。
+ *
+ * 为什么在「三种状态」之外还要阶段：状态只回答「做没做」，
+ * 阶段回答「卡在哪、下一步该谁动」。真实的长任务经常停在
+ * 「我做完了但你要验一下」——没有 `review` 这一档，它只能被硬塞进
+ * `done`，然后没人验，或者一直挂在 `doing` 里假装还在做。
+ */
+export type TicketStage = 'draft' | 'open' | 'doing' | 'review' | 'done';
+
+/** 阶段到基础状态的映射：状态用于既有列表/筛选，阶段是更细的那一层。 */
+export const STAGE_TO_STATUS: Readonly<Record<TicketStage, 'PENDING' | 'IN_PROGRESS' | 'COMPLETED'>> = Object.freeze({
+  draft: 'PENDING',
+  open: 'PENDING',
+  doing: 'IN_PROGRESS',
+  review: 'IN_PROGRESS',
+  done: 'COMPLETED',
+});
+
 export interface WouldDo {
   id: string;
   /** 去重键：同一件事反复扫到只更新不新增。 */
@@ -66,6 +85,18 @@ export interface WouldDo {
   status: 'pending' | 'adopted' | 'dismissed' | 'stale';
   /** 下线/处理时留下的说明。 */
   note?: string;
+
+  /* ---------------------- S10：工单字段 ---------------------- */
+  /** 工单阶段。缺省时按 `status` 推测（老数据兼容）。 */
+  stage?: TicketStage;
+  /** 做完要交什么（产物）：文件路径、一份结论、一个数值。 */
+  deliverable?: string;
+  /** 为什么做 / 卡在哪（自由文本，几条即可）。 */
+  background?: string;
+  /** 依赖：这些工单没完成，这条就动不了。 */
+  blockedBy?: string[];
+  /** 阶段变更历史（谁在什么时候推到哪一步）。 */
+  history?: Array<{ at: number; from: TicketStage | null; to: TicketStage; by: 'user' | 'agent'; note?: string }>;
 }
 
 export interface ProactiveDoc {
@@ -390,15 +421,120 @@ export class ProactiveStore {
   }
 
   /**
+   * 当前工单（不含已下线/已删除）。
+   *
+   * 与 `pending()` 的区别：`pending()` 是「还没处理的提醒」，
+   * 这里返回所有活着的工单（含已推进到 doing/review 的），供工单板按阶段分组。
+   */
+  tickets(): WouldDo[] {
+    this.loadSync();
+    return this.doc.items
+      .filter((item) => item.status !== 'stale' && item.status !== 'dismissed')
+      .map((item) => ({ ...item, stage: item.stage ?? this.#inferStage(item) }));
+  }
+
+  /** 老数据没有 stage 时按 status 推测，避免升级后全部显示成「草稿」。 */
+  #inferStage(item: WouldDo): TicketStage {
+    if (item.stage !== undefined) return item.stage;
+    if (item.status === 'adopted') return 'doing';
+    return 'open';
+  }
+
+  /**
+   * 推进工单阶段。
+   *
+   * 允许任意跳转（比如直接 `open → done`）：真实的活儿经常一步到位，
+   * 强制逐级推进会让人为了走流程多点三次。
+   * 但**不允许从 `done` 悄悄改回去**——那要走 `reopen`，留下痕迹。
+   */
+  setStage(id: string, stage: TicketStage, options: { by?: 'user' | 'agent'; note?: string } = {}): {
+    ok: boolean;
+    stage?: TicketStage;
+    reason?: string;
+    unblocked?: string[];
+  } {
+    this.loadSync();
+    const item = this.doc.items.find((entry) => entry.id === id);
+    if (item === undefined) return { ok: false, reason: `找不到工单 ${id}` };
+    if (item.status === 'stale' || item.status === 'dismissed') {
+      return { ok: false, reason: '这条已经下线，不能推进阶段' };
+    }
+    const from = item.stage ?? this.#inferStage(item);
+    if (from === stage) return { ok: true, stage };
+
+    // 依赖检查：要动工，前置得先完成。`draft / open` 不受限（可以先攒着）。
+    if (stage === 'doing' || stage === 'review' || stage === 'done') {
+      const blockers = (item.blockedBy ?? []).filter((dep) => {
+        const depItem = this.doc.items.find((entry) => entry.id === dep);
+        if (depItem === undefined) return false;
+        return (depItem.stage ?? this.#inferStage(depItem)) !== 'done';
+      });
+      if (blockers.length > 0) {
+        return { ok: false, reason: `还有前置没完成：${blockers.join('、')}` };
+      }
+    }
+
+    item.stage = stage;
+    item.status = stage === 'draft' || stage === 'open' ? 'pending' : 'adopted';
+    item.lastSeenAt = this.clock();
+    item.history = [
+      ...(item.history ?? []),
+      { at: this.clock(), from, to: stage, by: options.by ?? 'user', ...(options.note === undefined ? {} : { note: options.note }) },
+    ].slice(-30);
+
+    // 完成时把「本来要提醒」的账记上：这条不再是待办
+    if (stage === 'done' && from !== 'done') {
+      // 若它原本还是 pending（没被 adopt 过），这里不再重复计采纳
+      if (item.status === 'pending') item.status = 'adopted';
+    }
+
+    // 我完成了，可能解开别人的依赖
+    const unblocked: string[] = [];
+    if (stage === 'done') {
+      for (const other of this.doc.items) {
+        if (!other.blockedBy?.includes(id)) continue;
+        const stillBlocked = other.blockedBy.some((dep) => {
+          if (dep === id) return false;
+          const depItem = this.doc.items.find((entry) => entry.id === dep);
+          return depItem !== undefined && (depItem.stage ?? this.#inferStage(depItem)) !== 'done';
+        });
+        if (!stillBlocked) unblocked.push(other.id);
+      }
+    }
+
+    this.#save();
+    return { ok: true, stage, unblocked };
+  }
+
+  /** 补/改工单字段（产物、背景、依赖）。 */
+  update(id: string, patch: { deliverable?: string; background?: string; blockedBy?: string[] }): boolean {
+    this.loadSync();
+    const item = this.doc.items.find((entry) => entry.id === id);
+    if (item === undefined) return false;
+    if (patch.deliverable !== undefined) item.deliverable = patch.deliverable.slice(0, 300);
+    if (patch.background !== undefined) item.background = patch.background.slice(0, 600);
+    if (patch.blockedBy !== undefined) item.blockedBy = patch.blockedBy.filter((dep) => dep !== id).slice(0, 10);
+    this.#save();
+    return true;
+  }
+
+  /**
    * 标记已采纳。
    *
    * 采纳 = 用户点了「好，我去处理」。这个计数是 P3 的入场券。
+   * S10 起顺带推进到 `doing`（「我去处理」= 开始做了）。
    */
   adopt(id: string): boolean {
     this.loadSync();
     const item = this.doc.items.find((entry) => entry.id === id);
     if (item === undefined || item.status !== 'pending') return false;
+    const fromStage: TicketStage = item.stage ?? this.#inferStage(item);
     item.status = 'adopted';
+    item.stage = 'doing';
+    item.history = [
+      ...(item.history ?? []),
+      { at: this.clock(), from: fromStage, to: 'doing' as const, by: 'user' as const, note: '从提醒点「我去处理」' },
+    ].slice(-30);
     this.doc.stats.adopted += 1;
     this.#save();
     return true;
@@ -414,6 +550,22 @@ export class ProactiveStore {
     this.doc.stats.dismissed += 1;
     this.#save();
     return true;
+  }
+
+  /** 工单板分组（按阶段），新的在前。 */
+  board(): Array<{ stage: TicketStage; label: string; items: WouldDo[] }> {
+    const all = this.tickets();
+    const order: Array<{ stage: TicketStage; label: string }> = [
+      { stage: 'draft', label: '草稿' },
+      { stage: 'open', label: '待办' },
+      { stage: 'doing', label: '进行中' },
+      { stage: 'review', label: '待验收' },
+      { stage: 'done', label: '已完成' },
+    ];
+    return order.map((entry) => ({
+      ...entry,
+      items: all.filter((item) => (item.stage ?? 'open') === entry.stage).sort((a, b) => b.lastSeenAt - a.lastSeenAt),
+    }));
   }
 
   /**

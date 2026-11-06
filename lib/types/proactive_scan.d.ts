@@ -35,6 +35,17 @@ export interface ScanInput {
     silenceMs?: number;
 }
 export type WouldDoKind = 'pending-due' | 'unresolved-gap' | 'broken-evidence' | 'expired-rule';
+/**
+ * 工单阶段（S10）。
+ *
+ * 为什么在「三种状态」之外还要阶段：状态只回答「做没做」，
+ * 阶段回答「卡在哪、下一步该谁动」。真实的长任务经常停在
+ * 「我做完了但你要验一下」——没有 `review` 这一档，它只能被硬塞进
+ * `done`，然后没人验，或者一直挂在 `doing` 里假装还在做。
+ */
+export type TicketStage = 'draft' | 'open' | 'doing' | 'review' | 'done';
+/** 阶段到基础状态的映射：状态用于既有列表/筛选，阶段是更细的那一层。 */
+export declare const STAGE_TO_STATUS: Readonly<Record<TicketStage, 'PENDING' | 'IN_PROGRESS' | 'COMPLETED'>>;
 export interface WouldDo {
     id: string;
     /** 去重键：同一件事反复扫到只更新不新增。 */
@@ -57,6 +68,22 @@ export interface WouldDo {
     status: 'pending' | 'adopted' | 'dismissed' | 'stale';
     /** 下线/处理时留下的说明。 */
     note?: string;
+    /** 工单阶段。缺省时按 `status` 推测（老数据兼容）。 */
+    stage?: TicketStage;
+    /** 做完要交什么（产物）：文件路径、一份结论、一个数值。 */
+    deliverable?: string;
+    /** 为什么做 / 卡在哪（自由文本，几条即可）。 */
+    background?: string;
+    /** 依赖：这些工单没完成，这条就动不了。 */
+    blockedBy?: string[];
+    /** 阶段变更历史（谁在什么时候推到哪一步）。 */
+    history?: Array<{
+        at: number;
+        from: TicketStage | null;
+        to: TicketStage;
+        by: 'user' | 'agent';
+        note?: string;
+    }>;
 }
 export interface ProactiveDoc {
     schema: 'cognition.proactive';
@@ -158,13 +185,49 @@ export declare class ProactiveStore {
     /** 当前待处理的 wouldDo（新的在前）。 */
     pending(): WouldDo[];
     /**
+     * 当前工单（不含已下线/已删除）。
+     *
+     * 与 `pending()` 的区别：`pending()` 是「还没处理的提醒」，
+     * 这里返回所有活着的工单（含已推进到 doing/review 的），供工单板按阶段分组。
+     */
+    tickets(): WouldDo[];
+    /**
+     * 推进工单阶段。
+     *
+     * 允许任意跳转（比如直接 `open → done`）：真实的活儿经常一步到位，
+     * 强制逐级推进会让人为了走流程多点三次。
+     * 但**不允许从 `done` 悄悄改回去**——那要走 `reopen`，留下痕迹。
+     */
+    setStage(id: string, stage: TicketStage, options?: {
+        by?: 'user' | 'agent';
+        note?: string;
+    }): {
+        ok: boolean;
+        stage?: TicketStage;
+        reason?: string;
+        unblocked?: string[];
+    };
+    /** 补/改工单字段（产物、背景、依赖）。 */
+    update(id: string, patch: {
+        deliverable?: string;
+        background?: string;
+        blockedBy?: string[];
+    }): boolean;
+    /**
      * 标记已采纳。
      *
      * 采纳 = 用户点了「好，我去处理」。这个计数是 P3 的入场券。
+     * S10 起顺带推进到 `doing`（「我去处理」= 开始做了）。
      */
     adopt(id: string): boolean;
     /** 标记不需要（也算一次负样本，用来算采纳率）。冷却期内不会再提同一件事。 */
     dismiss(id: string): boolean;
+    /** 工单板分组（按阶段），新的在前。 */
+    board(): Array<{
+        stage: TicketStage;
+        label: string;
+        items: WouldDo[];
+    }>;
     /**
      * 这一轮到底能不能真的发消息。
      *

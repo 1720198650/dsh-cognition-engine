@@ -2230,6 +2230,17 @@ window.__ModuleLoader__.load({
         feedbackHint: '我注入了多少轮内容、你说过几次「不对」「没错」。',
         audit: '体检报告',
         auditHint: '分四项看，不给总分——不同维度本来就是不同的事。',
+        tickets: '工单',
+        ticketsHint: '把「积压的事」按阶段摆开：草稿、待办、进行中、待验收、已完成。',
+        stage: { draft: '草稿', open: '待办', doing: '进行中', review: '待验收', done: '已完成' },
+        deliverable: '产物',
+        deliverableHint: '做完要交什么？写一句就够。',
+        background: '背景',
+        blockedBy: '依赖',
+        save: '保存',
+        next: '下一步',
+        advance: '推进',
+        empty: '空',
         evaluator: '谁评的',
         provider: '谁评的',
         repair: '修一下',
@@ -2372,6 +2383,7 @@ window.__ModuleLoader__.load({
         const [retrieval, setRetrieval] = React.useState(null);
         const [shadow, setShadow] = React.useState(null);
         const [audit, setAudit] = React.useState(null);
+        const [tickets, setTickets] = React.useState(null);
         const [error, setError] = React.useState(null);
         const [busy, setBusy] = React.useState(false);
         const [notice, setNotice] = React.useState(null);
@@ -2394,6 +2406,11 @@ window.__ModuleLoader__.load({
               setAudit(await fetch('/cognition-engine/audit/dimensions', { cache: 'no-store' }).then((r) => r.json()));
             } catch {
               setAudit(null);
+            }
+            try {
+              setTickets(await fetch('/cognition-engine/tickets', { cache: 'no-store' }).then((r) => r.json()));
+            } catch {
+              setTickets(null);
             }
             setError(null);
           } catch (err) {
@@ -2604,6 +2621,86 @@ window.__ModuleLoader__.load({
                             dict.repair + '（' + dim.facts.orphans + '）',
                           )
                         : null,
+                    ),
+                  ),
+                ),
+              )
+            : null,
+
+          // —— 工单看板（S10）——
+          tickets && tickets.board
+            ? card(
+                dict.tickets,
+                dict.ticketsHint,
+                h(
+                  'div',
+                  { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                  tickets.board.map((col) =>
+                    h(
+                      'div',
+                      { key: col.stage, style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                      h(
+                        'div',
+                        { style: { display: 'flex', alignItems: 'baseline', gap: 8 } },
+                        h('span', { style: { fontSize: 12, fontWeight: 600 } }, dict.stage[col.stage] || col.label),
+                        h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, col.items.length + ' 项'),
+                      ),
+                      col.items.length === 0
+                        ? h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)', paddingLeft: 2 } }, dict.empty)
+                        : col.items.map((t) =>
+                            h(
+                              'div',
+                              { style: LS.item, key: t.id },
+                              h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-primary)' } }, t.action),
+                              t.deliverable
+                                ? h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, dict.deliverable + '：' + t.deliverable)
+                                : null,
+                              h(
+                                'div',
+                                { style: PS.rowFlex },
+                                ['draft', 'open', 'doing', 'review', 'done']
+                                  .filter((s) => s !== t.stage)
+                                  .slice(0, 2)
+                                  .map((s) =>
+                                    h(
+                                      'button',
+                                      {
+                                        type: 'button',
+                                        style: PS.btn,
+                                        disabled: busy,
+                                        key: s,
+                                        onClick: () =>
+                                          post(
+                                            '/cognition-engine/tickets/stage?id=' +
+                                              encodeURIComponent(t.id) +
+                                              '&stage=' +
+                                              s,
+                                          ),
+                                      },
+                                      dict.stage[s],
+                                    ),
+                                  ),
+                                h(
+                                  'input',
+                                  {
+                                    placeholder: dict.deliverableHint,
+                                    defaultValue: t.deliverable || '',
+                                    style: Object.assign({}, PS.ta, { minHeight: 0, height: 26, padding: '2px 8px', fontSize: 11, flex: '1 1 120px' }),
+                                    onKeyDown: (event) => {
+                                      if (event.key !== 'Enter') return;
+                                      const v = event.target.value || '';
+                                      post(
+                                        '/cognition-engine/tickets/update?id=' +
+                                          encodeURIComponent(t.id) +
+                                          '&deliverable=' +
+                                          encodeURIComponent(v),
+                                      );
+                                    },
+                                  },
+                                ),
+                              ),
+                            ),
+                          ),
                     ),
                   ),
                 ),

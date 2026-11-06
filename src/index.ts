@@ -1453,7 +1453,14 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         // 联动：任务状态一变（尤其标记完成），立刻清掉它的待处理提醒。
         // 不这么做就会出现「任务早做完了，提醒还挂着」——用户会以为系统没在看。
         const cleared = proactiveStore.clearByTarget(id, status === 'COMPLETED' ? '任务已完成' : '任务状态已更新');
-        return { task, clearedReminders: cleared };
+        // 反向联动（S10）：同一个 id 的工单阶段跟着走，别让两块看板说两套话
+        const stage = status === 'COMPLETED' ? 'done' : status === 'IN_PROGRESS' ? 'doing' : 'open';
+        for (const ticket of proactiveStore.tickets()) {
+          if (ticket.targetId !== id) continue;
+          if (ticket.status === 'stale' || ticket.status === 'dismissed') continue;
+          proactiveStore.setStage(ticket.id, stage, { by: 'user', note: '从任务列表改状态' });
+        }
+        return { task, clearedReminders: cleared, ticketStage: stage };
       },
       { method: 'POST', requireAuth: explicitLock },
     );
@@ -2110,6 +2117,34 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       id: url.searchParams.get('id') ?? '',
       ok: proactiveStore.removeRule(url.searchParams.get('id') ?? ''),
     }), { method: 'POST' });
+
+    // —— 工单（S10）——
+    route('/cognition-engine/tickets', () => ({
+      phase: proactiveStore.phase,
+      board: proactiveStore.board(),
+      stats: proactiveStore.document.stats,
+    }));
+    route('/cognition-engine/tickets/stage', (url) => {
+      const id = url.searchParams.get('id') ?? '';
+      const raw = url.searchParams.get('stage');
+      const stage = raw === 'draft' || raw === 'open' || raw === 'doing' || raw === 'review' || raw === 'done' ? raw : 'open';
+      const note = url.searchParams.get('note');
+      return { id, ...proactiveStore.setStage(id, stage, { by: 'user', ...(note === null ? {} : { note }) }) };
+    }, { method: 'POST' });
+    route('/cognition-engine/tickets/update', (url) => {
+      const id = url.searchParams.get('id') ?? '';
+      const deliverable = url.searchParams.get('deliverable');
+      const background = url.searchParams.get('background');
+      const blockedBy = url.searchParams.get('blockedBy');
+      return {
+        id,
+        ok: proactiveStore.update(id, {
+          ...(deliverable === null ? {} : { deliverable }),
+          ...(background === null ? {} : { background }),
+          ...(blockedBy === null ? {} : { blockedBy: blockedBy.split(',').map((x) => x.trim()).filter((x) => x.length > 0) }),
+        }),
+      };
+    }, { method: 'POST' });
 
     // 检索度量（S8）
     /** 现算召回：评测必须用**当前**记忆库，不能拿历史日志（那时库里没这些条目）。 */
