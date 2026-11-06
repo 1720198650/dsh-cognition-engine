@@ -648,6 +648,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/research-persona-memory-landscape.md](docs/research-persona-memory-landscape.md) | **专业项目/论文横向对比**：4 张总表（商业/开源/中文/评测）、证据分级 S–E、7 个审计方向、人格 Git 空白、7 条伪需求、借 3 避 3、8–12 周 MVP |
 | [docs/persona-cross-disciplinary.md](docs/persona-cross-disciplinary.md) | **Persona 跨学科扫描**：心理学/神经科学/语言学/HCI/哲学/游戏 NPC，能用/不能用总表 + 20 个项目对比 |
 | [docs/persona-format-and-style-metrics.md](docs/persona-format-and-style-metrics.md) | **Persona 格式与中文风格度量**：Character Card V2 完整字段表、MaiBot expression/turn_trigger 源码拆解、`cognition-persona.json` 正式 JSON Schema、26 项中文风格指纹与可运行 JS、expression 表生命周期、竞品对比 |
+| [docs/persona-audit-research.md](docs/persona-audit-research.md) | **Persona 审计机制**：Anchor 论文逐节拆解（2,008 对话 / 27 人格 / 9 日程 / 3 记忆设置 / 4 模型）、Identity Probe 与 Trajectory Probe 全量还原、CharacterEval/CharacterBench/InCharacter/PersonaMem/LongMemEval/HorizonBench 对比、Assistant Axis 与谄媚、三层审计方案 + 20 题题库 + 月度自检清单 + JSON/脚本 |
 | [docs/checkpoint-2026-11-05.md](docs/checkpoint-2026-11-05.md) | **存档：2026-11-05**：完成事项、设计决策、还差什么、自我学习研究结论、下次第一件事 |
 | [docs/research-self-evolving-papers.md](docs/research-self-evolving-papers.md) |
 | [docs/research-cpe-mechanism.md](docs/research-cpe-mechanism.md) |

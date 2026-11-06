@@ -411,6 +411,8 @@ multiple_probability = 0
 
 简化版 20 题 Likert 问卷，4 个时间点（初始 / 1 月 / 3 月 / 6 月），用余弦相似度代替论文的投影公式（我们没有裸助手基线，可以用固定「空白人格」基线）。
 
+> 更完整的 Anchor 逐节拆解、20 题题库、JSON schema 与可运行脚本见 [persona-audit-research.md](persona-audit-research.md)。
+
 ### 2.5 与现有系统的关系
 
 | 系统 | 关系 |
