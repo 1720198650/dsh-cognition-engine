@@ -26,7 +26,20 @@ export interface PersonaHistoryEntry {
     op: 'create' | 'replace' | 'reset';
     beforeHash?: string;
     afterHash: string;
+    /**
+     * 改动前的**原文快照**。
+     *
+     * 只有 hash 是回滚不了的——上一版只存 hash，用户说「刚才那次改坏了」时无从恢复。
+     * 这里存快照，`undo()` 才有东西可退。上限 2000 字符足够覆盖 800 的块预算。
+     */
+    before?: string;
     reason?: string;
+}
+/** human 块的结构化画像条目（Memobase 式 profile slot，只审计不注入）。 */
+export interface PersonaFact {
+    key: string;
+    value: string;
+    confidence?: number;
 }
 /** 一个块（人格 / 用户画像）。 */
 export interface PersonaBlockRecord {
@@ -44,6 +57,10 @@ export interface PersonaBlockRecord {
     lockedPhrases?: string[];
     /** human 块的结构化画像（Memobase 式 slot），**不注入**，留给检索用。 */
     slots?: Record<string, unknown>;
+    /** 结构化画像条目（与 slots 并存：schema 早先定的名字是 facts）。 */
+    facts?: PersonaFact[];
+    /** 交互风格数值（只审计，**不注入**）。 */
+    interactionStyle?: Record<string, number>;
     narrative?: Record<string, string>;
     history: PersonaHistoryEntry[];
 }
@@ -53,6 +70,8 @@ export interface PersonaDocument {
     version: 1;
     revision: number;
     updatedAt: number;
+    /** 上一次 revision 的内容 hash，串成可回溯的修订链。 */
+    parentHash?: string;
     budget: {
         persona: number;
         human: number;
@@ -95,6 +114,8 @@ export declare class PersonaStore {
     private doc;
     private proposals;
     private loaded;
+    /** 最近一次写盘失败原因；成功写盘后清空。 */
+    private saveError;
     constructor(options?: PersonaStoreOptions);
     /** 读文件。文件不存在或格式不对都当作「没有人格」，不抛错。 */
     loadSync(): boolean;
@@ -147,7 +168,21 @@ export declare class PersonaStore {
         reason?: string;
         revision?: number;
     };
+    /**
+     * 撤销一次改动，恢复到它的 `before` 快照。
+     *
+     * 不传 `hash` 就撤销最近一次；传了就撤销那一次（按 `afterHash` 定位）。
+     * 可以连续撤：每次都退一格，history 里会追加一条 `reason: 'undo'` 的记录。
+     */
+    undo(hash?: string): {
+        ok: boolean;
+        reason?: string;
+        revision?: number;
+        restoredFrom?: string;
+    };
     reject(id: string): boolean;
     /** 直接用文件内容覆盖（迁移/初始化用；不经过提案，调用方必须是用户侧入口）。 */
     replaceDocument(doc: PersonaDocument): void;
+    /** 最近一次落盘失败的原因（null = 一切正常）。页面与路由用它暴露「改了但没存下」。 */
+    get lastSaveError(): string | undefined;
 }

@@ -4,6 +4,7 @@
 > 目标：为认知引擎设计 Persona 层（`persona` + `human` 两块），要求零依赖、纯 JSON、可审计。
 > 方法：精读 6 个来源的**原始结构**，不是看二手解读。
 > 更深一层的格式/风格度量见 [persona-format-and-style-metrics.md](persona-format-and-style-metrics.md)（含 CCv2 字段表、26 项中文风格指标、expression 表、竞品对比）。
+> 本文的补充证据版（Letta memory blocks 精确字段、PersonaAgent 实验表、Generative Agents 三因子/反思细节、四个工程实现逐项对比）见 [persona-memory-deep-read.md](persona-memory-deep-read.md)。
 
 ---
 

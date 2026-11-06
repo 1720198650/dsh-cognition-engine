@@ -32,7 +32,21 @@ export interface PersonaHistoryEntry {
   op: 'create' | 'replace' | 'reset';
   beforeHash?: string;
   afterHash: string;
+  /**
+   * 改动前的**原文快照**。
+   *
+   * 只有 hash 是回滚不了的——上一版只存 hash，用户说「刚才那次改坏了」时无从恢复。
+   * 这里存快照，`undo()` 才有东西可退。上限 2000 字符足够覆盖 800 的块预算。
+   */
+  before?: string;
   reason?: string;
+}
+
+/** human 块的结构化画像条目（Memobase 式 profile slot，只审计不注入）。 */
+export interface PersonaFact {
+  key: string;
+  value: string;
+  confidence?: number;
 }
 
 /** 一个块（人格 / 用户画像）。 */
@@ -51,6 +65,10 @@ export interface PersonaBlockRecord {
   lockedPhrases?: string[];
   /** human 块的结构化画像（Memobase 式 slot），**不注入**，留给检索用。 */
   slots?: Record<string, unknown>;
+  /** 结构化画像条目（与 slots 并存：schema 早先定的名字是 facts）。 */
+  facts?: PersonaFact[];
+  /** 交互风格数值（只审计，**不注入**）。 */
+  interactionStyle?: Record<string, number>;
   narrative?: Record<string, string>;
   history: PersonaHistoryEntry[];
 }
@@ -61,6 +79,8 @@ export interface PersonaDocument {
   version: 1;
   revision: number;
   updatedAt: number;
+  /** 上一次 revision 的内容 hash，串成可回溯的修订链。 */
+  parentHash?: string;
   budget: { persona: number; human: number; total: number };
   meta?: { notes?: string; tags?: string[] };
   blocks: { persona: PersonaBlockRecord; human: PersonaBlockRecord };
@@ -91,6 +111,11 @@ function hashText(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 16);
 }
 
+/** 文档内容 hash（两个块的值），用来串 revision 链（`parentHash`）。 */
+function docHash(doc: PersonaDocument): string {
+  return hashText(`${doc.blocks.persona.value}\u0000${doc.blocks.human.value}`);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -112,6 +137,8 @@ export class PersonaStore {
   private doc: PersonaDocument | undefined;
   private proposals: PersonaProposal[] = [];
   private loaded = false;
+  /** 最近一次写盘失败原因；成功写盘后清空。 */
+  private saveError: string | undefined;
 
   constructor(options: PersonaStoreOptions = {}) {
     this.filePath =
@@ -190,6 +217,20 @@ export class PersonaStore {
         ? { lockedPhrases: value.lockedPhrases.filter((x): x is string => typeof x === 'string') }
         : {}),
       ...(isRecord(value.slots) ? { slots: value.slots } : {}),
+      ...(Array.isArray(value.facts)
+        ? {
+            facts: value.facts
+              .filter((item): item is Record<string, unknown> => isRecord(item) && typeof item.key === 'string')
+              .map((item) => ({
+                key: String(item.key),
+                value: String(item.value ?? ''),
+                ...(typeof item.confidence === 'number' ? { confidence: item.confidence } : {}),
+              })),
+          }
+        : {}),
+      ...(isRecord(value.interactionStyle)
+        ? { interactionStyle: value.interactionStyle as Record<string, number> }
+        : {}),
       ...(isRecord(value.narrative) ? { narrative: value.narrative as Record<string, string> } : {}),
       history: Array.isArray(value.history)
         ? value.history.filter((item): item is PersonaHistoryEntry => isRecord(item) && typeof item.afterHash === 'string')
@@ -221,21 +262,46 @@ export class PersonaStore {
     this.loadSync();
     const doc = this.doc;
     if (doc === undefined) return '';
-    const personaText = clip(doc.blocks.persona.value.trim(), doc.blocks.persona.limit);
-    const humanText = clip(doc.blocks.human.value.trim(), doc.blocks.human.limit);
+    const personaText = this.#renderBlock(doc.blocks.persona, doc.blocks.persona.limit);
+    let humanText = this.#renderBlock(doc.blocks.human, doc.blocks.human.limit);
     if (personaText.length === 0 && humanText.length === 0) return '';
     // 总量兜底：human 是次要块，超预算时先压缩它
     const over = personaText.length + humanText.length - doc.budget.total;
-    const humanClipped = over > 0 ? clip(humanText, Math.max(0, humanText.length - over)) : humanText;
+    if (over > 0) humanText = this.#renderBlock(doc.blocks.human, Math.max(0, doc.blocks.human.limit - over));
 
     const parts: string[] = ['## 人格（稳定，不要违背）'];
     if (personaText.length > 0) {
       parts.push(`<persona chars="${personaText.length}/${doc.blocks.persona.limit}">`, personaText, '</persona>');
     }
-    if (humanClipped.length > 0) {
-      parts.push(`<human chars="${humanClipped.length}/${doc.blocks.human.limit}">`, humanClipped, '</human>');
+    if (humanText.length > 0) {
+      parts.push(`<human chars="${humanText.length}/${doc.blocks.human.limit}">`, humanText, '</human>');
     }
     return parts.join('\n');
+  }
+
+  /**
+   * 渲染单个块，**保证 lockedPhrases 不会被截断**。
+   *
+   * 上一版直接 `clip(value, limit)`：正文一超预算，尾巴上的「边界：不编造事实…」正好被切掉——
+   * 而边界恰恰是最不能丢的一段（丢掉它等于人格里最硬的约束悄悄失效）。
+   * 现在先正常截断，发现边界短语缺了就把它压成一行补回去，正文让位。
+   */
+  #renderBlock(block: PersonaBlockRecord, limit: number): string {
+    if (limit <= 0) return '';
+    const raw = block.value.trim();
+    if (raw.length === 0) return '';
+    const phrases = (block.lockedPhrases ?? []).filter((phrase) => phrase.length > 0);
+    const out = clip(raw, limit);
+    if (phrases.length === 0) return out;
+    const missing = phrases.filter((phrase) => !out.includes(phrase));
+    if (missing.length === 0) return out;
+    // 边界优先：压成一行「边界：a；b；c。」，正文按剩余预算截断
+    const guard = `边界：${phrases.join('；')}。`;
+    if (guard.length >= limit) return guard.slice(0, limit);
+    const head = raw.includes('边界') ? raw.slice(0, raw.indexOf('边界')).trim() : raw;
+    const room = limit - guard.length - 1;
+    const kept = room > 0 ? clip(head, room) : '';
+    return kept.length > 0 ? `${kept}\n${guard}` : guard;
   }
 
   /** 预算占用（页面显示用）。 */
@@ -327,7 +393,9 @@ export class PersonaStore {
       this.#saveProposals();
       return { ok: false, reason: `锁定的边界被删掉了：${missing.join('、')}——边界不能被悄悄改` };
     }
-    const beforeHash = hashText(block.value);
+    const beforeValue = block.value;
+    const beforeHash = hashText(beforeValue);
+    const parentHash = docHash(doc);
     const op: PersonaHistoryEntry['op'] = block.history.length === 0 ? 'create' : 'replace';
     block.value = proposal.value;
     block.history = [
@@ -336,6 +404,8 @@ export class PersonaStore {
         at: this.clock(),
         by,
         op,
+        /** 存原文快照，`undo()` 才有东西可退（只有 hash 是回滚不了的）。 */
+        before: beforeValue.slice(0, 2000),
         beforeHash,
         afterHash: hashText(proposal.value),
         ...(proposal.reason === undefined ? {} : { reason: proposal.reason }),
@@ -343,10 +413,65 @@ export class PersonaStore {
     ].slice(-50);
     doc.revision += 1;
     doc.updatedAt = this.clock();
+    doc.parentHash = parentHash;
     this.proposals.splice(index, 1);
-    this.#saveDocument();
+    // 落盘失败必须让调用方知道：否则就是「界面显示改好了，重启发现没了」
+    if (!this.#saveDocument()) {
+      block.value = beforeValue;
+      block.history = block.history.slice(0, -1);
+      doc.revision -= 1;
+      doc.parentHash = undefined;
+      this.proposals.splice(index, 0, proposal);
+      return { ok: false, reason: `写入失败，改动已回退：${this.lastSaveError ?? '未知错误'}` };
+    }
     this.#saveProposals();
     return { ok: true, revision: doc.revision };
+  }
+
+  /**
+   * 撤销一次改动，恢复到它的 `before` 快照。
+   *
+   * 不传 `hash` 就撤销最近一次；传了就撤销那一次（按 `afterHash` 定位）。
+   * 可以连续撤：每次都退一格，history 里会追加一条 `reason: 'undo'` 的记录。
+   */
+  undo(hash?: string): { ok: boolean; reason?: string; revision?: number; restoredFrom?: string } {
+    this.loadSync();
+    const doc = this.doc;
+    if (doc === undefined) return { ok: false, reason: '没有已加载的人格文件' };
+    for (const label of ['persona', 'human'] as const) {
+      const block = doc.blocks[label];
+      const pool = [...block.history].reverse();
+      const entry = hash === undefined
+        ? pool.find((item) => item.before !== undefined)
+        : pool.find((item) => item.afterHash === hash && item.before !== undefined);
+      if (entry === undefined) continue;
+
+      const beforeValue = block.value;
+      const parentHash = docHash(doc);
+      block.value = entry.before as string;
+      const undoEntry: PersonaHistoryEntry = {
+        at: this.clock(),
+        by: 'user',
+        op: 'replace',
+        before: beforeValue.slice(0, 2000),
+        beforeHash: hashText(beforeValue),
+        afterHash: hashText(block.value),
+        reason: 'undo',
+      };
+      block.history = [...block.history, undoEntry].slice(-50);
+      doc.revision += 1;
+      doc.updatedAt = this.clock();
+      doc.parentHash = parentHash;
+      if (!this.#saveDocument()) {
+        block.value = beforeValue;
+        block.history = block.history.slice(0, -1);
+        doc.revision -= 1;
+        doc.parentHash = undefined;
+        return { ok: false, reason: `写入失败，回滚已撤销：${this.lastSaveError ?? '未知错误'}` };
+      }
+      return { ok: true, revision: doc.revision, restoredFrom: entry.afterHash };
+    }
+    return { ok: false, reason: '没有可回滚的快照（history 里没有 before 值）' };
   }
 
   reject(id: string): boolean {
@@ -365,14 +490,23 @@ export class PersonaStore {
     this.#saveDocument();
   }
 
-  #saveDocument(): void {
+  /** 最近一次落盘失败的原因（null = 一切正常）。页面与路由用它暴露「改了但没存下」。 */
+  get lastSaveError(): string | undefined {
+    return this.saveError;
+  }
+
+  #saveDocument(): boolean {
     const doc = this.doc;
-    if (doc === undefined) return;
+    if (doc === undefined) return true;
     try {
       mkdirSync(dirname(this.filePath), { recursive: true });
       writeFileSync(this.filePath, JSON.stringify(doc, null, 2) + '\n', 'utf8');
-    } catch {
-      /* 落盘失败不影响内存 */
+      this.saveError = undefined;
+      return true;
+    } catch (error) {
+      // **不能静默吞**：人格改动如果没落盘，用户会以为已经生效。
+      this.saveError = error instanceof Error ? error.message : String(error);
+      return false;
     }
   }
 
@@ -380,15 +514,14 @@ export class PersonaStore {
     try {
       mkdirSync(dirname(this.proposalPath), { recursive: true });
       writeFileSync(this.proposalPath, JSON.stringify(this.proposals, null, 2) + '\n', 'utf8');
-    } catch {
-      /* 落盘失败不影响内存 */
+    } catch (error) {
+      this.saveError = error instanceof Error ? error.message : String(error);
     }
   }
 }
 
 /** 按字符截断，尽量停在换行边界，末尾加省略号。 */
-function clip(text: string, limit: number): string {
-  if (limit <= 0) return '';
+function clip(text: string, limit: number): string {  if (limit <= 0) return '';
   if (text.length <= limit) return text;
   const head = text.slice(0, Math.max(0, limit - 1));
   const cut = head.lastIndexOf('\n');

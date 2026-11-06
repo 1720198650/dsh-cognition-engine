@@ -353,6 +353,25 @@ cognition-playbook.json           ← 主存储（不变）
 所以 agent 目前要提人格修改，得由用户手动调 `/persona/propose`。
 这是故意的——人格修改本来就该是低频、有人在场的事。
 
+### 4.7 深读后修掉的四处（2026-11-06）
+
+对照 Letta memory blocks / PersonaAgent / Generative Agents 的实现细节复盘
+（详见 [persona-memory-deep-read.md](persona-memory-deep-read.md)），
+自己实现里查出四个真缺陷：
+
+| 缺陷 | 后果 | 修法 |
+|---|---|---|
+| schema 里写的是 `facts`/`interactionStyle`，代码读的是 `slots`/`narrative` | 按 schema 写的人格文件，审计信息全部读不到 | 两套都读（都只审计不注入），schema 补齐 `slots`/`narrative`/`parentHash` |
+| `history` 只存 hash | **回滚不了**——用户说「刚才那次改坏了」时无从恢复 | 增加 `before` 原文快照 + `undo(hash?)`，可连续回退 |
+| `#saveDocument` 用 `catch {}` 静默吞错 | 界面显示改好了、重启发现没了，**最难查的一类失败** | 返回布尔 + `lastSaveError`；落盘失败就回退内存并报错，提案退回待确认 |
+| `clip()` 直接按字符截断 | 正文一超预算，尾巴上的「边界：不编造事实…」被整段切掉，**最硬的约束悄悄失效** | 截断后检查 `lockedPhrases`，缺了就压成一行「边界：a；b；c。」补回，正文让位 |
+
+另外补了 `parentHash`（每次改动记上一版内容 hash，串成可回溯的修订链）。
+
+**验证**：测试 110 → 114 条；真机点了一遍
+`propose → confirm（revision 2）→ undo（revision 3，内容回到原文）`，
+并确认 `traits` / `interactionStyle` / `slots` / `facts` 的 key 全都**没有**出现在注入段里。
+
 **启用方式**：把 `docs/persona/cognition-persona.example.json` 拷到
 `~/.dsh/cognition-engine/cognition-persona.json` 即可，无需改配置；
 `personaEnabled: false` 可临时关掉注入但保留文件。

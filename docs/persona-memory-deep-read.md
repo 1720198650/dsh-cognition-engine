@@ -14,6 +14,19 @@
 - **[ctxt-00005] npm 发布必须显式加 `--registry=https://registry.npmjs.org`**：**不适用**。本次不发布 npm 包。
 - **[ctxt-00003] 插件保持零外部依赖、记忆存储只用纯 JSON**：**适用，作为本次设计的硬约束**。所有推荐的 schema 与流程均可只靠 `fs` + `JSON` 实现；凡依赖 SQLite、向量库、云服务的方案只做对照，不进入推荐。
 
+### 0.1 结论摘要（先看这 10 条）
+
+1. **Letta block 的精确字段是 `id/label/description/value/limit/read_only/metadata/created_by_id/last_updated_by_id`**；`limit` 是**每块字符数**，官方示例用 5000，但不是跨版本统一常量；`description` 决定模型怎么读写这个块。
+2. **Letta block 每轮都带**：它以 `<memory_blocks><persona>…</persona><human>…</human></memory_blocks>` 的形式 prepend 到系统提示，不是检索；官方示例顺序 persona → human。
+3. **Letta 编辑工具不是 diff**：`memory_insert`（append-only）、`memory_replace`（目标字符串替换）、`memory_rethink`（整块重写、last-writer-wins）；legacy 无版本/回滚，当前 MemFS 用 git 提供版本历史。
+4. **共享 block 一改全改**：同一 `block_id` 挂多个 agent，任一 agent 更新所有 agent 可见；`read_only` 只能整块只读，不能按 agent 细分；多 agent 同时 `memory_rethink` 会丢更新。
+5. **Sleep-time Compute（arXiv 2504.13171）不是新记忆类型**：它是在空闲时预测 query、预计算；Letta 的实现用一个可写的 `rethink_memory_block`，把只读 persona/human 作为 source 做离线整合；现代产品叫 Dreaming。
+6. **PersonaAgent 的 persona 不是助手人格，而是“每个用户的专属 system prompt”**——它是用户摘要 + 工具规则，实际更像我们插件的 `human` 块；它的贡献是证明 persona 可以作为 memory→action 的中介。
+7. **PersonaAgent 在 LaMP 四个决策任务上全面最优**：LaMP-1 Acc 0.919（vs 最强 0.862）、LaMP-2M 0.513（vs 0.470）、LaMP-2N 0.796（vs 0.768）、LaMP-3 MAE 0.241（vs 0.277）。
+8. **Generative Agents 的检索是三因子归一化加权和**：`score = α_recency·recency + α_importance·importance + α_relevance·relevance`；论文只给公式没给 α；官方代码用 `gw=[0.5,3,2]`、`recency_decay=0.99`，且 recency 实现方向有坑，不要照抄。
+9. **Generative Agents 的 reflection 触发是“最近事件重要性之和 > 150”，约每天 2–3 次**；产出 3 个高层问题 → 检索 → 带证据引用的 insight → 存回 memory stream。几十条记忆规模要改成“新增 ≥20 条或每周一次”，不要套 150。
+10. **工程实现可借的核心不是运行时，而是结构**：OpenHanako 的 `identity/AGENTS/public AGENTS` 三层 + 角色卡 zip；Personal OS 的 5 维 trait（无分层）；千雪的“不变/稳定/可塑”三层 + 注入顺序；MaiBot 的 `personality/behavior_style/reply_style` 三段 JSON + 表达审核日志。
+
 ---
 
 ## 1. Letta / MemGPT 的 memory blocks
@@ -166,6 +179,7 @@ Letta 的编辑工具分代际：
 - 标题：*PersonaAgent: Bridging Memory and Action for Personalized LLM Agents*
 - 作者：Weizhi Zhang 等（Amazon Stores Foundational AI / UIC 等）
 - 发表：**Findings of ACL 2026**，pages 26421–26439；arXiv v2 2026-05-27。([ACL Anthology](https://aclanthology.org/2026.findings-acl.1315/)、[arXiv](https://arxiv.org/abs/2506.06254))
+- OpenReview：**未找到**该论文的 OpenReview 页面（ACL 2026 走 ACL 审稿/出版流程，不是 ICLR/NeurIPS 的 OpenReview 页面）。
 
 ### 2.2 persona 怎么表示
 
@@ -394,6 +408,8 @@ recency_vals = [recency_decay ** i for i in range(1, len(nodes)+1)]
 
 **仓库/许可**：`waynevianzhang-bit/personal-os`，MIT，约 1 star（2026-10 创建）；FastAPI + React 19 + ChromaDB + Ollama/DeepSeek。([GitHub](https://github.com/waynevianzhang-bit/personal-os))
 
+> 同名项目提醒：另有一个 `Iuanin666/personal-reasoning-os`（MIT，Markdown 本地记忆 + evidence-aware retrieval + profile evolution），没有独立的 personality engine 源码；本节精读的是有明确 `personality_engine.py` 的 `waynevianzhang-bit/personal-os`，避免把两个同名项目混为一谈。([personal-reasoning-os](https://github.com/Iuanin666/personal-reasoning-os))
+
 **性格引擎怎么分层：不分层，是单层 5 维 trait 向量。**
 
 `backend/services/personality_engine.py` + `backend/models/personality.py`：
@@ -456,7 +472,7 @@ recency_vals = [recency_decay ** i for i in range(1, len(nodes)+1)]
   - `PersonProfile`：`basic{name,type,first_met,relation_to_self}`、`interaction_style`（6 维：warmth/formality/humor/proactivity/directness/boundaries，0–1，默认 0.5）、`preferences`、`notes`、时间戳；
   - 档案创建阈值：同一实体出现 **≥3 次且跨 ≥3 天**，避免把一次性对话当长期关系；
   - 注入格式是 `## 关于{name}` + 关系/初次见面 + 6 维分数。
-- **情绪节律**：README 宣称「心情、精力、注意力、信心」四个维度随时间变化；但已读的 `prompt_builder.py` 只接收 `energy_label` / `mood_label` 两个状态，**attention/confidence 的注入实现未找到**（可能在未读模块）。([README](https://github.com/Stevehim0/Qianxue)、[identity.md](https://github.com/Stevehim0/Qianxue/blob/main/backend/services/core/identity.md)、[prompt_builder.py](https://github.com/Stevehim0/Qianxue/blob/main/backend/services/core/prompt_builder.py)、[profile_data.py](https://github.com/Stevehim0/Qianxue/blob/main/Memory/recall/profile_data.py))
+- **情绪节律**：README 宣称「心情、精力、注意力、信心」四个维度随时间变化；但已读的 `prompt_builder.py` 只接收 `energy_label` / `mood_label` 两个状态，**attention/confidence 的注入实现未找到**（可能在未读模块）。([README](https://github.com/Stevehim0/Qianxue)、[identity.md](https://github.com/Stevehim0/Qianxue/blob/feat/streaming-architecture/backend/services/core/identity.md)、[prompt_builder.py](https://github.com/Stevehim0/Qianxue/blob/feat/streaming-architecture/backend/services/core/prompt_builder.py)、[profile_data.py](https://github.com/Stevehim0/Qianxue/blob/feat/streaming-architecture/Memory/recall/profile_data.py))
 - **零依赖 JSON 可行性**：identity 是 Markdown+YAML，天然可转 JSON；运行时是 Python 多服务，不能直接搬。
 - **价值**：**高（分层 + 注入顺序）**：不变/稳定/可塑三层，是 Persona schema 的最佳工程参照；**中（情绪）**：有情绪节律概念，但可验证实现有限。
 
@@ -534,7 +550,7 @@ recency_vals = [recency_decay ** i for i in range(1, len(nodes)+1)]
 ```text
 data/
   cognition-persona.json          # 当前版本（persona + human + 预算 + revision）
-  cognition-persona-proposals.json# 待确认提案（agent/user）
+  cognition-persona-proposals.json # 待确认提案（agent/user）
   persona/
     changelog.jsonl               # 每次变更一行（append-only）
     versions/
@@ -622,7 +638,7 @@ export interface PersonaProposal {
 | `schema` | `"cognition.persona"` | 固定 | 不等于则视为无人格 |
 | `version` | `1` | 固定 1（未来升级再改） | 类型必须是 number |
 | `revision` | `1` | 1..2^31 | 每次写入 +1；回滚也 +1，不复用旧号 |
-| `parentHash` | `null` | 64 hex（sha256-16 亦可） | 必须等于上一版 canonical hash；创建时为 null |
+| `parentHash` | `null` | sha256 全量 64 hex，或沿用现有 16 hex 截断 | 必须等于上一版 canonical hash；创建时为 null |
 | `budget.persona` | `600` | 100–800 | 字符；`value.length ≤ limit` |
 | `budget.human` | `500` | 100–700 | 同上 |
 | `budget.total` | `1100` | 200–1500 | 必须 ≥ persona+human；超出时先压 human |
@@ -849,9 +865,9 @@ export interface PersonaProposal {
 - [Personal OS](https://github.com/waynevianzhang-bit/personal-os)
 - [Personal OS personality_engine.py](https://github.com/waynevianzhang-bit/personal-os/blob/master/backend/services/personality_engine.py)
 - [千雪 Qianxue](https://github.com/Stevehim0/Qianxue)
-- [千雪 identity.md](https://github.com/Stevehim0/Qianxue/blob/main/backend/services/core/identity.md)
-- [千雪 prompt_builder.py](https://github.com/Stevehim0/Qianxue/blob/main/backend/services/core/prompt_builder.py)
-- [千雪 profile_data.py](https://github.com/Stevehim0/Qianxue/blob/main/Memory/recall/profile_data.py)
+- [千雪 identity.md](https://github.com/Stevehim0/Qianxue/blob/feat/streaming-architecture/backend/services/core/identity.md)
+- [千雪 prompt_builder.py](https://github.com/Stevehim0/Qianxue/blob/feat/streaming-architecture/backend/services/core/prompt_builder.py)
+- [千雪 profile_data.py](https://github.com/Stevehim0/Qianxue/blob/feat/streaming-architecture/Memory/recall/profile_data.py)
 - [MaiBot](https://github.com/Mai-with-u/MaiBot)
 - [MaiBot Bot 配置（personality 字段）](https://docs.maibot.chat/manual/configuration/bot-config)
 - [MaiBot 人设库与导入（maibot.personality）](https://docs.maibot.chat/manual/personality)

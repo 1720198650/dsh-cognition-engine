@@ -9,6 +9,10 @@
     "version": { "const": 1 },
     "revision": { "type": "integer", "minimum": 1 },
     "updatedAt": { "type": "integer", "minimum": 0 },
+    "parentHash": {
+      "type": "string",
+      "description": "上一次 revision 的内容 hash，用来串成可回溯的修订链"
+    },
     "budget": {
       "type": "object",
       "properties": {
@@ -56,6 +60,11 @@
           "maxItems": 5,
           "items": { "type": "string", "maxLength": 30 }
         },
+        "slots": {
+          "type": "object",
+          "description": "human 块的结构化画像（Memobase 式 profile slot）。只审计，不注入。",
+          "additionalProperties": true
+        },
         "facts": {
           "type": "array",
           "maxItems": 5,
@@ -72,7 +81,13 @@
         },
         "interactionStyle": {
           "type": "object",
+          "description": "交互风格数值。只审计，不注入。",
           "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "narrative": {
+          "type": "object",
+          "description": "叙事三元组（origin/chapter/continuity）。只审计，不注入。",
+          "additionalProperties": { "type": "string", "maxLength": 200 }
         },
         "history": {
           "type": "array",
@@ -84,6 +99,7 @@
               "at": { "type": "integer" },
               "by": { "enum": ["user", "agent", "system"] },
               "op": { "enum": ["create", "replace", "reset"] },
+              "before": { "type": "string", "maxLength": 2000, "description": "改动前的原文快照，undo() 用它恢复" },
               "beforeHash": { "type": "string" },
               "afterHash": { "type": "string" },
               "reason": { "type": "string", "maxLength": 200 }
