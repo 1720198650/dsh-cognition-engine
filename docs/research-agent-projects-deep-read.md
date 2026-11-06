@@ -112,13 +112,17 @@
 
 ### 2.7 记忆类项目：只回答「数据模型里有没有能直接借的字段/操作」
 
-| 项目 | 数据模型关键字段/操作 | 我们能直接借什么 | 不要借什么 |
+> 本节按任务要求只谈数据模型，不谈部署；部署/依赖结论见第 1 节「零依赖可行性」列。
+
+| 项目 | 数据模型关键字段/操作 | 我们能直接借什么 | 数据模型边界（不要误用） |
 |---|---|---|---|
-| [Letta / MemGPT](https://docs.letta.com/v1-sdk/memory/memory-blocks) | block：`label` / `description` / `value` / `limit` / `read_only`；block 始终 prepend 到 prompt；`value` 是整块替换不是 append；last-write-wins | 用 `label` 区分 persona/human/policies；用 `limit` 控制每块上下文预算；用 `read_only` 保护人格/安全块；用 `description` 教模型何时读写 | 服务端、向量 archival memory、sleep-time agent |
-| [Mem0](https://docs.mem0.ai/api-reference/memory/add-memories) | V3：`messages` + `user_id` / `agent_id` / `app_id` / `run_id` + `metadata` + `expiration_date` + `immutable`；**ADD-only**，无 UPDATE/DELETE；异步 `event_id` | `user_id/agent_id/run_id` 三轴作用域；`metadata` 放 category/source；`expiration_date` 做过期隐藏；`immutable` 保护不可改事实 | 向量库、LLM 抽取管道、平台服务 |
-| [Zep / Graphiti](https://github.com/getzep/graphiti) | Context graph：Entities（节点，带 evolving summary）/ Facts & Relationships（边，带 validity window）/ Episodes（原始数据，所有事实可溯源）/ Custom types | 「事实有有效期」——我们已有 `validFrom/validTo`；借 `invalid_at` 的「失效不删除」语义；借 Episode 作为 `sourceIds` 的溯源对象 | Neo4j/FalkorDB、LLM 抽取、embedding、图查询 |
-| [Memobase](https://docs.memobase.io/features/profile/profile) | Profile slots：默认 `basic_info.name/gender`、`education.school/major`，可 `additional_user_profiles` 扩展 `topic/sub_topics`；Event：summary（可选）、tags（如 `emotion::happy`）、profile_delta（必填）、created_time（必填） | 把「用户画像」拆成固定 slot（基本信息/偏好/工作/健康…），只允许 slot 内更新；每个事件写 `profile_delta`，保留「哪次对话改了什么」的审计 | FastAPI + Postgres + Redis 服务 |
-| [A-MEM](https://arxiv.org/abs/2502.12110) | Note：contextual description / keywords / tags / links；新记忆加入时分析历史记忆并建链；memory evolution 会更新旧笔记的上下文/属性 | 在现有 memory 上增加 `keywords` / `tags` / `context` 三个短字段；用 `links` 表达「相关记忆」；「新记忆可修正旧记忆」但要保留旧版本（我们已有 `supersedes`） | 自动建链的 LLM 成本、向量库、embedding |
+| [Letta / MemGPT](https://docs.letta.com/v1-sdk/memory/memory-blocks) | block：`label` / `description` / `value` / `limit` / `read_only`；block 始终 prepend 到 prompt；`value` 是整块替换不是 append；last-write-wins | 用 `label` 区分 persona/human/policies；用 `limit` 控制每块上下文预算；用 `read_only` 保护人格/安全块；用 `description` 教模型何时读写 | block 是全量注入，不是检索；不要把 block 当无限容量的记忆库 |
+| [Mem0](https://docs.mem0.ai/api-reference/memory/add-memories) | V3：`messages` + `user_id` / `agent_id` / `app_id` / `run_id` + `metadata` + `expiration_date` + `immutable`；**ADD-only**，无 UPDATE/DELETE；异步 `event_id` | `user_id/agent_id/run_id` 三轴作用域；`metadata` 放 category/source；`expiration_date` 做过期隐藏；`immutable` 保护不可改事实 | ADD-only 会累积近似重复；不要把「记忆条数」当「知识质量」 |
+| [Zep / Graphiti](https://github.com/getzep/graphiti) | Context graph：Entities（节点，带 evolving summary）/ Facts & Relationships（边，带 validity window）/ Episodes（原始数据，所有事实可溯源）/ Custom types | 「事实有有效期」——我们已有 `validFrom/validTo`；借 `invalid_at` 的「失效不删除」语义；借 Episode 作为 `sourceIds` 的溯源对象 | validity window 是事实时间，不是任务状态；不要把 `invalid_at` 当人工审批 |
+| [Memobase](https://docs.memobase.io/features/profile/profile) | Profile slots：默认 `basic_info.name/gender`、`education.school/major`，可 `additional_user_profiles` 扩展 `topic/sub_topics`；Event：summary（可选）、tags（如 `emotion::happy`）、profile_delta（必填）、created_time（必填） | 把「用户画像」拆成固定 slot（基本信息/偏好/工作/健康…），只允许 slot 内更新；每个事件写 `profile_delta`，保留「哪次对话改了什么」的审计 | slot 是白名单，不要让模型自由新增/重命名；profile 不是事实记忆，不承担双时态 |
+| [A-MEM](https://arxiv.org/abs/2502.12110) | Note：contextual description / keywords / tags / links；新记忆加入时分析历史记忆并建链；memory evolution 会更新旧笔记的上下文/属性 | 在现有 memory 上增加 `keywords` / `tags` / `context` 三个短字段；用 `links` 表达「相关记忆」；「新记忆可修正旧记忆」但要保留旧版本（我们已有 `supersedes`） | 自动建链是 LLM 成本；不要把「链接多」当「记忆好」，链接需要可审计 |
+
+**一句话**：这五家里，最直接可借的是 **Letta 的 block 字段**（`label/description/value/limit/read_only`）和 **Memobase 的 profile slot + event delta**；Graphiti 的 `valid/invalid` 语义我们已有等价物（`validFrom/validTo`），不需要图数据库；Mem0 的 `immutable/expiration_date` 可补进现有记忆 schema；A-MEM 的 `keywords/tags/context/links` 可作为可选增强字段。
 
 ### 2.8 中文/社区型：人格、记忆、主动行为与「学习」
 
