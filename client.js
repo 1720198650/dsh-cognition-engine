@@ -306,10 +306,12 @@ window.__ModuleLoader__.load({
       sep: { opacity: 0.45 },
       caret: { fontSize: 9, opacity: 0.7, marginLeft: 2 },
       panel: {
-        border: '1px solid var(--dsw-alias-border-l1)',
-        borderRadius: 8,
-        background: 'var(--dsw-alias-bg-overlay)',
-        boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
+        // 面板形态（侧边栏一级页面）**不设底色、不设外框**：
+        // bg-overlay 比主列底色亮一档，铺满整列就成了那种「整块发亮」的感觉。
+        border: 'none',
+        borderRadius: 0,
+        background: 'transparent',
+        boxShadow: 'none',
         fontSize: 11,
         color: 'var(--dsw-alias-label-secondary)',
         overflow: 'hidden',
@@ -828,40 +830,45 @@ window.__ModuleLoader__.load({
         const playbookCount = (state.playbook || {}).active || 0;
         const samples = state.samples || 0;
 
-        const row = h(
-          'div',
-          {
-            style: S.row,
-            role: 'button',
-            tabIndex: 0,
-            'aria-expanded': open,
-            title: open ? dict.close : `${dict.tasks} / ${dict.memories} / ${dict.schemas}`,
-            onClick: toggle,
-            onKeyDown: (event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                toggle();
-              }
+        let row = null;
+        // 面板形态不需要这一行：它和下面的标题区重复（同样的四个计数），
+        // 而且这行本身是「折叠条」，永远展开的面板用不上它。只在浮层形态保留。
+        if (!isPanel) {
+          row = h(
+            'div',
+            {
+              style: S.row,
+              role: 'button',
+              tabIndex: 0,
+              'aria-expanded': open,
+              title: open ? dict.close : `${dict.tasks} / ${dict.memories} / ${dict.schemas}`,
+              onClick: toggle,
+              onKeyDown: (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  toggle();
+                }
+              },
             },
-          },
-          h('span', { style: { ...S.group, ...S.name } }, dict.name),
-          h('span', { style: S.sep }, '·'),
-          h('span', null, `${dict.memory} ${memoryCount}`),
-          h('span', { style: S.sep }, '·'),
-          h('span', null, `${dict.schema} ${schemaCount}`),
-          h('span', { style: S.sep }, '·'),
-          h('span', null, `${dict.todo} ${taskCount}`),
-          h('span', { style: S.sep }, '·'),
-          h('span', null, `${dict.playbookTab} ${playbookCount}`),
-          samples > 0
-            ? h(
-                'span',
-                { style: { color: 'var(--dsw-alias-state-warn-primary)', fontWeight: 600 } },
-                `⚠ ${dict.testData} ${samples}`,
-              )
-            : null,
-          h('span', { style: S.caret }, open ? '▾' : '▸'),
-        );
+            h('span', { style: { ...S.group, ...S.name } }, dict.name),
+            h('span', { style: S.sep }, '·'),
+            h('span', null, `${dict.memory} ${memoryCount}`),
+            h('span', { style: S.sep }, '·'),
+            h('span', null, `${dict.schema} ${schemaCount}`),
+            h('span', { style: S.sep }, '·'),
+            h('span', null, `${dict.todo} ${taskCount}`),
+            h('span', { style: S.sep }, '·'),
+            h('span', null, `${dict.playbookTab} ${playbookCount}`),
+            samples > 0
+              ? h(
+                  'span',
+                  { style: { color: 'var(--dsw-alias-state-warn-primary)', fontWeight: 600 } },
+                  `⚠ ${dict.testData} ${samples}`,
+                )
+              : null,
+            h('span', { style: S.caret }, open ? '▾' : '▸'),
+          );
+        }
 
         // 面板形态没有「收起」：永远展开。浮层形态才有折叠成一行摘要的行为。
         if (!isPanel && !open) return h('div', { style: rootStyle }, row);
@@ -1621,7 +1628,8 @@ window.__ModuleLoader__.load({
             style: opts.variant === 'wide' ? S.widePanel : S.panel,
             ...(opts.variant === 'wide' ? {} : { role: 'dialog', 'aria-label': dict.name }),
           },
-          // 页签栏上方的标题区：面板形态给一个明确的页面标题，浮层形态不需要
+          // 页签栏上方的标题区：面板形态给一个明确的页面标题，浮层形态不需要。
+          // 计数**只在这里出现一次**——原来折叠条上还有一行同样的数字，两行重复。
           isPanel
             ? h(
                 'div',
@@ -1630,16 +1638,20 @@ window.__ModuleLoader__.load({
                     display: 'flex',
                     alignItems: 'baseline',
                     gap: 10,
-                    padding: '22px 16px 12px',
-                    borderBottom: 'none',
+                    padding: '20px 20px 10px',
                   },
                 },
                 h('h2', {
-                  style: { margin: 0, fontSize: 18, fontWeight: 600, lineHeight: '26px', color: 'var(--dsw-alias-label-primary)' },
+                  style: { margin: 0, fontSize: 17, fontWeight: 600, lineHeight: '24px', color: 'var(--dsw-alias-label-primary)' },
                 }, dict.name),
                 h('span', {
                   style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', fontVariantNumeric: 'tabular-nums' },
                 }, `记忆 ${memoryCount} · 主题 ${schemaCount} · 准则 ${playbookCount} · 任务 ${taskCount}`),
+                samples > 0
+                  ? h('span', {
+                      style: { fontSize: 12, color: 'var(--dsw-alias-state-warn-primary)', fontWeight: 600 },
+                    }, `⚠ ${dict.testData} ${samples}`)
+                  : null,
               )
             : null,
           h(
@@ -1767,8 +1779,8 @@ window.__ModuleLoader__.load({
       minHeight: 0,
       width: '100%',
       boxSizing: 'border-box',
-      // **不能设背景**：侧栏主列自己有一层底，这里再铺 bg-base 会变成「灰上叠灰」，
-      // 整个面板看起来蒙了一层雾。透明就对了。
+      // **不能设背景**：侧栏主列自己有一层底，这里再铺任何颜色都会变成「灰上叠灰」，
+      // 整个面板看起来蒙了一层雾、比周围亮一档。透明就对了。
       background: 'transparent',
       color: 'var(--dsw-alias-label-primary)',
       fontSize: 13,
