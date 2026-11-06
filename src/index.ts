@@ -19,6 +19,8 @@ import { PlaybookEventLog } from './events.ts';
 import { InjectionLog, TurnFeedbackTracker, classifyFeedback, extractUserText } from './injection_log.ts';
 import type { FeedbackKind } from './injection_log.ts';
 import { PersonaStore } from './persona.ts';
+import { StyleStore } from './style.ts';
+import type { StyleBucket } from './style.ts';
 import { TemporalMemoryStore } from './memory.ts';
 import type { TemporalFact } from './memory.ts';
 import { JsonStateStore } from './persist.ts';
@@ -200,6 +202,19 @@ export interface CognitionConfig {
   personaFile?: string;
   /** 是否注入人格块（文件存在才生效），默认 true。 */
   personaEnabled?: boolean;
+  /**
+   * 是否开启风格指纹（S4）。
+   *
+   * 默认开启，但**只落统计量、不落原文**：记录的是平均句长、语气词频率这类数字，
+   * 翻不出「当时说了什么」。要复现原文只能去 session 日志。
+   */
+  styleEnabled?: boolean;
+  /** 风格样本下限（轮数），少于它一律报 insufficient，不给假分数。默认 60。 */
+  styleMinTurns?: number;
+  /** 风格样本下限（字符数），默认 6000。 */
+  styleMinChars?: number;
+  /** 自定义口癖（3–5 个），用于算 catchphrasePerK。默认空。 */
+  styleCatchphrases?: string[];
   /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
   lockToken?: string;
   /** 真模型：显式指定 provider / model，不设则跟随当前默认模型。 */
@@ -294,6 +309,12 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
         ? config.personaFile
         : undefined,
     personaEnabled: config.personaEnabled !== false,
+    styleEnabled: config.styleEnabled !== false,
+    styleMinTurns: Math.max(5, Math.round(numberOr(config.styleMinTurns, 60))),
+    styleMinChars: Math.max(200, Math.round(numberOr(config.styleMinChars, 6000))),
+    styleCatchphrases: Array.isArray(config.styleCatchphrases)
+      ? config.styleCatchphrases.filter((item): item is string => typeof item === 'string' && item.length > 0).slice(0, 5)
+      : [],
     lockToken:
       typeof config.lockToken === 'string' && config.lockToken.trim().length > 0
         ? config.lockToken
@@ -366,6 +387,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   // 人格块（S3）：轻人格，文件不存在就等于没启用，注入段不占 token
   const persona = new PersonaStore({
     ...(config.personaFile === undefined ? {} : { filePath: config.personaFile }),
+  });
+
+  // 风格指纹（S4）：只落统计量，不落原文
+  const styleStore = new StyleStore({
+    ...(config.styleMinTurns === undefined ? {} : { minTurns: config.styleMinTurns }),
+    ...(config.styleMinChars === undefined ? {} : { minChars: config.styleMinChars }),
   });
 
   // 准则事件日志（轻量事件溯源）：只追加，不改主存储
@@ -806,6 +833,15 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   let turnTrackingSeen = false;
   /** 子代理会话不参与打分：它们的「用户消息」是父代理的任务说明，不是人的反馈。 */
   const subagentSessions = new Set<string>();
+  /**
+   * 本轮助手输出缓冲（只用于风格统计，写完即丢，不进磁盘）。
+   *
+   * 为什么要缓冲：`assistant/message` 是**每个 step** 一条，一轮里可能几十条；
+   * 风格指针对应的是「这一轮整体怎么说话」，所以按轮累加，`turn/end` 时一次性算完。
+   */
+  const assistantBuffers = new Map<string, { turn: number; text: string }>();
+  /** 单轮参与统计的最大字符数：防止超长轮把内存和统计都拖歪。 */
+  const MAX_STYLE_CHARS = 12000;
 
   /**
    * 挂上轮次事件。
@@ -849,9 +885,39 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         if (type === 'turn/start') {
           const turn = Number((data as { turn?: unknown } | null | undefined)?.turn);
           if (Number.isFinite(turn)) turnTracker.beginTurn(sessionId, turn);
+          assistantBuffers.delete(sessionId);
         } else if (type === 'user/message') {
           turnTracker.appendUserText(sessionId, extractUserText(data));
+        } else if (type === 'assistant/message') {
+          if (config.styleEnabled) {
+            const message = (data as { message?: unknown; turn?: unknown } | null | undefined)?.message;
+            const turn = Number((data as { turn?: unknown } | null | undefined)?.turn);
+            const text = extractUserText(message); // 同样的取文本逻辑：只拼 text 块
+            if (text.length > 0) {
+              const current = assistantBuffers.get(sessionId);
+              const base = current !== undefined && current.turn === turn ? current.text : '';
+              const merged = base.length >= MAX_STYLE_CHARS ? base : (base + '\n' + text).slice(0, MAX_STYLE_CHARS);
+              assistantBuffers.set(sessionId, { turn: Number.isFinite(turn) ? turn : 0, text: merged });
+            }
+          }
         } else if (type === 'turn/end') {
+          // 先算风格（用本轮助手输出），再结束轮次跟踪——顺序反了会丢缓冲
+          if (config.styleEnabled) {
+            const buffer = assistantBuffers.get(sessionId);
+            assistantBuffers.delete(sessionId);
+            if (buffer !== undefined && buffer.text.trim().length > 0) {
+              try {
+                styleStore.record({
+                  sessionId,
+                  turn: buffer.turn,
+                  text: buffer.text,
+                  catchphrases: config.styleCatchphrases,
+                });
+              } catch {
+                /* 统计失败不影响会话 */
+              }
+            }
+          }
           turnTracker.endTurn(sessionId);
         }
       } catch {
@@ -875,7 +941,10 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     listen('subagent/end', noteSubagent);
     listen('session/disposed', (session: unknown) => {
       const id = (session as { id?: unknown } | null | undefined)?.id;
-      if (typeof id === 'string') turnTracker.forget(id);
+      if (typeof id === 'string') {
+        turnTracker.forget(id);
+        assistantBuffers.delete(id);
+      }
     });
     listen('session/event', handler);
     ctx.logger?.info?.('cognition-engine: 自动反馈闭环已挂载（session/event）');
@@ -950,6 +1019,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         chars: persona.usage().rendered,
         revision: persona.document?.revision ?? 0,
         pending: persona.pending().length,
+      },
+      style: {
+        enabled: config.styleEnabled,
+        turns: styleStore.sampleSummary().turns,
+        status: styleStore.sampleSummary().sufficient ? styleStore.compare().status : 'insufficient',
+        chars: styleStore.sampleSummary().chars,
       },
       topics: topics.stats(),
       storageWarning: stateStore.warning,
@@ -1605,6 +1680,28 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       (url) => persona.undo(url.searchParams.get('hash') ?? undefined),
       { method: 'POST' },
     );
+
+    // 风格指纹（S4）：只读统计量，页面/脚本查询用
+    route('/cognition-engine/style', (url) => {
+      const rawBucket = url.searchParams.get('bucket');
+      const bucket: StyleBucket | 'all' =
+        rawBucket === 'technical' || rawBucket === 'emotional' || rawBucket === 'casual' ? rawBucket : 'all';
+      const rawRecent = Number(url.searchParams.get('recent') ?? '30');
+      return {
+        enabled: config.styleEnabled,
+        path: styleStore.path,
+        sample: styleStore.sampleSummary(),
+        comparison: styleStore.compare({
+          bucket,
+          ...(Number.isFinite(rawRecent) ? { recentTurns: rawRecent } : {}),
+        }),
+        trend: styleStore.trend(12),
+        /** 只落统计量、不落原文——这一项写出来是为了让后来人一眼看到边界。 */
+        storesRawText: false,
+        saveError: styleStore.lastSaveError ?? null,
+      };
+    });
+    route('/cognition-engine/style/baseline', () => styleStore.freezeBaseline(), { method: 'POST' });
     route(
       '/cognition-engine/persona/propose',
       (url) => {

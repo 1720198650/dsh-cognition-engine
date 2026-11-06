@@ -97,6 +97,19 @@ export interface CognitionConfig {
     personaFile?: string;
     /** 是否注入人格块（文件存在才生效），默认 true。 */
     personaEnabled?: boolean;
+    /**
+     * 是否开启风格指纹（S4）。
+     *
+     * 默认开启，但**只落统计量、不落原文**：记录的是平均句长、语气词频率这类数字，
+     * 翻不出「当时说了什么」。要复现原文只能去 session 日志。
+     */
+    styleEnabled?: boolean;
+    /** 风格样本下限（轮数），少于它一律报 insufficient，不给假分数。默认 60。 */
+    styleMinTurns?: number;
+    /** 风格样本下限（字符数），默认 6000。 */
+    styleMinChars?: number;
+    /** 自定义口癖（3–5 个），用于算 catchphrasePerK。默认空。 */
+    styleCatchphrases?: string[];
     /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
     lockToken?: string;
     /** 真模型：显式指定 provider / model，不设则跟随当前默认模型。 */

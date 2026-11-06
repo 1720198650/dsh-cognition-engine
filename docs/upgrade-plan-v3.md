@@ -433,6 +433,35 @@ similarity = 1 − d
 - 人为把回复改成「正式报告体」，相似度 <0.65 且触发提示
 - 技术回答与闲聊**不互相比较**（跨桶不报警）
 
+### 5.7 实现状态（2026-11-06）
+
+已实现 `src/style.ts` + `/style` 与 `/style/baseline` 路由 + 5 组测试（总测试 119 条全绿）。
+
+**一个关键取舍：不落原文，只落统计量。**
+风格审计要样本，最直接的做法是把每轮回复原文写盘——但那等于把你的对话内容落到磁盘。
+这里选保守路线：原文只在内存里过一遍，写盘的只有 `chars / meanSentLen / sentLenCv /
+shortRatio / tonePerK / firstPersonPerK / punctPer100 / emojiPerK / catchphrasePerK` 九个数字。
+事后能答「风格变没变」，翻不出「当时说了什么」。要复现原文只能去 session 日志（宿主自己的存储）。
+`/style` 返回里显式带 `storesRawText: false`，把这个边界写在接口上而不是只写在文档里。
+
+| 项 | 状态 |
+|---|---|
+| 核心 9 项指标（纯函数，可单测） | ✅ |
+| 语域分桶（technical > emotional > casual） | ✅ 技术信号优先：一句「报错很难受，`ENOENT`」算技术不算情绪 |
+| 有界加权距离 + 单项爆炸只影响有限幅度 | ✅ 语气词 5→200 仍落在 0.5–0.95，不会归零 |
+| 样本不足一律 `insufficient`，不给假分数 | ✅ 默认门槛 60 轮 / 6000 字，可配 |
+| 冻结基线（`POST /style/baseline`） | ✅ 冻结后 `compare.baseline.source = 'frozen'` |
+| 跨桶不比较 | ✅ `compare({bucket})` 分桶算 |
+| 每轮按 `assistant/message` 累加、`turn/end` 一次性结算 | ✅ 单轮上限 12000 字符，防止超长轮拖歪统计 |
+
+**验证**：真机 `GET /style` 返回
+`enabled=true, storesRawText=false, sample.turns=0, comparison.status=insufficient`，
+`note` 明确写「样本不足（0 轮 / 0 字，门槛 60 轮 / 6000 字），不做判断」——
+**宁可报不知道，也不给一个看起来很像的假分数**。
+
+**还没做**：L2 月度 LLM 审计（20 题四轴 + 10 题轨迹）需要喂真实回复原文，
+按上面的取舍它必须显式开启「允许把样本交给模型」才做，留到 S5 之后单独决定。
+
 ---
 
 ## 六、S5：CPE 回归闸门（1–2 天）⭐核心差异化

@@ -144,9 +144,13 @@ Invoke-WebRequest "http://127.0.0.1:3111/cognition-engine/events" -UseBasicParsi
 | 顺序 | 阶段 | 状态 |
 |---|---|---|
 | 1 | **S3 Persona 块** | ✅ 已实现（默认关闭，等你要用时再开） |
-| 2 | S4 风格指纹 + 语域分桶 | 待做 |
-| 3 | S5 CPE 回归闸门 | 待做 |
+| 2 | **S4 风格指纹** | ✅ 已实现（只落统计量、不落原文；样本不足会明说） |
+| 3 | S5 CPE 回归闸门 | ✅ 设计已定（含 CPE 实证数字），待实现 |
 | 4 | S6 学习预算 + shadow | 待做 |
+
+**风格审计怎么用**：`GET /cognition-engine/style` 看 `sample.turns` 与 `comparison.status`。
+样本没到 60 轮 / 6000 字之前它只会回 `insufficient` —— 这不是坏了，是拒绝给假分数。
+等样本够了先 `POST /cognition-engine/style/baseline` 冻结基线，之后才谈「有没有漂」。
 
 **要用人格块**：把 `docs/persona/cognition-persona.example.json` 拷到
 `~/.dsh/cognition-engine/cognition-persona.json`，然后
