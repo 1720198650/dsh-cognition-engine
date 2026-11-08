@@ -740,7 +740,7 @@ async function main(): Promise<void> {
   await test('渲染按主题分组：挂了主题就用主题名做标题', () => {
     const pb = newPlaybook();
     const a = pb.addManual({ content: '发版前必须跑完整测试再打包发布', section: '约定' });
-    const b = pb.addManual({ content: '文档整理一格一照每行独立标题', section: '约定' });
+    const b = pb.addManual({ content: '文档整理一格一图每行独立标题', section: '约定' });
     pb.setTopics(a.entry!.id, ['t_release']);
     pb.setTopics(b.entry!.id, ['t_photo']);
     const text = pb.render(1_000_000, undefined, (id) =>
@@ -1028,7 +1028,7 @@ async function main(): Promise<void> {
     rmSync(file, { force: true });
     const manager = new LongHorizonTaskManager({ filePath: file, now: () => 1_000_000 });
     await manager.load();
-    const task = await manager.create_task('整理 10.27 期文档整理', { topicIds: ['t_photo'] });
+    const task = await manager.create_task('整理某期文档', { topicIds: ['t_photo'] });
     assert.deepEqual(task.topicIds, ['t_photo']);
     const pending = manager.get_pending_tasks();
     assert.equal(pending.length, 1);
@@ -1341,7 +1341,7 @@ async function main(): Promise<void> {
     const paraphrase = lcsSimilarity('发版前要跑完整测试', '发布版本之前必须先跑测试');
     assert.ok(paraphrase > 0.5, `改写对应 > 0.5，实得 ${paraphrase.toFixed(3)}`);
     // 无关
-    const unrelated = lcsSimilarity('文档整理一格一照', 'npm 发布必须用官方源');
+    const unrelated = lcsSimilarity('文档整理一格一图', 'npm 发布必须用官方源');
     assert.ok(unrelated < 0.2, `无关对应 < 0.2，实得 ${unrelated.toFixed(3)}`);
     // 改否定词的冲突对：高相似
     const conflict = lcsSimilarity('发版流程不可跳步', '发版流程可以跳步');
@@ -1424,7 +1424,7 @@ async function main(): Promise<void> {
     const store = new TemporalMemoryStore({});
     store.ingest({ subject: '发布流程', content: '发布流程要先跑完整测试再发版', source: 'user', tags: [] });
     store.ingest({ subject: '发版频率', content: '发版频率每天最多一次', source: 'user', tags: [] });
-    store.ingest({ subject: '文档整理', content: '文档整理一格一照', source: 'user', tags: [] });
+    store.ingest({ subject: '文档整理', content: '文档整理一格一图', source: 'user', tags: [] });
     const hits = store.recall('发版流程要做什么', { limit: 1 });
     assert.equal(hits[0]?.fact.subject, '发布流程', `应命中发布流程，实得 ${hits[0]?.fact.subject}`);
     rmSync(join(TEST_TMP, 'bm25-test.json'), { force: true });
@@ -1646,7 +1646,7 @@ async function main(): Promise<void> {
           human: {
             label: 'human',
             limit: 200,
-            value: '做文档整理，中文为主。',
+            value: '做文档整理工作，中文为主。',
             slots: { preferences: { verbosity: '简短' } },
             history: [],
           },
@@ -1994,7 +1994,7 @@ async function main(): Promise<void> {
 
     const made = store.create({
       persona: '我是小认。\n边界：不编造事实；不替你做出不可逆的决定。',
-      human: '做文档整理，中文为主。',
+      human: '做文档整理工作，中文为主。',
     });
     assert.equal(made.ok, true);
     assert.equal(made.revision, 1);
@@ -2008,7 +2008,7 @@ async function main(): Promise<void> {
     // 落盘可重新加载
     const reloaded = new PersonaStore({ filePath: file, proposalPath: propFile });
     assert.equal(reloaded.present, true);
-    assert.equal(reloaded.document!.blocks.human.value, '做文档整理，中文为主。');
+    assert.equal(reloaded.document!.blocks.human.value, '做文档整理工作，中文为主。');
     rmSync(file, { force: true });
     rmSync(propFile, { force: true });
   });

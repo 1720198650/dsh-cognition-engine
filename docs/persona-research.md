@@ -299,7 +299,7 @@ multiple_probability = 0
       "label": "human",
       "limit": 500,
       "readOnly": false,
-      "value": "做文档整理；中文为主；要求先查证再动手；讨厌空话和总结性废话。",
+      "value": "做文档整理工作；中文为主；要求先查证再动手；讨厌空话和总结性废话。",
       "history": []
     }
   }
@@ -329,7 +329,7 @@ multiple_probability = 0
 </persona>
 
 <human chars="180/500">
-做文档整理；中文为主；要求先查证再动手；讨厌空话和总结性废话。
+做文档整理工作；中文为主；要求先查证再动手；讨厌空话和总结性废话。
 </human>
 ```
 

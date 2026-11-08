@@ -680,7 +680,7 @@ export interface PersonaProposal {
 </persona>
 
 <human chars="42/500">
-做文档整理；中文为主；要求先查证再动手；讨厌空话。
+做文档整理工作；中文为主；要求先查证再动手；讨厌空话。
 </human>
 ```
 

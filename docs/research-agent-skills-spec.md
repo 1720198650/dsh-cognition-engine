@@ -86,13 +86,13 @@ skills/photo-pairing/
 ```markdown
 ---
 name: photo-pairing
-description: 按拍摄时间与部位特征把施工照片配成"前/后"对，输出配对表。当用户提到图片配对、前后对比、例行检查图片、配对表时使用。
+description: 按拍摄时间与部位特征把照片配成"前/后"对，输出配对表。当用户提到照片配对、前后对比、配对表时使用。
 metadata:
   author: dshgz
   version: "1.0"
 ---
 
-# 图片前后配对
+# 照片前后配对
 
 ## 步骤
 1. 读施工说明，按时间与是否点亮/有无积灰分出"前批"和"后批"。

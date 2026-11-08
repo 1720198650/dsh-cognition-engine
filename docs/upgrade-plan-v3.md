@@ -290,7 +290,7 @@ cognition-playbook.json           ← 主存储（不变）
       "label": "human",
       "limit": 500,
       "readOnly": false,
-      "value": "做文档整理，中文为主；要求先查证再动手；讨厌空话和总结性废话。",
+      "value": "做文档整理工作，中文为主；要求先查证再动手；讨厌空话和总结性废话。",
       "slots": {
         "basic_info": { "language": "中文", "timezone": "Asia/Shanghai" },
         "preferences": { "verbosity": "简短", "format": "先结论后理由", "avoid": ["总结性废话"] },
@@ -822,7 +822,7 @@ logit = -1.2
 GET  /proactive → phase=P1 recordOnly=true
 POST /proactive/scan → score=0.603, canSpeak={speak:false, reason:"P1 record-only：只记录，不发言"}
    发现 3 条真事：
-     · 待办「整理 10.27 期文档整理」已逾期 29 小时
+     · 待办「整理某期文档」已逾期 29 小时
      · 待办「核对某站防水工程量」已逾期 32 小时
      · 未解决缺口（测试用，已清）
 POST /proactive/phase?phase=P3 → ok=false, "样本不足（1/20），先跑一段 P1/P2"
