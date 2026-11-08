@@ -1,6 +1,6 @@
 {
   "name": "dsh-cognition-engine",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "type": "module",
   "description": "DSH cognition engine: bitemporal memory, constructivist schema graph, mood state machine, dialectical reflection, long-horizon tasks",
   "license": "MIT",
@@ -39,6 +39,8 @@
     "!lib/test.js",
     "!lib/eval.js",
     "lib/types/**/*.d.ts",
+    "!lib/types/test.d.ts",
+    "!lib/types/eval.d.ts",
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",
