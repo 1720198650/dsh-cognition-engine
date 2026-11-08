@@ -267,8 +267,13 @@ superagent 是**另一个进程**（默认 WSL `127.0.0.1:3082`），管「把�
 
 - 不可达只让页签显示「未连接」，**不影响本插件任何功能**（对面在 WSL，请求超时默认 3 秒）。
 - 配置：`superagentBaseUrl`（默认 `http://127.0.0.1:3082`）、`superagentTimeoutMs`（默认 3000）、`superagentRepo`（`owner/name`，可选）。
-- 已知未验证：superagent 的 **worker 会话**是否吃到准则本注入。结构上应该吃（host 级 `systemPrompt.section`，
-  它的 worker preset 只隔离了 shell / compaction，没隔离 systemPrompt），但要起一个真工单才能确认。
+- ⚠️ **实测结论（2026-11-08）：worker 会话吃不到注入。**
+  用一个真会话选了 `dsh-superagent 执行器` 预设跑了一轮，解压它的 session 日志（多帧 zstd），
+  `【工作准则】` / `cognition-engine-persona` / `ctxt-00001` **全部 0 命中**；
+  同一个 profile 里用 `标准` 预设的会话却是命中的。
+  → 说明 **preset 声明的 agent 作用域不继承 host 级的 `systemPrompt.section`**，与「有没有 `complete: true`」无关。
+  修法有两条，都还没做（见下）。
+- 自检脚本：`node scripts/check-worker-injection.mjs --home <DSH_HOME>`，会解压所有 worker 会话日志并 grep 注入标记。
 
 ### 数据安全
 

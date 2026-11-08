@@ -23,8 +23,14 @@
 
 新增模块 `src/superagent.ts`，仍**零外部依赖**（Node 22 全局 `fetch`）。
 
-测试 155 → **160**。已知未验证：superagent 的 **worker 会话**是否吃到准则本注入
-（结构上应该吃：host 级 section，worker preset 只隔离了 shell / compaction），需真工单确认。
+测试 155 → **160**。
+
+**B（worker 吃注入）实测不通，已定位原因**：用一个真会话选 `dsh-superagent 执行器` 预设跑了一轮，
+解压其 session 日志（多帧 zstd）后 `【工作准则】` / `cognition-engine-persona` / `ctxt-00001` 全部 0 命中；
+同 profile 下 `标准` 预设的会话却命中。结论：**preset 声明的 agent 作用域不继承 host 级 `systemPrompt.section`**。
+两条修法（未做）：① 把插件也加进 worker preset（会在同一个数据目录上多一个实例，有两份内存副本互相覆盖的风险）；
+② 让 superagent 侧把我们的文本作为 preset 内的一个 section 注入（要改它的 bundle）。
+自检工具已随包提供：`scripts/check-worker-injection.mjs`。
 
 ---
 
