@@ -1982,6 +1982,11 @@ async function main(): Promise<void> {
       '不替你做出不可逆的决定',
     ]);
     assert.deepEqual(deriveLockedPhrases('没有边界行'), []);
+    // 顿号是句内并列，不能切成「发版」「推送」这种两字碎片（锁它们只会误伤正常改写）
+    assert.deepEqual(
+      deriveLockedPhrases('我是X。\n边界：不编造事实；发版、推送、删数据这类不可逆的事，先问再做。'),
+      ['不编造事实', '发版、推送、删数据这类不可逆的事，先问再做'],
+    );
 
     const made = store.create({
       persona: '我是小认。\n边界：不编造事实；不替你做出不可逆的决定。',
