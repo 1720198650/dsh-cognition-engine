@@ -2401,6 +2401,12 @@ window.__ModuleLoader__.load({
         refresh: '刷新',
         checkpoint: '自检一下',
         done: '记下了',
+        register: '场合判定（只记录，未改行为）',
+        registerHint: '每轮判一次「干活还是闲聊」。现在只攒样本、不改任何注入内容；你标出判错的，我才敢动阈值。',
+        registerEmpty: '还没有记录。说几句话就会开始积累。',
+        registerVerdict: { work: '干活', chat: '闲聊' },
+        registerMarkWrong: '判错了',
+        registerWrong: '已标判错',
       },
       en: {
         nav: 'Learning',
@@ -2453,6 +2459,12 @@ window.__ModuleLoader__.load({
         refresh: 'Refresh',
         checkpoint: 'Run self-check',
         done: 'Noted',
+        register: 'Work vs chitchat (record only)',
+        registerHint: 'Judged every turn. Nothing is changed yet — it only collects samples; you mark the wrong ones before any threshold moves.',
+        registerEmpty: 'No records yet. They start accumulating as you talk.',
+        registerVerdict: { work: 'work', chat: 'chitchat' },
+        registerMarkWrong: 'Misjudged',
+        registerWrong: 'marked wrong',
       },
     };
 
@@ -2520,6 +2532,7 @@ window.__ModuleLoader__.load({
         const [shadow, setShadow] = React.useState(null);
         const [audit, setAudit] = React.useState(null);
         const [tickets, setTickets] = React.useState(null);
+        const [register, setRegister] = React.useState(null);
         const [error, setError] = React.useState(null);
         const [busy, setBusy] = React.useState(false);
         const [notice, setNotice] = React.useState(null);
@@ -2547,6 +2560,11 @@ window.__ModuleLoader__.load({
               setTickets(await fetch('/cognition-engine/tickets', { cache: 'no-store' }).then((r) => r.json()));
             } catch {
               setTickets(null);
+            }
+            try {
+              setRegister(await fetch('/cognition-engine/register?limit=12', { cache: 'no-store' }).then((r) => r.json()));
+            } catch {
+              setRegister(null);
             }
             setError(null);
           } catch (err) {
@@ -2840,6 +2858,73 @@ window.__ModuleLoader__.load({
                     ),
                   ),
                 ),
+              )
+            : null,
+
+          // —— 场合判定（只记录，不改行为）——
+          register && register.overview
+            ? card(
+                dict.register,
+                dict.registerHint,
+                h(
+                  'div',
+                  { style: LS.kv },
+                  h('span', null, `共 ${register.overview.total} 轮`),
+                  h('span', null, `干活 ${register.overview.work}`),
+                  h('span', null, `闲聊 ${register.overview.chat}`),
+                  h('span', null, `兜底 ${register.overview.uncertain}`),
+                  h(
+                    'span',
+                    null,
+                    `关键词 ${register.overview.byLayer.keyword} / 打分 ${register.overview.byLayer.score} / 兜底 ${register.overview.byLayer.fallback}`,
+                  ),
+                  register.overview.labelled > 0
+                    ? h('span', null, `已标 ${register.overview.labelled}，判错 ${register.overview.wrong}`)
+                    : null,
+                ),
+                (register.recent || []).length === 0
+                  ? h('span', { style: LS.explain }, dict.registerEmpty)
+                  : h(
+                      'div',
+                      { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                      (register.recent || []).map((row, index) =>
+                        h(
+                          'div',
+                          { style: LS.item, key: `${row.sessionId}-${row.turn}-${index}` },
+                          h(
+                            'div',
+                            { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
+                            h('span', { style: LS.badge(row.verdict === 'chat' ? 'yellow' : 'green') }, dict.registerVerdict[row.verdict] || row.verdict),
+                            h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, `第 ${row.turn} 轮`),
+                            h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, `${row.confidence}`),
+                            row.label === 'wrong'
+                              ? h('span', { style: LS.badge('red') }, dict.registerWrong)
+                              : null,
+                          ),
+                          h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-primary)' } }, row.excerpt || '（空）'),
+                          h('span', { style: LS.explain }, row.reason),
+                          row.label === 'wrong'
+                            ? null
+                            : h(
+                                'button',
+                                {
+                                  type: 'button',
+                                  style: { ...PS.btn, padding: '2px 8px', fontSize: 11, marginTop: 2 },
+                                  disabled: busy,
+                                  onClick: () =>
+                                    post(
+                                      '/cognition-engine/register/label?sessionId=' +
+                                        encodeURIComponent(row.sessionId) +
+                                        '&turn=' +
+                                        row.turn +
+                                        '&label=wrong',
+                                    ),
+                                },
+                                dict.registerMarkWrong,
+                              ),
+                        ),
+                      ),
+                    ),
               )
             : null,
 

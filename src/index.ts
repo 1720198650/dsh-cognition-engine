@@ -24,6 +24,7 @@ import { BudgetStore } from './budget.ts';
 import { ShadowStore } from './shadow.ts';
 import { shouldReject, summarize } from './notlearn.ts';
 import { StyleStore } from './style.ts';
+import { RegisterLog, judgeRegister, isRuntimeContext, THRESHOLD, AMBIGUITY_THRESHOLD } from './register.ts';
 import type { StyleBucket } from './style.ts';
 import { TemporalMemoryStore, textSimilarity } from './memory.ts';
 import type { TemporalFact } from './memory.ts';
@@ -420,6 +421,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   // 注入快照：记录每轮注入了哪些准则，用于把用户反馈回写到准则。
   // v2 起只由真实轮次（session/event）写入——渲染函数已纯化，面板轮询不再产生任何一行。
   const injectionLog = new InjectionLog();
+  // 场合判定（干活 / 闲聊）：**当前只记录，不改任何注入内容**。
+  // 没有标注数据之前先攒样本，等用户标出判错的再调阈值（同 CPE / 检索标注的纪律）。
+  const registerLog = new RegisterLog();
   const memory = new TemporalMemoryStore({
     halfLifeMs: config.decayHalfLifeHours * HOUR_MS,
     onEvent: (event) => audit.append(event),
@@ -878,6 +882,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
    * 风格指针对应的是「这一轮整体怎么说话」，所以按轮累加，`turn/end` 时一次性算完。
    */
   const assistantBuffers = new Map<string, { turn: number; text: string }>();
+  /** 每个会话当前的轮号，供场合判定记录用（user/message 事件本身不带轮号）。 */
+  const registerTurns = new Map<string, number>();
   /** 最近一次用户轮次开始时间，用于主动闸门的「静默多久」信号。 */
   let lastTurnAtMs = Date.now();
   /** 单轮参与统计的最大字符数：防止超长轮把内存和统计都拖歪。 */
@@ -925,10 +931,25 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         if (type === 'turn/start') {
           const turn = Number((data as { turn?: unknown } | null | undefined)?.turn);
           if (Number.isFinite(turn)) turnTracker.beginTurn(sessionId, turn);
+          if (Number.isFinite(turn)) registerTurns.set(sessionId, turn);
           lastTurnAtMs = Date.now();
           assistantBuffers.delete(sessionId);
         } else if (type === 'user/message') {
-          turnTracker.appendUserText(sessionId, extractUserText(data));
+          const text = extractUserText(data);
+          turnTracker.appendUserText(sessionId, text);
+          // 场合判定：只记一行，不改注入。运行时注入的上下文块和空白不记。
+          if (text.trim().length > 0 && !isRuntimeContext(text)) {
+            try {
+              registerLog.record({
+                sessionId,
+                turn: registerTurns.get(sessionId) ?? 0,
+                text,
+                decision: judgeRegister(text),
+              });
+            } catch {
+              /* 记录失败绝不影响会话 */
+            }
+          }
         } else if (type === 'assistant/message') {
           if (config.styleEnabled) {
             const message = (data as { message?: unknown; turn?: unknown } | null | undefined)?.message;
@@ -2270,6 +2291,30 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       }
       return { repaired };
     }, { method: 'POST' });
+
+    // —— 场合判定（干活 / 闲聊）：当前只记录，不改任何注入内容 ——
+    route('/cognition-engine/register', (url) => {
+      const raw = Number(url.searchParams.get('limit') ?? '20');
+      const limit = Number.isFinite(raw) ? Math.max(1, Math.min(200, raw)) : 20;
+      return {
+        path: registerLog.path,
+        overview: registerLog.overview(),
+        thresholds: { threshold: THRESHOLD, ambiguity: AMBIGUITY_THRESHOLD },
+        /** 说明当前阶段：只记录，不改行为。 */
+        mode: 'record-only',
+        recent: registerLog.effective(limit),
+      };
+    });
+    route(
+      '/cognition-engine/register/label',
+      (url) => {
+        const sessionId = url.searchParams.get('sessionId') ?? '';
+        const turn = Number(url.searchParams.get('turn') ?? '0');
+        const label = url.searchParams.get('label') === 'right' ? 'right' : 'wrong';
+        return { ok: registerLog.label(sessionId, turn, label), label };
+      },
+      { method: 'POST' },
+    );
 
     // 八类不学：给候选做个检查（不改数据，只回答「该不该学」）
     route('/cognition-engine/learn/check', (url) => {
