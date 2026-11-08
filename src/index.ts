@@ -237,6 +237,16 @@ export interface CognitionConfig {
    * 不设就只生成可复制的派单文本。**不存任何 GitHub 凭据**——派活走你自己已登录的浏览器。
    */
   superagentRepo?: string;
+  /**
+   * **只读注入模式**：只把「准则本 + 人格」注册成提示段，别的一概不做。
+   *
+   * 为什么需要：dsh-superagent 的 preset 会话（执行器）**不继承 host 级 `systemPrompt.section`**，
+   * 实测确认（同一个 profile 里标准预设会话有注入、执行器预设没有）。要让它吃到注入，
+   * 必须把插件再挂进那个 preset。但挂完整插件会在同一个数据目录上产生第二个实例、
+   * 两份内存快照互相覆盖——所以挂的是这个只读模式：
+   * **不注册工具、不注册 HTTP 路由、不启动巡视、不写任何文件**，只出提示段。
+   */
+  injectionOnly?: boolean;
   /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
   lockToken?: string;
   /** 真模型：显式指定 provider / model，不设则跟随当前默认模型。 */
@@ -264,6 +274,7 @@ type ResolvedConfig = Required<
   superagentBaseUrl: string;
   superagentTimeoutMs: number;
   superagentRepo: string;
+  injectionOnly: boolean;
 };
 
 export const name = 'cognition-engine';
@@ -362,6 +373,7 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
       typeof config.superagentRepo === 'string' && /^[\w.-]+\/[\w.-]+$/.test(config.superagentRepo.trim())
         ? config.superagentRepo.trim()
         : '',
+    injectionOnly: config.injectionOnly === true,
   };
 }
 
@@ -389,6 +401,70 @@ export function persistReflection(
 /* ------------------------------------------------------------------ */
 /* 插件入口                                                            */
 /* ------------------------------------------------------------------ */
+
+/**
+ * `injectionOnly` 模式：只把「准则本 + 人格」注册成提示段。
+ *
+ * 用途：dsh-superagent 的 preset 会话不继承 host 级 section，要在 preset 里再挂一份。
+ * 挂完整插件会在同一数据目录上多一个实例、两份内存快照互相覆盖，所以这里**只读**：
+ * 不注册工具、不注册 HTTP 路由、不启动巡视、不写任何文件。
+ */
+function installInjectionOnlySections(
+  ctx: PluginContext,
+  deps: { playbook: PlaybookStore; persona: PersonaStore },
+): () => void {
+  const systemPrompt = ctx.get?.('systemPrompt') as SystemPromptHost | undefined;
+  if (systemPrompt === undefined || typeof systemPrompt.section !== 'function') {
+    ctx.logger?.warn?.('cognition-engine: injectionOnly 模式需要 systemPrompt 服务，未找到，跳过');
+    return () => {};
+  }
+  const disposers: Array<() => void> = [];
+  try {
+    disposers.push(
+      systemPrompt.section({
+        name: 'cognition-engine-memory',
+        order: 900,
+        // text() 必须纯：只读文件、不改状态。每次装配都会被调用。
+        text: () => {
+          try {
+            deps.playbook.loadSync();
+            return deps.playbook.renderSection();
+          } catch {
+            return '';
+          }
+        },
+      }),
+    );
+  } catch (error) {
+    ctx.logger?.warn?.(`cognition-engine: injectionOnly 记忆段注册失败: ${messageOf(error)}`);
+  }
+  try {
+    disposers.push(
+      systemPrompt.section({
+        name: 'cognition-engine-persona',
+        order: 100,
+        text: () => {
+          try {
+            return deps.persona.render();
+          } catch {
+            return '';
+          }
+        },
+      }),
+    );
+  } catch (error) {
+    ctx.logger?.warn?.(`cognition-engine: injectionOnly 人格段注册失败: ${messageOf(error)}`);
+  }
+  return () => {
+    for (const dispose of disposers) {
+      try {
+        dispose();
+      } catch {
+        /* 忽略 */
+      }
+    }
+  };
+}
 
 export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | undefined {
   const config = normalizeConfig(rawConfig);
@@ -460,6 +536,15 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     halfLifeMs: config.decayHalfLifeHours * HOUR_MS,
     onEvent: (event) => audit.append(event),
   });
+  /**
+   * injectionOnly：只注册提示段就返回。
+   *
+   * 位置很关键——必须放在 `migrateLegacyData`（会写盘）、工具注册、HTTP 路由、巡视之前，
+   * 这样这个实例**一个字节都不会写**，也就不会和 host 那份实例抢同一个数据文件。
+   */
+  if (config.injectionOnly) {
+    return installInjectionOnlySections(ctx, { playbook, persona });
+  }
   /** 从存档恢复出来的模式（在 reflectionMode 声明前捕获）。 */
   let restoredReflectionMode: ReflectionMode | undefined;
 

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 /**
  * src/test.ts — 单元测试（Mock 测试，无网络、无数据库）
  *
@@ -33,6 +33,7 @@ import {
 import type { StyleRow } from './style.ts';
 import { judgeRegister, scoreRegister, RegisterLog, isRuntimeContext, THRESHOLD, AMBIGUITY_THRESHOLD } from './register.ts';
 import { SuperagentClient, compactTicket, buildOverview } from './superagent.ts';
+import { apply } from './index.ts';
 import { PlaybookStore } from './playbook.ts';
 import { TopicStore } from './topics.ts';
 import { buildDistillPrompt, parseDistillResult } from './distill.ts';
@@ -2852,6 +2853,44 @@ async function main(): Promise<void> {
     const reloaded = new ProactiveStore({ filePath: file });
     assert.equal(reloaded.tickets()[0]!.linkedTicket, 'ext-def456');
     rmSync(file, { force: true });
+  });
+
+  await test('injectionOnly：只注册两段提示，不注册工具/路由，一个字节也不写', () => {
+    const dir = join(TEST_TMP, 'injection-only');
+    mkdirSync(dir, { recursive: true });
+    const playbookFile = join(dir, 'pb.json');
+    const personaFile = join(dir, 'persona.json');
+    const sections: Array<{ name: string; order: number; text: (context?: unknown) => string }> = [];
+    const fakeCtx = {
+      get: (service: string): unknown =>
+        service === 'systemPrompt'
+          ? {
+              section: (section: { name: string; order: number; text: (context?: unknown) => string }) => {
+                sections.push(section);
+                return () => {};
+              },
+            }
+          : undefined,
+      logger: { warn: () => {}, info: () => {} },
+    };
+
+    const dispose = apply(fakeCtx as never, { injectionOnly: true, playbookFile, personaFile });
+
+    assert.equal(sections.length, 2, `应只注册 2 段，实得 ${sections.length}`);
+    assert.deepEqual(
+      sections.map((item) => item.name).sort(),
+      ['cognition-engine-memory', 'cognition-engine-persona'],
+    );
+    // text() 是纯函数：文件不存在时返回空串，且调用它不产生文件
+    const memorySection = sections.find((item) => item.name === 'cognition-engine-memory');
+    assert.ok(memorySection !== undefined);
+    assert.equal(memorySection!.text({}), '');
+    assert.equal(existsSync(playbookFile), false, 'injectionOnly 不能写准则文件');
+    assert.equal(existsSync(personaFile), false, 'injectionOnly 不能写人格文件');
+
+    assert.equal(typeof dispose, 'function');
+    (dispose as () => void)();
+    rmSync(dir, { recursive: true, force: true });
   });
 
   /* ---------------------------------------------------------------- */

@@ -123,6 +123,16 @@ export interface CognitionConfig {
      * 不设就只生成可复制的派单文本。**不存任何 GitHub 凭据**——派活走你自己已登录的浏览器。
      */
     superagentRepo?: string;
+    /**
+     * **只读注入模式**：只把「准则本 + 人格」注册成提示段，别的一概不做。
+     *
+     * 为什么需要：dsh-superagent 的 preset 会话（执行器）**不继承 host 级 `systemPrompt.section`**，
+     * 实测确认（同一个 profile 里标准预设会话有注入、执行器预设没有）。要让它吃到注入，
+     * 必须把插件再挂进那个 preset。但挂完整插件会在同一个数据目录上产生第二个实例、
+     * 两份内存快照互相覆盖——所以挂的是这个只读模式：
+     * **不注册工具、不注册 HTTP 路由、不启动巡视、不写任何文件**，只出提示段。
+     */
+    injectionOnly?: boolean;
     /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
     lockToken?: string;
     /** 真模型：显式指定 provider / model，不设则跟随当前默认模型。 */
