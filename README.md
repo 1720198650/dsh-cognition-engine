@@ -271,8 +271,12 @@ superagent 是**另一个进程**（默认 WSL `127.0.0.1:3082`），管「把�
   用一个真会话选了 `dsh-superagent 执行器` 预设跑了一轮，解压它的 session 日志（多帧 zstd），
   `【工作准则】` / `cognition-engine-persona` / `ctxt-00001` **全部 0 命中**；
   同一个 profile 里用 `标准` 预设的会话却是命中的。
-  → 说明 **preset 声明的 agent 作用域不继承 host 级的 `systemPrompt.section`**，与「有没有 `complete: true`」无关。
-  修法有两条，都还没做（见下）。
+  → 说明 **preset 声明的 agent 作用域不继承 host 级的 `systemPrompt.section`**。
+  再试 `injectionOnly` 只读模式并挂进 worker preset（`--dump-config` 确认行已合成）：
+  诊断显示 **apply 跑了、`systemPrompt` 拿得到、两段都注册成功**，但那条会话的系统提示里**依旧没有**。
+  → 结论：**preset 作用域的 section 注册到不了该 agent 的提示**（注册隔离），这条路走不通。
+- 剩下的可行通道只有一条：把渲染结果写进 `$DSH_HOME/AGENTS.md`（`@deepseek-ai/dsh-agent-instructions`
+  对**每个** agent 都读它，包括 worker）。代价是会改用户的全局指令文件，需要用户同意后才做。
 - 自检脚本：`node scripts/check-worker-injection.mjs --home <DSH_HOME>`，会解压所有 worker 会话日志并 grep 注入标记。
 
 ### 数据安全
