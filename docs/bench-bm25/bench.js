@@ -1,9 +1,12 @@
 // 小语料中文记忆检索基准：TF 余弦 vs TF-IDF vs BM25 家族
 // 纯 Node，无依赖。语料与查询均为本次调研自建（见 corpus.json / queries.json）。
-const fs = require('fs');
-const path = require('path');
+// 用 ESM：本仓库 package.json 是 "type": "module"，用 require 会直接报错。
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const readJson = f => JSON.parse(fs.readFileSync(path.join(__dirname, f), 'utf8').replace(/^\uFEFF/, ''));
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const readJson = f => JSON.parse(fs.readFileSync(path.join(HERE, f), 'utf8').replace(/^\uFEFF/, ''));
 const CORPUS_FILE = process.argv[2] || 'corpus.json';
 const corpus = readJson(CORPUS_FILE);
 const queries = readJson('queries.json');
