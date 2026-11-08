@@ -133,6 +133,17 @@ export interface CognitionConfig {
      * **不注册工具、不注册 HTTP 路由、不启动巡视、不写任何文件**，只出提示段。
      */
     injectionOnly?: boolean;
+    /**
+     * 是否把「人格 + 准则本」同步进 `$DSH_HOME/AGENTS.md` 的受控块。**默认 false**。
+     *
+     * 为什么需要：superagent 的 worker 会话用 preset 作用域，`systemPrompt.section` 到不了它；
+     * 而 `@deepseek-ai/dsh-agent-instructions` 会把 `$DSH_HOME/AGENTS.md` 读进每一个 agent。
+     * 为什么默认关：那是用户的全局指令文件，得用户点头才写。只替换
+     * `<!-- cognition-engine:begin -->…<!-- cognition-engine:end -->` 之间的内容。
+     */
+    agentsFileSync?: boolean;
+    /** 受控块目标文件；默认 `$DSH_HOME/AGENTS.md`（DSH_HOME 缺省 `~/.dsh`）。 */
+    agentsFilePath?: string;
     /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
     lockToken?: string;
     /** 真模型：显式指定 provider / model，不设则跟随当前默认模型。 */

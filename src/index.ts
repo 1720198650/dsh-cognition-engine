@@ -26,13 +26,14 @@ import { shouldReject, summarize } from './notlearn.ts';
 import { StyleStore } from './style.ts';
 import { RegisterLog, judgeRegister, isRuntimeContext, THRESHOLD, AMBIGUITY_THRESHOLD } from './register.ts';
 import { SuperagentClient } from './superagent.ts';
+import { AgentsFileSync, defaultAgentsFilePath } from './agents_file.ts';
 import type { StyleBucket } from './style.ts';
 import { TemporalMemoryStore, textSimilarity } from './memory.ts';
 import type { TemporalFact } from './memory.ts';
 import { JsonStateStore } from './persist.ts';
 import { buildDetail, buildCoreDigest } from './views.ts';
 import { DialecticalReflectionEngine, MockDialecticalLLM, ReflectionWorker } from './reflection.ts';
-import { assertObjectSchema, dataDir, messageOf, migrateLegacyData, parseMoment } from './util.ts';
+import { assertObjectSchema, dataDir, expandHome, messageOf, migrateLegacyData, parseMoment } from './util.ts';
 import { createTools } from './tools.ts';
 import { ProactiveGate } from './proactive.ts';
 import { ProactiveStore, scoreScan } from './proactive_scan.ts';
@@ -247,6 +248,17 @@ export interface CognitionConfig {
    * **不注册工具、不注册 HTTP 路由、不启动巡视、不写任何文件**，只出提示段。
    */
   injectionOnly?: boolean;
+  /**
+   * 是否把「人格 + 准则本」同步进 `$DSH_HOME/AGENTS.md` 的受控块。**默认 false**。
+   *
+   * 为什么需要：superagent 的 worker 会话用 preset 作用域，`systemPrompt.section` 到不了它；
+   * 而 `@deepseek-ai/dsh-agent-instructions` 会把 `$DSH_HOME/AGENTS.md` 读进每一个 agent。
+   * 为什么默认关：那是用户的全局指令文件，得用户点头才写。只替换
+   * `<!-- cognition-engine:begin -->…<!-- cognition-engine:end -->` 之间的内容。
+   */
+  agentsFileSync?: boolean;
+  /** 受控块目标文件；默认 `$DSH_HOME/AGENTS.md`（DSH_HOME 缺省 `~/.dsh`）。 */
+  agentsFilePath?: string;
   /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
   lockToken?: string;
   /** 真模型：显式指定 provider / model，不设则跟随当前默认模型。 */
@@ -275,6 +287,8 @@ type ResolvedConfig = Required<
   superagentTimeoutMs: number;
   superagentRepo: string;
   injectionOnly: boolean;
+  agentsFileSync: boolean;
+  agentsFilePath: string;
 };
 
 export const name = 'cognition-engine';
@@ -374,6 +388,11 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
         ? config.superagentRepo.trim()
         : '',
     injectionOnly: config.injectionOnly === true,
+    agentsFileSync: config.agentsFileSync === true,
+    agentsFilePath:
+      typeof config.agentsFilePath === 'string' && config.agentsFilePath.trim().length > 0
+        ? expandHome(config.agentsFilePath.trim())
+        : defaultAgentsFilePath(),
   };
 }
 
@@ -534,6 +553,26 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     baseUrl: config.superagentBaseUrl,
     timeoutMs: config.superagentTimeoutMs,
   });
+  // 把「人格 + 准则本」同步进 $DSH_HOME/AGENTS.md 的受控块（默认关闭，用户开启才写）。
+  const agentsSync = new AgentsFileSync({ filePath: config.agentsFilePath });
+  /** 受控块的正文：人格在前，准则本在后。都为空则不写块。 */
+  const agentsBody = (): string => {
+    const parts: string[] = [];
+    try {
+      const personaText = persona.render();
+      if (personaText.trim().length > 0) parts.push(personaText.trim());
+    } catch {
+      /* 人格读失败不影响准则 */
+    }
+    try {
+      playbook.loadSync();
+      const rules = playbook.renderSection();
+      if (rules.trim().length > 0) parts.push(rules.trim());
+    } catch {
+      /* 准则读失败就只写人格 */
+    }
+    return parts.join('\n\n');
+  };
   const memory = new TemporalMemoryStore({
     halfLifeMs: config.decayHalfLifeHours * HOUR_MS,
     onEvent: (event) => audit.append(event),
@@ -2462,6 +2501,33 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         const id = url.searchParams.get('id') ?? '';
         const ticket = url.searchParams.get('ticket');
         return { id, ok: proactiveStore.linkTicket(id, ticket === null ? null : ticket) };
+      },
+      { method: 'POST' },
+    );
+
+    // —— AGENTS.md 受控块同步（默认关闭；只替换标记之间） ——
+    route('/cognition-engine/agents-sync', () => {
+      const body = agentsBody();
+      const preview = agentsSync.preview(body);
+      return {
+        enabled: config.agentsFileSync,
+        path: agentsSync.path,
+        bodyChars: body.length,
+        empty: body.length === 0,
+        changed: preview.changed,
+        malformed: preview.malformed,
+        exists: preview.previous !== null,
+        /** 合并后的完整内容，供面板预览（不写盘） */
+        merged: preview.content,
+      };
+    });
+    route(
+      '/cognition-engine/agents-sync/apply',
+      () => {
+        if (!config.agentsFileSync) {
+          return { ok: false, reason: '未开启：agentsFileSync=false（不擅自改用户的全局指令文件）' };
+        }
+        return agentsSync.apply(agentsBody());
       },
       { method: 'POST' },
     );

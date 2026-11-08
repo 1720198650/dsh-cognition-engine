@@ -34,6 +34,7 @@ import type { StyleRow } from './style.ts';
 import { judgeRegister, scoreRegister, RegisterLog, isRuntimeContext, THRESHOLD, AMBIGUITY_THRESHOLD } from './register.ts';
 import { SuperagentClient, compactTicket, buildOverview } from './superagent.ts';
 import { apply } from './index.ts';
+import { upsertManagedBlock, readManagedBlock, wrapBlock, AgentsFileSync, BEGIN_MARKER, END_MARKER } from './agents_file.ts';
 import { PlaybookStore } from './playbook.ts';
 import { TopicStore } from './topics.ts';
 import { buildDistillPrompt, parseDistillResult } from './distill.ts';
@@ -2890,6 +2891,78 @@ async function main(): Promise<void> {
 
     assert.equal(typeof dispose, 'function');
     (dispose as () => void)();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  section('[23] AGENTS.md 受控块（agents_file）');
+
+  await test('受控块：文件不存在时只创建块', () => {
+    const r = upsertManagedBlock(null, '人格段\n准则段');
+    assert.equal(r.changed, true);
+    assert.equal(r.malformed, false);
+    assert.ok(r.content.includes(BEGIN_MARKER));
+    assert.ok(r.content.includes(END_MARKER));
+    assert.ok(r.content.includes('人格段'));
+    assert.equal(readManagedBlock(r.content), '人格段\n准则段');
+  });
+
+  await test('受控块：只替换标记之间，标记外一个字都不动', () => {
+    const original = `# 我的全局指令\n\n用户自己写的内容，别动。\n\n${wrapBlock('旧的块')}\n\n后面还有用户内容。\n`;
+    const r = upsertManagedBlock(original, '新的块');
+    assert.equal(r.malformed, false);
+    assert.ok(r.content.startsWith('# 我的全局指令'));
+    assert.ok(r.content.includes('用户自己写的内容，别动。'));
+    assert.ok(r.content.includes('后面还有用户内容。'));
+    assert.ok(r.content.includes('新的块'));
+    assert.equal(r.content.includes('旧的块'), false);
+    assert.equal(readManagedBlock(r.content), '新的块');
+  });
+
+  await test('受控块：内容没变时 changed=false（幂等）', () => {
+    const first = upsertManagedBlock(null, '同一段').content;
+    const second = upsertManagedBlock(first, '同一段');
+    assert.equal(second.changed, false);
+  });
+
+  await test('受控块：标记残缺时不吞原文，追加并报告 malformed', () => {
+    const broken = '# 用户内容\n\n<!-- cognition-engine:begin -->\n写到一半就断了';
+    const r = upsertManagedBlock(broken, '完整块');
+    assert.equal(r.malformed, true);
+    assert.ok(r.content.includes('# 用户内容'));
+    assert.ok(r.content.includes('写到一半就断了'), '残缺内容必须保留');
+    assert.ok(r.content.includes('完整块'));
+  });
+
+  await test('受控块：没有标记但有内容时追加到末尾', () => {
+    const r = upsertManagedBlock('# 只有用户内容\n', '块');
+    assert.equal(r.malformed, false);
+    assert.ok(r.content.startsWith('# 只有用户内容'));
+    assert.equal(readManagedBlock(r.content), '块');
+  });
+
+  await test('受控块：写盘 → 重读 → 再写幂等 → 可回滚', () => {
+    const dir = join(TEST_TMP, 'agents-sync');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'AGENTS.md');
+
+    const sync = new AgentsFileSync({ filePath: file });
+    const first = sync.apply('第一条');
+    assert.equal(first.ok, true);
+    assert.equal(first.changed, true);
+    assert.equal(first.previous, null);
+    assert.ok(readFileSync(file, 'utf8').includes('第一条'));
+
+    const second = sync.apply('第一条');
+    assert.equal(second.changed, false, '同内容第二次不应再写');
+
+    const third = sync.apply('第二条');
+    assert.equal(third.changed, true);
+    const content = readFileSync(file, 'utf8');
+    assert.equal(content.includes('第一条'), false);
+    assert.ok(content.includes('第二条'));
+
+    // 回滚到第一次之前（文件原本不存在 → 传 null 不应崩）
+    assert.equal(sync.rollback(null), true);
     rmSync(dir, { recursive: true, force: true });
   });
 
