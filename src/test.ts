@@ -2653,10 +2653,24 @@ async function main(): Promise<void> {
   });
 
   await test('场合判定：分不清一律按干活（代价不对称）', () => {
-    const d = judgeRegister('嗯这个东西');
+    // 无关键词、无语气词、长度中等：两级都弱 → 兜底按干活
+    const d = judgeRegister('这个东西放在那边的桌子上');
+    assert.equal(d.layer, 'fallback', `应走兜底层，实得 ${d.layer}（${d.reason}）`);
     assert.equal(d.verdict, 'work', `兜底必须是干活，实得 ${d.verdict}`);
     assert.equal(judgeRegister('   ').verdict, 'work');
     assert.equal(judgeRegister('   ').layer, 'fallback');
+  });
+
+  await test('场合判定：短闲聊不能被当成纯应答（实测踩过的坑）', () => {
+    // 「瘫着哦」「普通说话」「聊天」在真实对话里被误判成干活，导致人机味不消
+    for (const text of ['瘫着哦', '普通说话', '聊天', '你好']) {
+      const d = judgeRegister(text);
+      assert.equal(d.verdict, 'chat', `「${text}」应判闲聊，实得 ${d.verdict}（${d.reason}）`);
+    }
+    // 真正的纯应答仍然按干活
+    for (const text of ['好的', '嗯', '行', '可以', '继续']) {
+      assert.equal(judgeRegister(text).verdict, 'work', `「${text}」是纯应答，应按干活`);
+    }
   });
 
   await test('场合判定：双阈值真的在起作用', () => {

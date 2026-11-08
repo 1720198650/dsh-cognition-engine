@@ -1267,7 +1267,13 @@ export class PlaybookStore {
     const list = this.active(now).filter((entry) => entry.guard);
     if (list.length === 0) return '';
     const lines = list.map((entry) => `- [${entry.id}] ${entry.content}`).join('\n');
-    return `【开工前自查】动手前先确认本次适用哪几条，并在回复里点名；不适用就明说。\n${lines}`;
+    // 「仅当真要做事」这半句是必须的：不加的话，用户只说一句「你好」，
+    // 模型也会把整套发版流程当自查项念一遍——这是实测出来的最重的「人机味」。
+    return (
+      '【开工前自查】**仅当这一轮确实要动手做事时**，先确认适用哪几条并在回复里点名；\n' +
+      '如果用户只是打招呼、闲聊、聊状态，**不要自查、不要点名、不要提以下任何一条**。\n' +
+      `${lines}`
+    );
   }
 
   /* ------------------------------ 渲染 ------------------------------ */
