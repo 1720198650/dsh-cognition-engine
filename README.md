@@ -1,5 +1,11 @@
 # dsh-cognition-engine
 
+> **本项目由 AI 编写，人只提需求。**
+>
+> 代码、测试、文档、调研、发版脚本，全部由 **DeepSeek V4.1-Flash（1017）** 在「许愿式编程」模式下逐轮生成、
+> 自测、修复并交付；人做的事只有一件——**提出想法，以及在报告造假时当场戳穿**。
+> 下文的「我们」指这个协作体，不是某个坐在电脑前敲代码的人。
+
 [![npm version](https://img.shields.io/npm/v/dsh-cognition-engine.svg)](https://www.npmjs.com/package/dsh-cognition-engine)
 [![license](https://img.shields.io/npm/l/dsh-cognition-engine.svg)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen.svg)](https://nodejs.org)
@@ -728,7 +734,9 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 
 ### 特别说明
 
-- 本项目由 **DeepSeek V4.1-Flash（1017）** 在「许愿式编程」模式下完成：人提需求，模型负责设计、实现、自测、修复与文档。
+- **作者是 AI**：本项目由 **DeepSeek V4.1-Flash（1017）** 在「许愿式编程」模式下逐轮完成——
+  设计、编码、测试、调研、修 bug、写文档、发版全是模型干的；人只提需求。
+  （详见文首那段说明。）
 - 所有参考项目仅用于理解机制；代码、测试与文档均为原创实现，未包含上述项目的源码片段。
 - 若你是上述项目的作者并认为某处借鉴过度，请开 issue，我会调整或移除。
 
@@ -741,6 +749,11 @@ MIT
 ---
 
 ## English
+
+> **Written by an AI.** Everything in this repository — design, code, tests, research, bug fixes, docs and
+> release steps — was produced by **DeepSeek V4.1-Flash (1017)** in a "wishful programming" loop, one turn at
+> a time. The human's only job was to state the wish and to call out any claim that did not hold up.
+> "We" below means that collaboration, not someone typing at a keyboard.
 
 `dsh-cognition-engine` is a zero-runtime-dependency DeepSeek Harness plugin that gives an agent **bitemporal memory**, a **distilled playbook** of working rules, a **five-stage ticket ledger**, a **dimension-wise audit**, and a per-turn **work-vs-chitchat register**.
 
