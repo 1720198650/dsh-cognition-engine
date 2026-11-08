@@ -84,6 +84,13 @@ export interface WouldDo {
         by: 'user' | 'agent';
         note?: string;
     }>;
+    /**
+     * 关联到 dsh-superagent 的工单 id。
+     *
+     * **只做关联，不合并**：两套工单的语义不同（它的是外部授权工单，带 Mandate/Policy；
+     * 我们的是本地待办）。合并会让外部工单污染本地待办列表，也会搅乱授权语义。
+     */
+    linkedTicket?: string;
 }
 export interface ProactiveDoc {
     schema: 'cognition.proactive';
@@ -213,6 +220,13 @@ export declare class ProactiveStore {
         background?: string;
         blockedBy?: string[];
     }): boolean;
+    /**
+     * 关联/取消关联一条外部工单（dsh-superagent 的 Ticket）。
+     *
+     * `externalId` 传空串或 null 表示取消关联。只存引用，不改状态机、不动阶段——
+     * 两套工单各走各的，只在界面上互相指一下。
+     */
+    linkTicket(id: string, externalId: string | null): boolean;
     /**
      * 标记已采纳。
      *

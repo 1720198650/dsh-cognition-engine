@@ -25,6 +25,7 @@ import { ShadowStore } from './shadow.ts';
 import { shouldReject, summarize } from './notlearn.ts';
 import { StyleStore } from './style.ts';
 import { RegisterLog, judgeRegister, isRuntimeContext, THRESHOLD, AMBIGUITY_THRESHOLD } from './register.ts';
+import { SuperagentClient } from './superagent.ts';
 import type { StyleBucket } from './style.ts';
 import { TemporalMemoryStore, textSimilarity } from './memory.ts';
 import type { TemporalFact } from './memory.ts';
@@ -223,6 +224,19 @@ export interface CognitionConfig {
   styleMinChars?: number;
   /** 自定义口癖（3–5 个），用于算 catchphrasePerK。默认空。 */
   styleCatchphrases?: string[];
+  /**
+   * dsh-superagent 的 HTTP 地址。默认 `http://127.0.0.1:3082`（WSL 里那个）。
+   *
+   * 面板的「超级代理」页签靠它做只读镜像。**不可达只是显示未连接，不影响本插件任何功能**。
+   */
+  superagentBaseUrl?: string;
+  /** 请求 superagent 的超时（毫秒），默认 3000——对面在 WSL，不能把面板拖住。 */
+  superagentTimeoutMs?: number;
+  /**
+   * 派活用的仓库 `owner/name`。设了之后面板能直接生成「新建 Issue」链接；
+   * 不设就只生成可复制的派单文本。**不存任何 GitHub 凭据**——派活走你自己已登录的浏览器。
+   */
+  superagentRepo?: string;
   /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
   lockToken?: string;
   /** 真模型：显式指定 provider / model，不设则跟随当前默认模型。 */
@@ -247,6 +261,9 @@ type ResolvedConfig = Required<
   lockToken?: string;
   llmProvider?: string;
   llmModel?: string;
+  superagentBaseUrl: string;
+  superagentTimeoutMs: number;
+  superagentRepo: string;
 };
 
 export const name = 'cognition-engine';
@@ -336,6 +353,15 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
         ? config.llmModel
         : undefined,
     reflectionMode: normalizeReflectionMode(config.reflectionMode),
+    superagentBaseUrl:
+      typeof config.superagentBaseUrl === 'string' && config.superagentBaseUrl.trim().length > 0
+        ? config.superagentBaseUrl.trim().replace(/\/+$/, '')
+        : 'http://127.0.0.1:3082',
+    superagentTimeoutMs: Math.max(500, Math.round(numberOr(config.superagentTimeoutMs, 3000))),
+    superagentRepo:
+      typeof config.superagentRepo === 'string' && /^[\w.-]+\/[\w.-]+$/.test(config.superagentRepo.trim())
+        ? config.superagentRepo.trim()
+        : '',
   };
 }
 
@@ -424,6 +450,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   // 场合判定（干活 / 闲聊）：**当前只记录，不改任何注入内容**。
   // 没有标注数据之前先攒样本，等用户标出判错的再调阈值（同 CPE / 检索标注的纪律）。
   const registerLog = new RegisterLog();
+  // 与 dsh-superagent 的只读对接。对面是另一个进程（默认 WSL 3082），
+  // 不可达时只让面板显示「未连接」，不影响本插件任何功能。
+  const superagent = new SuperagentClient({
+    baseUrl: config.superagentBaseUrl,
+    timeoutMs: config.superagentTimeoutMs,
+  });
   const memory = new TemporalMemoryStore({
     halfLifeMs: config.decayHalfLifeHours * HOUR_MS,
     onEvent: (event) => audit.append(event),
@@ -2312,6 +2344,37 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         const turn = Number(url.searchParams.get('turn') ?? '0');
         const label = url.searchParams.get('label') === 'right' ? 'right' : 'wrong';
         return { ok: registerLog.label(sessionId, turn, label), label };
+      },
+      { method: 'POST' },
+    );
+
+    // —— 超级代理（dsh-superagent）只读镜像 + 少量写动作 ——
+    // 对面是另一个进程，所以每个 route 都要 async，并只返回紧凑结构。
+    route('/cognition-engine/superagent/overview', async () => ({
+      ...(await superagent.overview()),
+      /** 派活用：`owner/name`，没配就是 null（面板只给可复制文本，不给链接）。 */
+      repo: config.superagentRepo.length > 0 ? config.superagentRepo : null,
+    }));
+    route('/cognition-engine/superagent/tickets', async () => superagent.tickets());
+    route(
+      '/cognition-engine/superagent/action',
+      async (url) => {
+        const raw = url.searchParams.get('action') ?? '';
+        const ticketId = url.searchParams.get('id') ?? undefined;
+        if (raw !== 'pause' && raw !== 'resume' && raw !== 'retry' && raw !== 'stop') {
+          return { ok: false, error: `不支持的动作 ${raw}` };
+        }
+        return superagent.act(raw, ticketId);
+      },
+      { method: 'POST' },
+    );
+
+    route(
+      '/cognition-engine/tickets/link',
+      (url) => {
+        const id = url.searchParams.get('id') ?? '';
+        const ticket = url.searchParams.get('ticket');
+        return { id, ok: proactiveStore.linkTicket(id, ticket === null ? null : ticket) };
       },
       { method: 'POST' },
     );

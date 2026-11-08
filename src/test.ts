@@ -32,6 +32,7 @@ import {
 } from './style.ts';
 import type { StyleRow } from './style.ts';
 import { judgeRegister, scoreRegister, RegisterLog, isRuntimeContext, THRESHOLD, AMBIGUITY_THRESHOLD } from './register.ts';
+import { SuperagentClient, compactTicket, buildOverview } from './superagent.ts';
 import { PlaybookStore } from './playbook.ts';
 import { TopicStore } from './topics.ts';
 import { buildDistillPrompt, parseDistillResult } from './distill.ts';
@@ -2745,6 +2746,112 @@ async function main(): Promise<void> {
     const real = judgeRegister('把这个 PR 合一下');
     assert.equal(real.verdict, 'work');
     assert.equal((real.hits ?? []).includes('PR'), true, '独立的 PR 应命中');
+  });
+
+  section('[22] 超级代理对接（superagent）');
+
+  await test('superagent：工单紧凑化只取人要看字段，actions 摊平', () => {
+    const t = compactTicket({
+      id: 'abc123',
+      title: '把 README 补一节',
+      state: 'open',
+      stage: 'person',
+      action: 'review',
+      strength: 'explicit',
+      assignments: 13,
+      inputs: 0,
+      sessionId: 'worker-abc',
+      actions: { retry: false, stop: true },
+      ignoredField: 'x',
+    });
+    assert.ok(t !== undefined);
+    assert.equal(t!.id, 'abc123');
+    assert.equal(t!.stage, 'person');
+    assert.equal(t!.assignments, 13);
+    assert.equal(t!.canRetry, false);
+    assert.equal(t!.canStop, true);
+    // 没有 id 的条目直接丢弃（对面改版时不至于画出一行空白）
+    assert.equal(compactTicket({ title: '无 id' }), undefined);
+    assert.equal(compactTicket(null), undefined);
+  });
+
+  await test('superagent：概览按 stage 分组计数，starting 不算异常', () => {
+    const overview = buildOverview(
+      'http://x',
+      {
+        paused: false,
+        load: { running: 1, queued: 2, maxWorkers: 3 },
+        health: {
+          runtime: { state: 'ready' },
+          github: { state: 'starting' },
+          feishu: { state: 'error', detail: 'auth failed' },
+        },
+      },
+      {
+        items: [
+          { id: 'a', title: 'A', state: 'open', stage: 'person', actions: { retry: true, stop: true } },
+          { id: 'b', title: 'B', state: 'open', stage: 'working' },
+          { id: 'c', title: 'C', state: 'open', stage: 'idle' },
+          { id: 'd', title: 'D', state: 'ended' },
+        ],
+      },
+      1000,
+    );
+    assert.equal(overview.reachable, true);
+    assert.equal(overview.counts!.total, 4);
+    assert.equal(overview.counts!.needsPerson, 1);
+    assert.equal(overview.counts!.working, 1);
+    assert.equal(overview.counts!.idle, 1);
+    assert.equal(overview.load!.maxWorkers, 3);
+    // 只有 error 算异常；ready / starting 都不算
+    assert.deepEqual(
+      overview.unhealthy!.map((item) => item.name),
+      ['feishu'],
+    );
+  });
+
+  await test('superagent：不可达时降级为 reachable=false，不抛错', () => {
+    const client = new SuperagentClient({ baseUrl: 'http://127.0.0.1:1', timeoutMs: 800 });
+    return client.overview().then((overview) => {
+      assert.equal(overview.reachable, false);
+      assert.ok((overview.error ?? '').length > 0, '应带一句原因');
+    });
+  });
+
+  await test('superagent：动作白名单，未知动作与缺 id 都直接拒绝（不发请求）', async () => {
+    const client = new SuperagentClient({ baseUrl: 'http://127.0.0.1:1', timeoutMs: 500 });
+    assert.equal((await client.act('retry')).ok, false);
+    assert.equal((await client.act('stop', '')).ok, false);
+    // 合法动作在网络失败时返回 ok:false，而不是抛
+    assert.equal((await client.act('pause')).ok, false);
+  });
+
+  await test('superagent：本地工单可关联外部 Ticket，只存引用不改状态', () => {
+    const file = join(TEST_TMP, 'ticket-link.json');
+    rmSync(file, { force: true });
+    const store = new ProactiveStore({ filePath: file, now: () => 60_000 });
+    store.recordScan(
+      { dueTasks: [{ id: 't1', description: '甲事', overdueHours: 5 }], gaps: [], brokenRules: [], expiredRules: [] },
+      0.8,
+    );
+    const mine = store.tickets()[0]!;
+    const stageBefore = mine.stage;
+
+    assert.equal(store.linkTicket(mine.id, 'ext-abc123'), true);
+    let rows = store.tickets();
+    assert.equal(rows[0]!.linkedTicket, 'ext-abc123');
+    assert.equal(rows[0]!.stage, stageBefore, '关联不能改阶段');
+
+    // 取消关联
+    assert.equal(store.linkTicket(mine.id, null), true);
+    rows = store.tickets();
+    assert.equal(rows[0]!.linkedTicket, undefined, '取消后应没有该字段');
+
+    // 重新加载后仍能读到
+    store.linkTicket(mine.id, 'ext-def456');
+    const reloaded = new ProactiveStore({ filePath: file });
+    assert.equal(reloaded.tickets()[0]!.linkedTicket, 'ext-def456');
+    rmSync(file, { force: true });
   });
 
   /* ---------------------------------------------------------------- */

@@ -142,6 +142,7 @@ dsh plugin --profile desktop add .
 | 工单 | 五阶段 + 产物 + 依赖，回答「卡在哪、下一步该谁动」 |
 | 分维度审计 | 四项各自独立报告、标注评测者，**不给总分** |
 | 场合判定 | 干活 / 闲聊分开对待；**当前只记录，不改行为** |
+| 超级代理 | 只读镜像 dsh-superagent 的工单与健康，可暂停/重试/停止，可派活 |
 | 人格 | 人格块 + 用户画像，带锁定短语与快照撤销 |
 | 数据安全 | 可审计、可快照回滚、校验和、跨进程写锁 |
 | 零依赖 | 纯 TypeScript，无数据库，默认零外部请求，状态就是本地几个 JSON |
@@ -252,6 +253,23 @@ dsh plugin --profile desktop add .
 - **提案 → 确认才生效**，每次改动留快照、可撤销；agent 不许自己确认，也不许改「用户画像」块。
 - **锁定短语**：`边界：…` 那一行会被自动锁住，之后任何提案想删掉它都会被 `confirm` 拒绝。
 
+### 超级代理：把 dsh-superagent 接进工作流（未发布）
+
+superagent 是**另一个进程**（默认 WSL `127.0.0.1:3082`），管「把活干完」；本插件管「别每次从零开始」。
+面板新增「超级代理」页签，做四件事：
+
+| 做什么 | 怎么做的 | 风险 |
+|---|---|---|
+| **只读镜像** | 读它的 `state` / `tickets`，展示工单（按「需要你 / 进行中 / 等待」分组）、健康、并发占用 | 只读；字段可能随它改版，缺字段显示「—」 |
+| **少量写动作** | 只放行它文档认可的 `executor/pause` 与 `tickets/<id>/retry|stop` | 白名单，非法动作直接拒 |
+| **工单关联** | 本地工单加 `linkedTicket` 字段指向它的 Ticket | **只关联不合并**：它的是带 Mandate/Policy 的授权工单，我们的是本地待办 |
+| **派活入口** | 生成派单文本（可复制）；配了 `superagentRepo` 还能直接打开「新建 Issue」页 | **不存任何 GitHub 凭据**，走你自己已登录的浏览器 |
+
+- 不可达只让页签显示「未连接」，**不影响本插件任何功能**（对面在 WSL，请求超时默认 3 秒）。
+- 配置：`superagentBaseUrl`（默认 `http://127.0.0.1:3082`）、`superagentTimeoutMs`（默认 3000）、`superagentRepo`（`owner/name`，可选）。
+- 已知未验证：superagent 的 **worker 会话**是否吃到准则本注入。结构上应该吃（host 级 `systemPrompt.section`，
+  它的 worker preset 只隔离了 shell / compaction，没隔离 systemPrompt），但要起一个真工单才能确认。
+
 ### 数据安全
 
 - **写入可审计**：每次变更追加一行 JSONL（操作、id、主题、内容指纹、来源、通道），按大小轮转。
@@ -356,7 +374,7 @@ dsh plugin --profile desktop add .
 
 **刻意不做的事**（避免和其他插件打架）：不修改全局 patch、不覆写系统提示、不接管 `tools/post-execute`、不声明 `peerDependencies`（避免 pnpm 的 `ERESOLVE`）。
 
-**已验证环境**：DSH **0.2.1-rc.5**（desktop profile 与 superagent profile）+ Node **22.20 / 22.23** + Windows 与 Linux（Ubuntu 22.04 / WSL2）。155 条测试在两个平台都全绿。
+**已验证环境**：DSH **0.2.1-rc.5**（desktop profile 与 superagent profile）+ Node **22.20 / 22.23** + Windows 与 Linux（Ubuntu 22.04 / WSL2）。160 条测试在两个平台都全绿。
 
 **运行时依赖：0。** `lib/*.js` 的 import 全部是 `node:*`（path / fs / crypto / os / url）。
 
@@ -451,7 +469,7 @@ plugin_manager remove_bundle target=dsh-cognition-engine
 ```sh
 npm install
 npm run build      # tsc → lib/
-npm test           # 155 项单元测试
+npm test           # 160 项单元测试
 npm run eval       # 评测用例 + token 预算门禁
 ```
 
@@ -459,7 +477,7 @@ npm run eval       # 评测用例 + token 预算门禁
 
 ### 质量门禁
 
-- 单元测试 **155 / 155**
+- 单元测试 **160 / 160**
 - TypeScript 全严格模式：`strict` + `noUncheckedIndexedAccess` + `noUnusedLocals` + `noUnusedParameters` + `verbatimModuleSyntax` + `erasableSyntaxOnly`
 - 工具 schema 固定开销与单次调用输出上限在 `npm run eval` 里卡
 

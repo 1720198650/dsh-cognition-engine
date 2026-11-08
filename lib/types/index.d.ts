@@ -110,6 +110,19 @@ export interface CognitionConfig {
     styleMinChars?: number;
     /** 自定义口癖（3–5 个），用于算 catchphrasePerK。默认空。 */
     styleCatchphrases?: string[];
+    /**
+     * dsh-superagent 的 HTTP 地址。默认 `http://127.0.0.1:3082`（WSL 里那个）。
+     *
+     * 面板的「超级代理」页签靠它做只读镜像。**不可达只是显示未连接，不影响本插件任何功能**。
+     */
+    superagentBaseUrl?: string;
+    /** 请求 superagent 的超时（毫秒），默认 3000——对面在 WSL，不能把面板拖住。 */
+    superagentTimeoutMs?: number;
+    /**
+     * 派活用的仓库 `owner/name`。设了之后面板能直接生成「新建 Issue」链接；
+     * 不设就只生成可复制的派单文本。**不存任何 GitHub 凭据**——派活走你自己已登录的浏览器。
+     */
+    superagentRepo?: string;
     /** 上锁时使用的固定口令；不设则每次上锁随机生成。 */
     lockToken?: string;
     /** 真模型：显式指定 provider / model，不设则跟随当前默认模型。 */

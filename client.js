@@ -91,6 +91,7 @@ window.__ModuleLoader__.load({
         playbookTab: '准则',
         personaTab: '人格',
         learnTab: '学习',
+        superagentTab: '超级代理',
         playbookPending: '待审',
         playbookActive: '已生效',
         playbookRetired: '已停用',
@@ -174,6 +175,7 @@ window.__ModuleLoader__.load({
         playbookTab: 'Rules',
         personaTab: 'Persona',
         learnTab: 'Learning',
+        superagentTab: 'Super-agent',
         refresh: 'Refresh',
         close: 'Close',
         empty: 'Nothing here',
@@ -456,6 +458,8 @@ window.__ModuleLoader__.load({
       const PersonaEmbedded = createPersonaPage(ctx);
       // 学习面板：预算 / shadow / CPE / 提醒 / 检索一屏看完
       const LearningEmbedded = createLearningPage(ctx);
+      // 超级代理：只读镜像 superagent 的工单与健康（另一个进程，不可达只显示未连接）
+      const SuperagentEmbedded = createSuperagentPane(ctx);
       return function MoodDock(props) {
         const opts = { ...(options || {}), ...(props || {}) };
         const [state, setState] = React.useState(null);
@@ -898,6 +902,7 @@ window.__ModuleLoader__.load({
           ['schemas', dict.schemas],
           ['playbook', dict.playbookTab],
           ['persona', dict.personaTab],
+          ['superagent', dict.superagentTab],
           ['learning', dict.learnTab],
           ['settings', dict.settings],
         ];
@@ -1148,6 +1153,8 @@ window.__ModuleLoader__.load({
           body = h(PersonaEmbedded, { variant: 'embedded' });
         } else if (tab === 'learning') {
           body = h(LearningEmbedded, { variant: 'embedded' });
+        } else if (tab === 'superagent') {
+          body = h(SuperagentEmbedded, { variant: 'embedded' });
         } else if (tab === 'memories') {
           body = renderList(detail.memories, (item) => {
             if (editingId === item.id) {
@@ -2518,6 +2525,345 @@ window.__ModuleLoader__.load({
       if (status === 'yellow' || status === 'orange') return dict.yellow;
       if (status === 'red') return dict.red;
       return dict.insufficient;
+    }
+
+    /* ---------------- 超级代理页签：只读镜像 dsh-superagent ---------------- */
+
+    const SA_TEXT = {
+      zh: {
+        title: '超级代理',
+        hint: '只读镜像 superagent 的工单与健康状态，字段可能随它的版本变化。派活、改它的配置请去它自己的面板。',
+        online: '已连接',
+        unreachable: '未连接',
+        retryHint: 'superagent 没起，或 WSL 端口没通。',
+        failed: '读取失败',
+        loading: '加载中…',
+        refresh: '刷新',
+        paused: '已暂停处理',
+        pause: '暂停处理',
+        resume: '继续处理',
+        running: '执行中',
+        queued: '排队',
+        maxWorkers: '并发上限',
+        noTickets: '现在没有工单',
+        needsPerson: '需要你',
+        working: '进行中',
+        idle: '等待',
+        other: '其他',
+        retry: '重试',
+        stop: '停止',
+        actionOk: '已提交',
+        actionFailed: '操作失败',
+        healthProblems: '有问题的部件',
+        healthAllOk: '部件全部正常',
+        dispatch: '派活',
+        dispatchHint: '写一句要它做的事，生成派单文本。到你已登录的 GitHub 里发评论或新建 Issue。',
+        dispatchPlaceholder: '例如：把这个仓库的 README 补一节安装说明',
+        copy: '复制',
+        copied: '已复制',
+        openIssue: '打开新建 Issue',
+        needRepo: '（未配置 superagentRepo，只能复制文本）',
+        link: '关联本地工单',
+        linkNone: '（不关联）',
+        stage: { person: '需要你', working: '进行中', idle: '等待', unknown: '其他' },
+      },
+      en: {
+        title: 'Super-agent',
+        hint: 'Read-only mirror of superagent tickets and health; fields may change with its version. Dispatch and its own settings live in its panel.',
+        online: 'connected',
+        unreachable: 'not reachable',
+        retryHint: 'superagent is not running, or the WSL port is not forwarded.',
+        failed: 'read failed',
+        loading: 'Loading…',
+        refresh: 'Refresh',
+        paused: 'processing paused',
+        pause: 'Pause processing',
+        resume: 'Resume processing',
+        running: 'running',
+        queued: 'queued',
+        maxWorkers: 'max workers',
+        noTickets: 'No tickets right now',
+        needsPerson: 'Needs you',
+        working: 'Working',
+        idle: 'Idle',
+        other: 'Other',
+        retry: 'Retry',
+        stop: 'Stop',
+        actionOk: 'Submitted',
+        actionFailed: 'Action failed',
+        healthProblems: 'Parts with problems',
+        healthAllOk: 'All parts healthy',
+        dispatch: 'Dispatch',
+        dispatchHint: 'Write one line; get a dispatch text. Post it as a comment or new Issue in GitHub where you are signed in.',
+        dispatchPlaceholder: 'e.g. add an install section to this repo’s README',
+        copy: 'Copy',
+        copied: 'Copied',
+        openIssue: 'Open new Issue',
+        needRepo: '(superagentRepo not configured; copy the text instead)',
+        link: 'Link local ticket',
+        linkNone: '(none)',
+        stage: { person: 'needs you', working: 'working', idle: 'idle', unknown: 'other' },
+      },
+    };
+
+    function superagentText(ctx) {
+      let id = 'zh';
+      try {
+        const snap = ctx && ctx.locale && typeof ctx.locale.getLocale === 'function' ? ctx.locale.getLocale() : null;
+        id = (snap && (snap.id || snap.locale || snap.language)) || 'zh';
+      } catch {
+        id = 'zh';
+      }
+      return String(id).toLowerCase().startsWith('en') ? SA_TEXT.en : SA_TEXT.zh;
+    }
+
+    function createSuperagentPane(ctx) {
+      return function SuperagentPane() {
+        const dict = superagentText(ctx);
+        const [data, setData] = React.useState(null);
+        const [failure, setFailure] = React.useState(null);
+        const [busy, setBusy] = React.useState(false);
+        const [notice, setNotice] = React.useState(null);
+        const [draft, setDraft] = React.useState('');
+        const [copied, setCopied] = React.useState(false);
+        const [localTickets, setLocalTickets] = React.useState([]);
+
+        const load = React.useCallback(async () => {
+          try {
+            const [res, tRes] = await Promise.all([
+              fetch('/cognition-engine/superagent/overview', { cache: 'no-store' }),
+              fetch('/cognition-engine/tickets', { cache: 'no-store' }).catch(() => null),
+            ]);
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            setData(await res.json());
+            if (tRes && tRes.ok) {
+              const board = (await tRes.json()).board || [];
+              // 只取还活着的本地工单（草稿/待办/进行中/待验收），用于关联
+              const flat = [];
+              for (const col of board) {
+                if (col.stage === 'done') continue;
+                for (const item of col.items || []) flat.push(item);
+              }
+              setLocalTickets(flat);
+            }
+            setFailure(null);
+          } catch (error) {
+            setFailure(error && error.message ? error.message : String(error));
+          }
+        }, []);
+
+        React.useEffect(() => {
+          load();
+        }, [load]);
+
+        const act = async (query) => {
+          setBusy(true);
+          setNotice(null);
+          try {
+            const res = await fetch('/cognition-engine/superagent/action?' + query, { method: 'POST', cache: 'no-store' });
+            const json = await res.json().catch(() => ({}));
+            setNotice(json && json.ok ? dict.actionOk : dict.actionFailed + (json && json.error ? '：' + json.error : ''));
+            await load();
+          } catch (error) {
+            setNotice(dict.actionFailed + '：' + (error && error.message ? error.message : String(error)));
+          } finally {
+            setBusy(false);
+          }
+        };
+
+        if (failure !== null) return h('div', { style: S.empty }, dict.failed + '：' + failure);
+        if (data === null) return h('div', { style: S.empty }, dict.loading);
+
+        const header = h(
+          'div',
+          { style: { display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' } },
+          h('span', { style: LS.badge(data.reachable ? (data.paused ? 'yellow' : 'green') : 'red') }, data.reachable ? (data.paused ? dict.paused : dict.online) : dict.unreachable),
+          h('span', { style: LS.explain }, data.baseUrl || ''),
+          data.load
+            ? h('span', { style: LS.kv }, h('span', null, `${dict.running} ${data.load.running}`), h('span', null, `${dict.queued} ${data.load.queued}`), h('span', null, `${dict.maxWorkers} ${data.load.maxWorkers}`))
+            : null,
+          h(
+            'button',
+            { type: 'button', style: PS.btn, onClick: load, disabled: busy },
+            dict.refresh,
+          ),
+        );
+
+        if (!data.reachable) {
+          return h(
+            'div',
+            { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+            header,
+            h('div', { style: LS.item }, h('div', { style: LS.explain }, data.error || dict.retryHint)),
+          );
+        }
+
+        const tickets = data.tickets || [];
+        // C：外部工单 ↔ 本地工单的关联（只存引用，不合并两套状态机）
+        const linkedLocal = (externalId) => {
+          const found = localTickets.find((lt) => lt.linkedTicket === externalId);
+          return found ? found.id : '';
+        };
+        const applyLink = async (externalId, localId) => {
+          setBusy(true);
+          setNotice(null);
+          try {
+            const prev = localTickets.find((lt) => lt.linkedTicket === externalId);
+            if (prev && prev.id !== localId) {
+              await fetch('/cognition-engine/tickets/link?id=' + encodeURIComponent(prev.id) + '&ticket=', { method: 'POST', cache: 'no-store' });
+            }
+            if (localId) {
+              await fetch('/cognition-engine/tickets/link?id=' + encodeURIComponent(localId) + '&ticket=' + encodeURIComponent(externalId), { method: 'POST', cache: 'no-store' });
+            }
+            await load();
+          } finally {
+            setBusy(false);
+          }
+        };
+        const group = (key, label, items) =>
+          items.length === 0
+            ? null
+            : h(
+                'div',
+                { style: { display: 'flex', flexDirection: 'column', gap: 6 }, key },
+                h(
+                  'div',
+                  { style: { display: 'flex', gap: 8, alignItems: 'baseline' } },
+                  h('span', { style: { fontSize: 12, fontWeight: 600 } }, label),
+                  h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, String(items.length)),
+                ),
+                items.map((t) =>
+                  h(
+                    'div',
+                    { style: LS.item, key: t.id },
+                    h(
+                      'div',
+                      { style: { display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' } },
+                      h('span', { style: LS.badge(t.stage === 'person' ? 'yellow' : t.stage === 'working' ? 'green' : 'red') }, dict.stage[t.stage] || dict.stage.unknown),
+                      t.action ? h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, t.action) : null,
+                      t.assignments ? h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, '×' + t.assignments) : null,
+                      h('span', { style: { fontSize: 10, color: 'var(--dsw-alias-label-secondary)', marginLeft: 'auto' } }, String(t.id).slice(0, 8)),
+                    ),
+                    h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-primary)' } }, t.title),
+                    h(
+                      'div',
+                      { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'baseline' } },
+                      t.canRetry
+                        ? h('button', { type: 'button', style: PS.btn, disabled: busy, onClick: () => act('action=retry&id=' + encodeURIComponent(t.id)) }, dict.retry)
+                        : null,
+                      t.canStop
+                        ? h('button', { type: 'button', style: PS.btn, disabled: busy, onClick: () => act('action=stop&id=' + encodeURIComponent(t.id)) }, dict.stop)
+                        : null,
+                      h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, dict.link),
+                      h(
+                        'select',
+                        {
+                          style: { fontSize: 11, padding: '2px 6px', borderRadius: 6, background: 'transparent', color: 'inherit', border: '1px solid var(--dsw-alias-border-l2)' },
+                          value: linkedLocal(t.id),
+                          disabled: busy || localTickets.length === 0,
+                          onChange: (event) => applyLink(t.id, event.target.value),
+                        },
+                        h('option', { value: '' }, dict.linkNone),
+                        localTickets.map((lt) =>
+                          h('option', { value: lt.id, key: lt.id }, String(lt.deliverable || lt.action || lt.id).slice(0, 28)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+
+        const unhealthy = data.unhealthy || [];
+        const issueUrl =
+          data.repo && draft.trim().length > 0
+            ? 'https://github.com/' +
+              data.repo +
+              '/issues/new?title=' +
+              encodeURIComponent(draft.trim().slice(0, 80)) +
+              '&body=' +
+              encodeURIComponent(draft.trim())
+            : null;
+
+        return h(
+          'div',
+          { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+          header,
+          h('div', { style: LS.explain }, dict.hint),
+          notice ? h('div', { style: { ...LS.explain, color: 'var(--dsw-alias-state-success-primary)' } }, notice) : null,
+          // 暂停/继续
+          h(
+            'div',
+            { style: { display: 'flex', gap: 8 } },
+            h(
+              'button',
+              { type: 'button', style: PS.btn, disabled: busy, onClick: () => act('action=' + (data.paused ? 'resume' : 'pause')) },
+              data.paused ? dict.resume : dict.pause,
+            ),
+          ),
+          // 健康问题
+          unhealthy.length > 0
+            ? h(
+                'div',
+                { style: LS.item },
+                h('div', { style: { display: 'flex', gap: 8, alignItems: 'baseline' } }, h('span', { style: LS.badge('red') }, dict.healthProblems), h('span', { style: { fontSize: 11 } }, String(unhealthy.length))),
+                unhealthy.map((h2) =>
+                  h('div', { style: LS.explain, key: h2.name }, `${h2.name} · ${h2.state}${h2.detail ? ' · ' + h2.detail : ''}`),
+                ),
+              )
+            : h('div', { style: LS.explain }, dict.healthAllOk),
+          // 工单
+          tickets.length === 0
+            ? h('div', { style: S.empty }, dict.noTickets)
+            : h(
+                'div',
+                { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+                group('person', dict.needsPerson, tickets.filter((t) => t.stage === 'person')),
+                group('working', dict.working, tickets.filter((t) => t.stage === 'working')),
+                group('idle', dict.idle, tickets.filter((t) => t.stage === 'idle')),
+                group('other', dict.other, tickets.filter((t) => t.stage !== 'person' && t.stage !== 'working' && t.stage !== 'idle')),
+              ),
+          // 派活（D）：生成文本 + 可选新建 Issue 链接；不存任何凭据
+          h(
+            'div',
+            { style: LS.item },
+            h('div', { style: { fontSize: 12, fontWeight: 600 } }, dict.dispatch),
+            h('div', { style: LS.explain }, dict.dispatchHint),
+            h('textarea', {
+              style: Object.assign({}, PS.ta, { minHeight: 60 }),
+              placeholder: dict.dispatchPlaceholder,
+              value: draft,
+              onChange: (event) => {
+                setDraft(event.target.value);
+                setCopied(false);
+              },
+            }),
+            h(
+              'div',
+              { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  style: PS.btn,
+                  disabled: draft.trim().length === 0,
+                  onClick: async () => {
+                    try {
+                      await navigator.clipboard.writeText(draft.trim());
+                      setCopied(true);
+                    } catch {
+                      setCopied(false);
+                    }
+                  },
+                },
+                copied ? dict.copied : dict.copy,
+              ),
+              issueUrl
+                ? h('a', { href: issueUrl, target: '_blank', rel: 'noreferrer', style: Object.assign({}, PS.btn, { textDecoration: 'none', display: 'inline-block' }) }, dict.openIssue)
+                : h('span', { style: LS.explain }, dict.needRepo),
+            ),
+          ),
+        );
+      };
     }
 
     function createLearningPage(ctx) {

@@ -1,5 +1,33 @@
 # 更新报告
 
+## 未发布 — 超级代理接入
+
+把 dsh-superagent（另一个进程，默认 WSL `127.0.0.1:3082`）接进面板工作流，四件事：
+
+**只读镜像**（新页签「超级代理」）
+- 读它的 `state` / `tickets`，按「需要你 / 进行中 / 等待 / 其他」分组展示工单，附带健康部件与并发占用。
+- 字段缺失显示「—」，不抛错；对面不可达只显示「未连接」，**不影响本插件任何功能**（默认 3 秒超时）。
+
+**少量写动作**
+- 只放行它文档认可的 `POST executor/pause` 与 `POST tickets/<id>/retry|stop`；其余动作服务端直接拒绝（白名单）。
+
+**工单关联（只关联，不合并）**
+- 本地工单新增 `linkedTicket` 字段指向它的 Ticket；`POST /tickets/link` 关联/取消。
+- 两套工单语义不同（它的是带 Mandate/Policy 的外部授权工单），合会污染本地待办。
+
+**派活入口**
+- 面板生成派单文本（可复制）；配了 `superagentRepo` 还能直接打开「新建 Issue」页。
+- **不存任何 GitHub 凭据**，走用户自己已登录的浏览器。
+
+新增配置：`superagentBaseUrl`（默认 `http://127.0.0.1:3082`）、`superagentTimeoutMs`（默认 3000）、`superagentRepo`（可选）。
+
+新增模块 `src/superagent.ts`，仍**零外部依赖**（Node 22 全局 `fetch`）。
+
+测试 155 → **160**。已知未验证：superagent 的 **worker 会话**是否吃到准则本注入
+（结构上应该吃：host 级 section，worker preset 只隔离了 shell / compaction），需真工单确认。
+
+---
+
 ## v0.12.0（2026-11-08）— 界面重做：侧边栏一级面板 + 五个新模块
 
 这一版的主线是「**从浮层搬到面板，把该看见的看见**」，顺带补上四块此前只有后端没有入口的能力。

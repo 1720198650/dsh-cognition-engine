@@ -97,6 +97,13 @@ export interface WouldDo {
   blockedBy?: string[];
   /** 阶段变更历史（谁在什么时候推到哪一步）。 */
   history?: Array<{ at: number; from: TicketStage | null; to: TicketStage; by: 'user' | 'agent'; note?: string }>;
+  /**
+   * 关联到 dsh-superagent 的工单 id。
+   *
+   * **只做关联，不合并**：两套工单的语义不同（它的是外部授权工单，带 Mandate/Policy；
+   * 我们的是本地待办）。合并会让外部工单污染本地待办列表，也会搅乱授权语义。
+   */
+  linkedTicket?: string;
 }
 
 export interface ProactiveDoc {
@@ -514,6 +521,25 @@ export class ProactiveStore {
     if (patch.deliverable !== undefined) item.deliverable = patch.deliverable.slice(0, 300);
     if (patch.background !== undefined) item.background = patch.background.slice(0, 600);
     if (patch.blockedBy !== undefined) item.blockedBy = patch.blockedBy.filter((dep) => dep !== id).slice(0, 10);
+    this.#save();
+    return true;
+  }
+
+  /**
+   * 关联/取消关联一条外部工单（dsh-superagent 的 Ticket）。
+   *
+   * `externalId` 传空串或 null 表示取消关联。只存引用，不改状态机、不动阶段——
+   * 两套工单各走各的，只在界面上互相指一下。
+   */
+  linkTicket(id: string, externalId: string | null): boolean {
+    this.loadSync();
+    const item = this.doc.items.find((entry) => entry.id === id);
+    if (item === undefined) return false;
+    if (externalId === null || externalId.trim().length === 0) {
+      delete item.linkedTicket;
+    } else {
+      item.linkedTicket = externalId.trim().slice(0, 80);
+    }
     this.#save();
     return true;
   }
