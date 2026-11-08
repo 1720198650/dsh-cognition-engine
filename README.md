@@ -1,16 +1,45 @@
 # dsh-cognition-engine
 
+[![npm version](https://img.shields.io/npm/v/dsh-cognition-engine.svg)](https://www.npmjs.com/package/dsh-cognition-engine)
+[![license](https://img.shields.io/npm/l/dsh-cognition-engine.svg)](LICENSE)
+[![node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen.svg)](https://nodejs.org)
+[![deps](https://img.shields.io/badge/runtime%20deps-0-blue.svg)](#兼容性)
+
 > **让 AI 记得住，而且知道自己什么时候记错了。**
 
 关掉对话框，AI 就失忆了。你上周定的规矩、踩过的坑、说过的「别用那个接口」——下一次全部归零，还得重新交代一遍。
 
-这个插件给它装两样东西：
+这个插件给它装三样东西：
 
-- 🧠 **记忆**——记住事实，并且分清「现在为真」和「曾经为真」
-- 📌 **准则本**——把记忆蒸馏成一页工作准则，**每轮对话都摆到它面前**，不靠它自己想起来
+- 🧠 **记忆** —— 记住事实，并且分清「现在为真」和「曾经为真」
+- 📌 **准则本** —— 把记忆蒸馏成一页工作准则，**每轮对话都摆到它面前**，不靠它自己想起来
+- 🗂 **工单** —— 没做完的活有阶段、有产物、有依赖，不是一句「待办」
 
 > 同类插件让 AI 记住经验。
 > **我们让 AI 知道经验什么时候该作废。**
+
+---
+
+## 目录
+
+- [30 秒看懂](#30-秒看懂)
+- [安装](#安装)
+- [为什么做](#为什么做)
+- [特性](#特性)
+- [界面](#界面)
+- [工具](#七个工具)
+- [配置](#配置)
+- [数据与隐私](#数据与隐私)
+- [兼容性](#兼容性)
+- [已知限制](#已知限制)
+- [卸载](#卸载)
+- [架构](#架构)
+- [开发](#开发)
+- [时间旅行](#时间旅行)
+- [设计依据（实测数据）](#设计依据实测数据)
+- [研究文档](#研究文档)
+- [参考与致谢](#参考与致谢)
+- [English](#english)
 
 ---
 
@@ -33,11 +62,11 @@
 3. 蒸馏时它自己发现矛盾：*「mem-9 说先跑测试就够，mem-7 要求五步全做」*
 
 ```
-## 约定
+## 发布流程
 - [ctxt-00001] helpful=2 harmful=0 :: 发版前依次执行五步，不可跳步
 - [ctxt-00002] helpful=0 harmful=0 :: 纯文档改动只推 commit，不升版本号
 
-## 坑
+## 插件架构
 - [ctxt-00005] helpful=0 harmful=0 :: npm 发布必须显式加 --registry 绕开淘宝镜像
 ```
 
@@ -45,29 +74,9 @@
 
 ---
 
-## 还有什么
-
-- **双时态记忆**：同一个问题能有三个都正确的答案——现在怎样 / 十月时怎样 / 那时你以为怎样
-- **主题**：人定的适用范围键——记忆回答「发生过什么」，准则回答「该怎么做」，主题回答「适用于哪类任务」
-- **反思引擎**：强制 AI 先反驳自己，再给结论（三段式，可关，可换本地模板）
-- **待办挂在主题下**：没做完的活记在该主题里，重启还在，开场自动带出来
-- **写入可审计**：每次变更留一行日志，能查「这条是谁写的、从哪个通道进来的」
-- **零依赖**：纯 TypeScript，无数据库，默认零外部请求，全部状态就是本地几个 JSON
-
-**入口**：输入框上方的横条，点开是透明浮层，不挤压对话框。
-
-```
-认知引擎 · 记忆 9 · 主题 3 · 待办 0 · 准则 5
-```
-
-> 本项目是 **DeepSeek V4.1-Flash（1017）许愿式编程** 的产物：
-> 需求由人提出，代码、测试、评测与文档由模型在会话中逐轮生成、验证并修正。
-
----
-
 ## 安装
 
-需要 DeepSeek Harness，Node.js ≥ 22，Git。
+需要 [DeepSeek Harness](https://www.deepseek.com/harness/)，Node.js ≥ 22，Git。
 
 ### 从 npm（推荐，最短路径）
 
@@ -101,27 +110,41 @@ npm install && npm run build
 dsh plugin --profile desktop add .
 ```
 
-安装后重启一次 DSH，输入框上方会出现一行状态条，点开即面板。
+安装后重启一次 DSH，**侧边栏底部会出现一个齿轮图标**，点开就是整页面板。
 
 > 默认不上锁，面板与接口不需要口令。
 > 想防同机其他程序读取记忆正文，在设置页开启「记忆读取锁」并自设口令——**不存在默认口令**，
 > 因为把口令写在数据文件旁边对同机进程毫无意义。
 
+---
+
 ## 为什么做
 
 普通 Agent 的记忆是一个检索管道：切块 → 向量化 → 取最近的。它解决不了五件事：
 
-1. **现在为真 vs 曾经为真**——你说"用 Python"，后来改"用 TypeScript"，两句话都在，它不知道该信哪句。
-2. **新信息该挂在哪**——第 20 条偏好和第 3 条是同一个话题，还是该新开一簇？
-3. **它对这事什么态度**——被连续否定之后，它还是用同样的语气回答。
-4. **决定是怎么来的**——只给结论，不给推理过程。
-5. **经验沉淀不下来**——这次想明白了，下次会话照样从零开始。
+1. **现在为真 vs 曾经为真** —— 你说「用 Python」，后来改「用 TypeScript」，两句话都在，它不知道该信哪句。
+2. **新信息该挂在哪** —— 第 20 条偏好和第 3 条是同一个话题，还是该新开一簇？
+3. **它对这事什么态度** —— 被连续否定之后，它还是用同样的语气回答。
+4. **决定是怎么来的** —— 只给结论，不给推理过程。
+5. **经验沉淀不下来** —— 这次想明白了，下次会话照样从零开始。
 
 前四条用**双时态记忆 + 主题 + 反思引擎**回答；第五条用**准则本**回答。
 
 ---
 
 ## 特性
+
+| 能力 | 一句话 |
+|---|---|
+| 双时态记忆 | 同一个问题能有三个都正确的答案：现在怎样 / 那时怎样 / 那时你以为怎样 |
+| 主题 | 人定的适用范围键：记忆答「发生过什么」，准则答「该怎么做」，主题答「适用于哪类任务」 |
+| 准则本 | 记忆蒸馏成一页常驻上下文，带 `helpful/harmful` 计数与有效期 |
+| 工单 | 五阶段 + 产物 + 依赖，回答「卡在哪、下一步该谁动」 |
+| 分维度审计 | 四项各自独立报告、标注评测者，**不给总分** |
+| 场合判定 | 干活 / 闲聊分开对待；**当前只记录，不改行为** |
+| 人格 | 人格块 + 用户画像，带锁定短语与快照撤销 |
+| 数据安全 | 可审计、可快照回滚、校验和、跨进程写锁 |
+| 零依赖 | 纯 TypeScript，无数据库，默认零外部请求，状态就是本地几个 JSON |
 
 ### 记忆：可追溯、会老化、可修正
 
@@ -171,13 +194,8 @@ dsh plugin --profile desktop add .
   **这是与同类插件最大的区别**：它们让 AI 记住经验，我们让 AI 知道经验什么时候该作废。
 - **准则冲突检测**：新准则与现有准则疑似矛盾时打 `conflictWith` 标记，不自动合并，交人工裁决。
   判定顺序是**先判冲突再判去重**——否定翻转的准则相似度高达 0.92，先去重会被误当成重复丢掉。
-
-### 待办：挂在主题下
-
-- 任务不是独立的跨天台账，而是**主题下的进行中事项**
-- 状态：待办 / 进行中 / 已完成，可随时改、可删除
-- 太久没更新的会被提醒，但不打断你正在做的事
-- **开场自动带出**：`cognition_context` 返回 `ongoing`（按主题分组的未完成事项）
+- **开工前自查**：勾了「自查」的准则会渲染成「开工前自查」清单，但**仅当这一轮确实要动手做事时才点名**；
+  打招呼、闲聊时明确不看、不念。
 
 ### 工单：待办之上的五阶段（0.12.0）
 
@@ -228,6 +246,12 @@ dsh plugin --profile desktop add .
   面板「学习」页能看每轮判成什么、为什么，并可一键标「判错了」。
 - 依据见 [docs/register-research.md](docs/register-research.md)。
 
+### 人格：它「是谁」（0.12.0）
+
+- 两块：**人格块**（它是什么助手）与**用户画像**（你是谁），各有字数预算（600 / 500）。
+- **提案 → 确认才生效**，每次改动留快照、可撤销；agent 不许自己确认，也不许改「用户画像」块。
+- **锁定短语**：`边界：…` 那一行会被自动锁住，之后任何提案想删掉它都会被 `confirm` 拒绝。
+
 ### 数据安全
 
 - **写入可审计**：每次变更追加一行 JSONL（操作、id、主题、内容指纹、来源、通道），按大小轮转。
@@ -240,156 +264,28 @@ dsh plugin --profile desktop add .
 - **三类对象都能删**：记忆软删除（可恢复）、待办直接删除、主题停用（已挂的记忆与准则都保留）。
 - **记忆读取锁**：给读取记忆正文的接口加访问口令。
 
-### 界面与安装
-
-- **侧边栏一级面板**：侧栏底部一个图标，点开占满整列（不是输入框上方的小浮层）。
-  六个页签——记忆 / 主题 / 准则 / 人格 / 学习 / 设置。页签栏固定，正文独立滚动。
-  0.12.0 起**移除了输入框上方的浮层**与**设置里的人格页**：入口只留一处，避免「两边都能改、不知道哪边生效」。
-- **推理档位可选**：设置页可指定反思/蒸馏用哪一档推理（自动最低 / off / low / high / max）。
-  当前模型会先吐很长的推理过程，而**推理 token 与正文共用同一个输出预算**——
-  档位越高越贵，也越容易把正文挤没。默认「自动」= 选模型声明的最低档。
-- **巡逻复盘开关**：巡视每 3 小时看一次逾期任务。默认**不调模型**，只写一条「已超期 N 小时」的提示；
-  想让它自动跑三段式复盘再打开（每次 3 次模型调用）。
-- **一键安装**：Windows 与 dsh-go 各有一条命令；npm 已发布。
-- **数据与代码分开**：所有状态写在 `~/.dsh/cognition-engine/`，不在插件目录里——清理仓库不会误伤用户数据。
-
 ---
 
+## 界面
 
-## 可信度治理
+侧边栏底部一个齿轮图标 → 打开**占满整列的一级面板**（页签栏固定，正文独立滚动）：
 
-记忆插件都在解决「记得住」。这一层解决的是另一个问题：
+| 页签 | 内容 |
+|---|---|
+| **记忆** | 正文、来源徽章、当前/已取代、主题、录入时间；可编辑、可删除、可挂主题 |
+| **主题** | 标签、成员数、相关主题数、倾向；点开可看该主题下的记忆原文；主题下挂待办 |
+| **准则** | 按「待审 / 已过期 / 已生效 / 已停用」分组；「重新蒸馏」与「＋ 手动新增」；每条显示 `helpful` / `harmful` |
+| **人格** | 人格块 + 用户画像两块，带字数预算与锁定短语；提案、确认、撤销 |
+| **学习** | 学习预算、CPE 回归、试用池、提醒、检索度量、**分维度体检报告**、**工单看板**、**场合判定记录**、反馈与风格 |
+| **设置** | 记忆准入规则、归并与导入导出、三类删除、反思引擎三态、记忆读取锁、备份与审计 |
 
-> **凭什么信这条？它什么时候该作废？**
+页面上所有数据走 HTTP，**不进入模型上下文，不消耗 token**。
+只有「准则」页签里生效的条目、以及人格块会被注入上下文（准则 700 字符 + 人格 1100 字符预算）。
 
-### 证据链
+> **0.12.0 的位置变更**：入口从「输入框上方横条」改为**侧边栏一级面板**；
+> 浮层与「设置里的人格页」都已移除——只留一个入口，避免两边都能改、不知道哪边生效。
 
-准则记录它依赖哪些记忆（`sourceIds`）。源记忆被取代、删除或归档时，依赖链会自动重算：
-
-| 状态 | 含义 | 注入 |
-|---|---|---|
-| `intact` | 来源全部有效 | 正常注入 |
-| `weakened` | 部分来源失效 | 注入，标「（证据已部分失效）」 |
-| `orphaned` | 全部来源失效 | **不注入，但也不删除** |
-
-关键是第三条：它不会消失，前提恢复就自动回来。这是 TMS（Doyle 1979）的做法——撤回信念不是删一行，
-而是让下游结论知道自己失去了支撑。
-
-### 来源分级
-
-| 等级 | 谁写的 | 强度 | 注入表现 |
-|---|---|---|---|
-| `human` | 用户手写或确认 | 1.0 | 直接陈述 |
-| `agent` | AI 写入、人确认过 | 0.6 | 标「（AI 记录，待核实）」 |
-| `auto` | 蒸馏自动产出 | 0.4 | 「[仅参考]」 |
-
-**晋升只能一级一级来，AI 永远不能自封为 human。**
-
-### 冲突裁决
-
-两条准则矛盾时，不是简单覆盖：
-
-- 证据强度差 **1.2 倍以上** → 强的取代弱的
-- 差距不到 1.2 倍 → **两条都保留**，挂同一个冲突组，注入时并排标「存在未决分歧」
-
-证据差不多时强行选一条，等于静默丢掉分歧——而分歧本身是有价值的信息。
-
-作废还分两种：`superseded`（被更好的证据超越）和 `revoked`（发现本来就是错的，立墓碑）。
-
-### 分项计数
-
-不只有一个 `helpful/harmful`，而是五项：
-
-```
-applied         被应用
-appliedGood     应用且结果好
-appliedBad      应用且结果差（准则可能错）
-missed          该用没用（检索问题，不算准则头上）
-userCorrected   用户明确纠正
-```
-
-不拆开的话，**检索错误会被记到准则头上**，准则本会越用越保守。
-降级门槛：样本 ≥5 且好评率 <0.3，**单次纠正永不删除**。
-
-### 学习闭环
-
-`cognition_reflect action=gap` 让模型在卡壳时登记「我不知道什么」：
-
-```
-## 待补的知识缺口
-- [gap-1] 不清楚 DSH 插件的 client 端 slot 有哪些可选值
-```
-
-清单会进注入，蒸馏时优先针对缺口产出候选。这是唯一一条「AI 告诉我它缺什么」的通道。
-
-### 触发条件
-
-每条准则带 `when`（如「发布版本时」），注入时写成：
-
-```
-- [ctxt-00001] :: 发布版本时：依次执行卸载验证→兼容性检查→…
-```
-
-依据 forge_dc（NeurIPS 2026）：同一条纠正写成**带触发点的祈使规则**合规 95%，
-写成描述性文本只有 55%，且规则方案 token 少约 10 倍。
-
-### 算法
-
-| 环节 | 用什么 | 依据 |
-|---|---|---|
-| 检索打分 | **BM25**（k1=1.2, b=0.5） | 212 个真实章节实测 Top1 49.7% → 79.6% |
-| 改写检测 | **LCS**（最长公共子序列） | 中文改写只换个别字，二元组余弦抓不住 |
-| 否定识别 | **NegEx 作用域** | 含伪否定（非常/未来）、双重否定（不得不）、条件标记（除非） |
-| 时间衰减 | **幂律** `R=(1+19/81·t/S)^(-0.5)`，下限 0.2 | Wixted & Ebbesen 1991、Rubin & Wenzel 1996 |
-| 去重 | 归一化哈希 / 0.85 合并 / 0.5 收下并标注 | 合并不可逆，必须余弦和 LCS 都确认 |
-
-衰减只影响**排序**，不影响一条记忆是否还成立——**最近没被访问 ≠ 不太真**。
-
-## 准则本是干什么的
-
-记忆是**材料**，准则是**结论**。
-
-| | 记忆 | 准则本 |
-| --- | --- | --- |
-| 内容 | 你说过的原话、事实、决策 | 从这些材料里提炼出的**可执行约定** |
-| 形态 | 一条一整句，可能几十条 | 一页 6–12 条，每条 12–80 字 |
-| 进入上下文 | 只注入前几条摘要 | **每轮都注入**（700 字符预算） |
-| 过期 | 有 validTo，但默认长期 | **阶段性准则可设有效期，过期自动停用** |
-
-举个真实例子。你的记忆库里躺着这些材料：
-
-```
-mem-7  「功能开发完成后必须按顺序执行：①卸载验证 ②兼容性 ③代码优化 ④README ⑤发布」
-mem-9  「功能开发完成后必须先跑测试再发版」
-mem-16 「npm 发布时本机 registry 指向淘宝镜像，必须显式加 --registry」
-```
-
-蒸馏后变成三条准则，**每条都能直接改变下一步动作**：
-
-```
-[ctxt-00001] helpful=2 harmful=0 :: 功能发版前依次执行：卸载验证→兼容性检查→代码优化→
-  README 覆盖检查→一键安装验证→发布，不可跳步。
-[ctxt-00005] helpful=0 harmful=0 :: npm 发布与认证必须显式加 --registry=…，绕开本机淘宝镜像。
-```
-
-**好处有三个**：
-
-1. **不用每次重新交代**——从「几十条记忆里自己找」变成「一页准则直接看」
-2. **能发现自相矛盾**——蒸馏时模型会发现「mem-9 说先跑测试就够，mem-7 要求五步全做」
-3. **会过期**——「这两周先用旧接口」这类阶段性约定到期自动停止注入，不会一直误导
-
-## 怎么用
-
-设置页之外，面板新增了「准则」页签：
-
-- **重新蒸馏**：让反思引擎读记忆，产出候选（需要切到「真实模型」）
-- **手动新增**：自己写一条（12–80 字，祈使句）
-- **待审 / 已过期 / 已生效 / 已停用** 四组，逐条接受或拒绝
-  - 停用 = 不再注入但保留记录；**删除** = 彻底移除（任意状态可删，快照里仍可找回）
-- 每条显示 `helpful` / `harmful` 计数，`harmful` 攒到 3 次自动退场
-
-**候选不会自动生效**——这是刻意的：ACE 的实测表明坏条目比没有条目更差
-（每轮注入有害反思时准确率 66.7%，反而低于不做任何处理的 70.7%）。
+---
 
 ## 七个工具
 
@@ -399,8 +295,7 @@ mem-16 「npm 发布时本机 registry 指向淘宝镜像，必须显式加 --re
 | `cognition_remember` | 写入记忆；`supersedes` 取代旧事实，`source` 标记来源并决定权威等级，`scope` 选 global / workspace / session，`kind: correction` 记纠正 |
 | `cognition_recall` | 按 `strict` / `historical` / `belief` 召回；`render` 走 Inline&Spill，`expand` 按主题扩展，`scope` 过滤作用域 |
 | `cognition_forget` | 删除记忆：按 id、按来源（如 `test`、`reflection`）、按主题 |
-| `cognition_reflect` | 三段式反思；`draft` 审草稿，`save` 把结论存成记忆；
-  `action: playbook` 改为**准则蒸馏**——从记忆提炼候选准则进待审队列（需真实模型） |
+| `cognition_reflect` | 三段式反思；`draft` 审草稿，`save` 把结论存成记忆；`action: playbook` 改为**准则蒸馏**（需真实模型） |
 | `cognition_state` | 记忆/主题/任务/准则统计与跨会话摘要 |
 | `manage_long_task` | 长程任务：create / update / list / due / delete |
 
@@ -420,8 +315,6 @@ mem-16 「npm 发布时本机 registry 指向淘宝镜像，必须显式加 --re
         overlapThreshold: 0.42         # 重叠聚类阈值
         communityThreshold: 0.3        # 社区连边阈值
         maxClusterSize: 8              # 单簇上限
-        tasksFile: ~/.dsh/cognition-engine/tasks.json
-        stateFile: ~/.dsh/cognition-engine/cognition-state.json
         heartbeatHours: 6              # 多久没更新算超时
         patrolIntervalHours: 3         # 后台巡视间隔
         recordOnly: true               # 主动发言只记录不发送
@@ -431,37 +324,17 @@ mem-16 「npm 发布时本机 registry 指向淘宝镜像，必须显式加 --re
 ```
 
 > 路径开头的 `~` 会展开到用户主目录；相对路径按进程 cwd 解析（换工作区会指向不同文件），
-> 所以配置里建议一律写 `~/...` 或绝对路径。
+> 所以配置里建议一律写 `~/...` 或绝对路径。默认落盘位置 `~/.dsh/cognition-engine/`。
 
 ---
-
-## 页面
-
-侧边栏底部一个图标 → 打开**占满整列的一级面板**（页签栏固定，正文独立滚动）：
-
-| 页签 | 内容 |
-|---|---|
-| **记忆** | 正文、来源徽章、当前/已取代、主题、录入时间；可编辑、可删除、可挂主题 |
-| **主题** | 标签、成员数、相关主题数、倾向；点开可看该主题下的记忆原文；主题下挂待办 |
-| **准则** | 从记忆蒸馏出的工作准则，按「待审 / 已过期 / 已生效 / 已停用」分组；「重新蒸馏」与「＋ 手动新增」；每条显示 `helpful` / `harmful` |
-| **人格** | 人格块 + 用户画像两块，带字数预算；提案 → 确认才生效，每次改动留快照可撤销；边界行自动锁成「锁定短语」，改不掉的会被拒 |
-| **学习** | 学习预算、CPE 回归、试用池、提醒、检索度量、**分维度体检报告**、**工单看板**、**场合判定记录**、反馈与风格 |
-| **设置** | 记忆准入规则、记忆归并与导入导出、三类删除、反思引擎三态、记忆读取锁、备份与审计 |
-
-页面上所有数据走 HTTP，**不进入模型上下文，不消耗 token**。
-只有「准则」页签里生效的条目、以及人格块会被注入上下文（准则 700 字符 + 人格 1100 字符预算）。
-
-> 位置说明：0.12.0 起是**侧边栏一级面板**，不再是输入框上方的浮层。
-> 之前的浮层与「设置里的人格页」都已移除——只留一个入口。
-
 
 ## 数据与隐私
 
 | 项 | 说明 |
 |---|---|
 | 落盘位置 | `~/.dsh/cognition-engine/`（可用环境变量 `DSH_COGNITION_DATA_DIR` 覆盖） |
-| 落盘文件 | `cognition-state.json`（记忆）、`tasks.json`（待办）、`cognition-playbook.json`（准则）、`cognition-topics.json`（主题）、`cognition-persona.json`（人格）、`cognition-audit.jsonl`（审计）、`cognition-injection.jsonl`（注入快照）、`cognition-style.jsonl`（风格统计量）、`cognition-register.jsonl`（场合判定，只存前 40 字摘要）、`cognition-cpe.json` / `cognition-shadow.json` / `cognition-budget.json` / `cognition-gaps.json` / `cognition-recall.jsonl`、`.snapshots/`（快照） |
-| HTTP | `GET /cognition-engine/{state,detail,playbook,persona,style,cpe,budget,shadow,retrieval,gaps,events,tickets,register,injected,audit/dimensions}`；`POST /cognition-engine/{clear,model,lock,playbook/*,persona/*,task/*,proactive/*,tickets/*,cpe/*,retrieval/*,register/label,snapshot/*,memory/repair}` |
+| 落盘文件 | `cognition-state.json`（记忆）、`tasks.json`（待办）、`cognition-playbook.json`（准则）、`cognition-topics.json`（主题）、`cognition-persona.json`（人格）、`cognition-audit.jsonl`（审计）、`cognition-injection.jsonl`（注入快照）、`cognition-style.jsonl`（风格统计量，**不存原文**）、`cognition-register.jsonl`（场合判定，**只存前 40 字摘要**）、`cognition-cpe.json` / `cognition-shadow.json` / `cognition-budget.json` / `cognition-gaps.json` / `cognition-recall.jsonl`、`.snapshots/`（快照） |
+| HTTP | 读：`/cognition-engine/{state,detail,playbook,persona,style,cpe,budget,shadow,retrieval,gaps,events,tickets,register,injected,audit/dimensions}`；写：`POST /cognition-engine/{clear,model,lock,playbook/*,persona/*,task/*,proactive/*,tickets/*,cpe/*,retrieval/*,register/label,snapshot/*,memory/repair}` |
 | 记忆读取锁 | 开启后 `detail` 与全部 `POST` 都要求 `x-cognition-token`；`state` 始终公开（只有计数） |
 | 外部请求 | 默认零外部请求；只有打开真模型时才会调用宿主配置的模型服务 |
 
@@ -469,18 +342,60 @@ mem-16 「npm 发布时本机 registry 指向淘宝镜像，必须显式加 --re
 
 ---
 
+## 兼容性
+
+**设计原则**：只做特性探测，不做版本判断；任何宿主能力缺失都降级而不是报错。
+
+| 场景 | 行为 |
+|---|---|
+| 与其他插件工具重名 | 跳过该工具并记警告，其余照常注册 |
+| HTTP 路由被占用 | 跳过该路由，插件继续加载 |
+| 宿主没有 `webServer` / `events` / `effect` | 对应功能静默关闭，不抛错 |
+| `agent/pre-step` 的 `next` 缺失 | 返回 `undefined`，不阻断模型步骤 |
+| 宿主更新导致工具 schema 不被接受 | 该工具注册失败，但不影响其他工具 |
+
+**刻意不做的事**（避免和其他插件打架）：不修改全局 patch、不覆写系统提示、不接管 `tools/post-execute`、不声明 `peerDependencies`（避免 pnpm 的 `ERESOLVE`）。
+
+**已验证环境**：DSH **0.2.1-rc.5**（desktop profile 与 superagent profile）+ Node **22.20 / 22.23** + Windows 与 Linux（Ubuntu 22.04 / WSL2）。155 条测试在两个平台都全绿。
+
+**运行时依赖：0。** `lib/*.js` 的 import 全部是 `node:*`（path / fs / crypto / os / url）。
+
+---
+
+## 已知限制
+
+| 限制 | 说明 | 影响 |
+|---|---|---|
+| **单实例写入** | 用文件锁防止两个进程同时写坏，但**不防后写覆盖**：两个 DSH 实例各持一份内存快照时，后写的会盖掉先写的。检测到会在状态里告警。 | 多开 DSH 时请只在一个窗口里写记忆 |
+| **单机存储** | 数据是本地 JSON 文件，没有服务端、没有团队共享。 | 多人协作场景不适用 |
+| **无增量同步** | 导出是整库快照，导入是整体替换，不是合并。 | 跨设备迁移请先导出再导入 |
+| **反思引擎默认关闭** | 开启后调用真实模型会产生额外 token 消耗，单次反思三次模型调用。 | 对 token 敏感时保持关闭 |
+| **语义损坏检测不到** | 校验和能发现字节级损坏，但文件被写成合法 JSON 却语义错误（例如被清空）只能靠快照回滚。 | 建议定期导出备份 |
+| **上锁是共享口令** | 不是账号体系；口令泄露即失效。 | 不要把口令发给别人 |
+| **场合判定只记录** | 0.12.0 只攒样本，不改注入行为；阈值抄自 Rasa（英文意图分类），中文分布未验证。 | 人机味还在，等样本够了再调 |
+| **插件路由不走口令门禁** | `lockToken` 只保护带 `x-cognition-token` 校验的那批接口；`state` 等公开接口本机任意进程可读。 | 共机时注意 |
+| **`index.ts` 偏大** | 单文件 2300+ 行，路由与装配混在一起。 | 维护成本，计划在后续版本拆分 |
+
+### 数据备份建议
+
+- 设置页「导出」可以随时导出整库
+- `.snapshots/` 目录保留最近 5 份自动快照
+- 重要数据建议同时保留一份外部备份
+
+---
+
 ## 卸载
 
-插件**运行时注册的东西**（7 个工具、4 条 HTTP 路由、后台巡视定时器、页面状态条）会在卸载时自动撤销。
+插件**运行时注册的东西**（7 个工具、全部 HTTP 路由、后台巡视定时器、侧边栏图标与面板）会在卸载时自动撤销。
 
-但有四样东西不会自动消失，需要显式清理：
+但磁盘上的数据不会自动消失，需要显式清理：
 
 | 残留 | 说明 |
 |---|---|
-| `cognition-state.json` | 记忆的落盘 |
-| `tasks.json` | 长程任务台账 |
-| `cognition-playbook.json` | 准则本 |
-| `cognition-audit.jsonl` | 审计日志 |
+| `cognition-state.json` / `tasks.json` | 记忆与待办 |
+| `cognition-playbook.json` / `cognition-topics.json` | 准则本与主题 |
+| `cognition-persona.json` | 人格 |
+| `cognition-audit.jsonl` / `cognition-injection.jsonl` / `cognition-style.jsonl` / `cognition-register.jsonl` | 各类日志 |
 | `.snapshots/` | 自动快照 |
 | `AGENTS.md` 第九节 | 会继续指示模型调用已不存在的 `cognition_context` |
 | 浏览器 `localStorage['cognition-token']` | 上锁口令 |
@@ -505,26 +420,29 @@ plugin_manager remove_bundle target=dsh-cognition-engine
 
 ## 架构
 
-| 模块 | 职责 | 设计来源 |
-|---|---|---|
-| `memory.ts` | 双时态存储、三种召回、冲突检测、Inline&Spill | [LongMemory](https://github.com/CaviraOSS/LongMemory) |
-| `topics.ts` | 主题注册表：人定的适用范围键、别名匹配、归档 | [Memobase](https://docs.memobase.io/features/profile/profile) / [Letta](https://docs.letta.com/v1-sdk/memory/memory-blocks) |
-| `playbook.ts` | 准则本：条目化存储、确定性合并、渲染与预算、过期与冲突 |
+| 模块 | 职责 |
+|---|---|
+| `memory.ts` | 双时态存储、四种召回、冲突检测、Inline&Spill |
+| `topics.ts` | 主题注册表：人定的适用范围键、别名匹配、归档 |
+| `playbook.ts` | 准则本：条目化存储、确定性合并、渲染与预算、过期与冲突、开工前自查 |
 | `distill.ts` | 准则蒸馏的提示词与解析（Reflector 五字段 + 候选） |
-| `audit.ts` | 追加式审计日志（JSONL，按大小轮转） |
-| `reflection.ts` | 三段式反思、Worker 队列 | [Hegelion](https://github.com/Hmbown/Hegelion) |
-| `proactive.ts` | 默认不做的发言闸门 | [dsh-superagent-prototype](https://github.com/deepseek-ai/dsh-superagent-prototype) |
-| `task_manager.ts` | 主题下的待办：增删改状态、原子落盘 | 自研 |
-| `persist.ts` | 记忆快照存储 | 自研 |
-| `views.ts` | 页面只读视图 | 自研 |
-| `tools.ts` | 七个工具的参数表与执行体（状态全部来自依赖注入） | — |
-| `util.ts` | 无状态纯函数：参数收敛、schema 自检、异常转文本 | — |
-| `index.ts` | 插件装配：建实例、注册工具、HTTP 路由、巡视、生命周期 | — |
-| `client.js` | 输入框上方的浮层与状态条（四个页签） | — |
-
-反思闭环参考了 [Generative Agents](https://arxiv.org/abs/2304.03442) 的「记忆 → 反思 → 回写记忆」。
-主题层从 [CAM](https://arxiv.org/abs/2510.05520) 借鉴了同化/顺应概念，但**实现已移除**——
-CAM 是为长文档阅读理解设计的，不适用于跨会话个人记忆（理由见 docs/topic-research.md）。
+| `persona.ts` | 人格块 / 用户画像、提案确认、锁定短语、快照撤销 |
+| `style.ts` | 风格指纹与语域分桶（只存统计量，不存原文） |
+| `register.ts` | 场合判定三层（关键词 / 表层特征 / 双阈值兜底），只记录 |
+| `cpe.ts` | 能力回归：冻结回归集 + 变更闸门 + 事故记录 |
+| `budget.ts` | 每周学习预算（修旧 / 学新 / 预留）、5 条停止信号 |
+| `shadow.ts` | 超预算候选的试用池（21 天 TTL、晋升条件） |
+| `notlearn.ts` | 八类不学清单（硬拒 / 软拒） |
+| `retrieval.ts` | 召回日志与人工标注评测 |
+| `proactive_scan.ts` | 主动提醒与工单阶段机 |
+| `reflection.ts` | 三段式反思、Worker 队列 |
+| `events.ts` | 准则事件日志（append-only JSONL） |
+| `injection_log.ts` | 注入快照与轮次反馈跟踪 |
+| `task_manager.ts` / `persist.ts` / `audit.ts` / `views.ts` | 待办、快照、审计、页面只读视图 |
+| `tools.ts` | 七个工具的参数表与执行体（状态全部来自依赖注入） |
+| `util.ts` | 无状态纯函数：参数收敛、schema 自检、异常转文本 |
+| `index.ts` | 插件装配：建实例、注册工具、HTTP 路由、巡视、生命周期 |
+| `client.js` | 侧边栏一级面板（六个页签） |
 
 ---
 
@@ -533,18 +451,17 @@ CAM 是为长文档阅读理解设计的，不适用于跨会话个人记忆（�
 ```sh
 npm install
 npm run build      # tsc → lib/
-npm test           # 33 项单元测试
-npm run eval       # 20 条评测 + token 预算门禁
+npm test           # 155 项单元测试
+npm run eval       # 评测用例 + token 预算门禁
 ```
 
 `npm run eval -- --update` 在确认变好之后重写基线。
 
 ### 质量门禁
 
-- 单元测试 **64 / 64**
-- 评测用例 **16 / 16**，判分器自检、打包自检 5 项、兼容性 5 项
-- 工具 schema 固定开销 **1352 tokens**（预算 1400）
-- 单次调用输出上限 344 tokens（预算 600）
+- 单元测试 **155 / 155**
+- TypeScript 全严格模式：`strict` + `noUncheckedIndexedAccess` + `noUnusedLocals` + `noUnusedParameters` + `verbatimModuleSyntax` + `erasableSyntaxOnly`
+- 工具 schema 固定开销与单次调用输出上限在 `npm run eval` 里卡
 
 发版前按六步走，不可跳步：**① 卸载验证 ② 兼容性检查 ③ 代码优化
 ④ README 覆盖检查 ⑤ 在真实入口点一遍 ⑥ 发布**。
@@ -572,51 +489,7 @@ npm run eval       # 20 条评测 + token 预算门禁
 
 ---
 
-## 兼容性
-
-**设计原则**：只做特性探测，不做版本判断；任何宿主能力缺失都降级而不是报错。
-
-| 场景 | 行为 |
-|---|---|
-| 与其他插件工具重名 | 跳过该工具并记警告，其余 6 个照常注册 |
-| HTTP 路由被占用 | 跳过该路由，插件继续加载 |
-| 宿主没有 `webServer` / `events` / `effect` | 对应功能静默关闭，不抛错 |
-| `agent/pre-step` 的 `next` 缺失 | 返回 `undefined`，不阻断模型步骤 |
-| 宿主更新导致工具 schema 不被接受 | 该工具注册失败，但不影响其他工具 |
-
-**刻意不做的事**（避免和其他插件打架）：不修改全局 patch、不覆写系统提示、不接管 `tools/post-execute`、不声明 `peerDependencies`（避免 pnpm 的 `ERESOLVE`）。
-
-**已验证环境**：DSH **0.2.1-rc.5**（desktop profile 与 superagent profile）+ Node **22.20 / 22.23** + Linux（Ubuntu 22.04 / WSL2）。
-143 条测试在 Windows 与 Linux 两边都全绿。每次 `npm run eval` 都会回归「兼容性」三项。
-
----
-
-## 已知限制
-
-这些是当前版本明确不做或做不到的，写在前面免得踩坑：
-
-| 限制 | 说明 | 影响 |
-| --- | --- | --- |
-| **单实例写入** | 用文件锁防止两个进程同时写坏，但**不防后写覆盖**：两个 DSH 实例各持一份内存快照时，后写的会盖掉先写的。检测到这种情况会在状态里给出告警。 | 多开 DSH 时请只在一个窗口里写记忆 |
-| **单机存储** | 数据是本地 JSON 文件，没有服务端、没有团队共享。 | 多人协作场景不适用 |
-| **无增量同步** | 导出是整库快照，导入是整体替换，不是合并。 | 跨设备迁移请先导出再导入 |
-| **反思引擎默认关闭** | 开启后调用真实模型会产生额外 token 消耗，单次反思三次模型调用。 | 对 token 敏感时保持关闭 |
-| **语义损坏检测不到** | 校验和能发现字节级损坏，但如果文件被写成了合法 JSON 却语义错误（例如被清空），只能靠快照回滚。 | 建议定期导出备份 |
-| **上锁是共享口令** | 不是账号体系；口令泄露即失效。 | 不要把口令发给别人 |
-| **场合判定只记录** | 0.12.0 只攒样本，不改注入行为；阈值抄自 Rasa（英文意图分类），中文分布未验证。 | 人机味还在，等样本够了再调 |
-| **插件路由不走口令门禁** | `lockToken` 只保护带 `x-cognition-token` 校验的那批接口；`state` 等公开接口本机任意进程可读。 | 共机时注意 |
-| **index.ts 偏大** | 单文件 2300+ 行，路由与装配混在一起。 | 维护成本，计划在后续版本拆分 |
-| **`dsh.client.inject` 仍指向 conversation 包** | 当前实际只用 `main` / `sidebar.panellist` 两个槽位；conservative 保留 conversation（web profile 必装，无实际风险）。 | 无功能影响 |
-
-### 数据备份建议
-
-- 设置页「导出」可以随时导出整库
-- `.snapshots/` 目录保留最近 5 份自动快照
-- 重要数据建议同时保留一份外部备份
-
----
-
-## 设计依据：论文实测数据
+## 设计依据（实测数据）
 
 这一节记录「按论文做了，但实测对不上」的地方——参数不能直接搬。
 
@@ -627,22 +500,10 @@ npm run eval       # 20 条评测 + token 预算门禁
 | 情况 | 处置 | 度量 |
 |---|---|---|
 | 归一化后完全相同（全半角/标点/空白差异） | 直接拒 | 文本哈希 |
-| 高度重复 | 自动合并 | min(余弦, LCS) ≥ **0.85** |
-| 相近但不同 | 收下 + 标注「与 X 相近」 | min(余弦, LCS) ∈ [0.5, 0.85) |
-| 其余 | 收下 | — |
-
-**合并用 `min` 而不是 `max`**：`max` 是召回导向（适合冲突提示），
-而合并不可逆，必须两个度量都确认——宁可漏合并，不可错合并。
-
-实测标定点（字二元组余弦 / LCS）：
-
-| 场景 | 余弦 | LCS |
-|---|---|---|
-| 完全相同 | 1.000 | 1.000 |
-| 只差几个字 | 0.759 | 0.87 |
-| 同义改写 | 0.694 | 0.60 |
-| 意思相同、措辞不同 | 0.522 | 0.59 |
-| 完全无关 | 0.000 | 0.16 |
+| 只差几个字 | 0.759 / 0.87 | 余弦 / LCS |
+| 同义改写 | 0.694 / 0.60 | 余弦 / LCS |
+| 意思相同、措辞不同 | 0.522 / 0.59 | 余弦 / LCS |
+| 完全无关 | 0.000 / 0.16 | 余弦 / LCS |
 
 ### 冲突判定阈值
 
@@ -697,43 +558,42 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 
 ---
 
-
 ## 研究文档
 
 设计决策背后的调研都在 `docs/` 里，**包括没采纳的方案和为什么没采纳**：
 
 | 文档 | 内容 |
 |---|---|
+| [docs/register-research.md](docs/register-research.md) | **场合判定依据**：Chat Discrimination（ACL 2018）、Rasa 三组件（Keyword / LexicalSyntactic / FallbackClassifier 双阈值）、意图分类级联、我们踩的两个坑 |
 | [docs/persona-research.md](docs/persona-research.md) | **Persona 层精读**：Letta block 结构、Anchor 人格卡与探针、Assistant Axis 漂移、MaiBot 三分法、SillyTavern 字段、`cognition-persona.json` schema |
 | [docs/research-persona-hci-philosophy-npc.md](docs/research-persona-hci-philosophy-npc.md) | **HCI / 哲学 / 游戏 NPC 深挖**：CASA、拟人化实证、信任三维、恐怖谷、人格一致性倒 U、Locke/Parfit、Sartre、言语行为、Sims/OCC/PAD/Façade、操纵 vs 服务 |
 | [docs/research-persona-memory-landscape.md](docs/research-persona-memory-landscape.md) | **专业项目/论文横向对比**：4 张总表（商业/开源/中文/评测）、证据分级 S–E、7 个审计方向、人格 Git 空白、7 条伪需求、借 3 避 3、8–12 周 MVP |
 | [docs/persona-cross-disciplinary.md](docs/persona-cross-disciplinary.md) | **Persona 跨学科扫描**：心理学/神经科学/语言学/HCI/哲学/游戏 NPC，能用/不能用总表 + 20 个项目对比 |
-| [docs/persona-format-and-style-metrics.md](docs/persona-format-and-style-metrics.md) | **Persona 格式与中文风格度量**：Character Card V2 完整字段表、MaiBot expression/turn_trigger 源码拆解、`cognition-persona.json` 正式 JSON Schema、26 项中文风格指纹与可运行 JS、expression 表生命周期、竞品对比 |
-| [docs/persona-audit-research.md](docs/persona-audit-research.md) | **Persona 审计机制**：Anchor 论文逐节拆解（2,008 对话 / 27 人格 / 9 日程 / 3 记忆设置 / 4 模型）、Identity Probe 与 Trajectory Probe 全量还原、CharacterEval/CharacterBench/InCharacter/PersonaMem/LongMemEval/HorizonBench 对比、Assistant Axis 与谄媚、三层审计方案 + 20 题题库 + 月度自检清单 + JSON/脚本 |
-| [docs/checkpoint-2026-11-05.md](docs/checkpoint-2026-11-05.md) | **存档：2026-11-05**：完成事项、设计决策、还差什么、自我学习研究结论、下次第一件事 |
-| [docs/research-self-evolving-papers.md](docs/research-self-evolving-papers.md) |
-| [docs/research-cpe-mechanism.md](docs/research-cpe-mechanism.md) |
-| [docs/research-event-sourcing.md](docs/research-event-sourcing.md) | **事件溯源深挖**：Fowler 原始定义三大能力（重建/时间查询/重放）、MS 的六条警告、8 种准则事件设计、与双时态的关系、**结论：先写事件别改存储** |
-| [docs/research-learning-budget.md](docs/research-learning-budget.md) |
-| [docs/research-docs-link-check.md](docs/research-docs-link-check.md) | **文档一致性检查**：47 处相对链接全有效；无逐行重复（最大重合 6.2%）；4 组主题重叠待收敛 | **学习预算设计**：W=clamp(ceil(N×1%),4,12)、修旧/学新/预留分配、5 条停止信号、shadow 试运行、8 类不学清单、伪代码 + 8 条验收 |
-| [docs/research-memobase-update-policy.md](docs/research-memobase-update-policy.md) | **Memobase 更新策略**：`update_description` 是自然语言指令（不是枚举）、覆盖/保留最早两种官方示例、validate_mode vs strict_mode | **CPE 机制拆解**：能力侵蚀的形式化（`L_<t(R_t) > L_<t(R_{t-1})`）、曲率机理、`Ω` 正则、四通道；以及我们的纯 JSON 版（回归集 + 变更闸门） |
-| [docs/research-agent-skills-spec.md](docs/research-agent-skills-spec.md) | **Agent Skills 规范核验**：`name` 必须 ASCII 小写且与目录同名（中文只能进 description）、description 1–1024、三级披露 token 预算、validate 用法 |
-| [docs/research-memobase-profile-model.md](docs/research-memobase-profile-model.md) | **Memobase 画像模型**：两层 topic→sub_topics、slot 白名单、**`profile_delta` 必填**、`update_description` 更新策略 | **自我进化论文精读**：SEAgent(11.3%→34.5%) / Mem2Evolve(+18.53%) / CPE(能力侵蚀 41.8%→52.8%) / COVE 双通道 + 三套 taxonomy |
+| [docs/persona-format-and-style-metrics.md](docs/persona-format-and-style-metrics.md) | **Persona 格式与中文风格度量**：Character Card V2 完整字段表、MaiBot expression/turn_trigger 源码拆解、`cognition-persona.json` 正式 JSON Schema、26 项中文风格指纹与可运行 JS |
+| [docs/persona-audit-research.md](docs/persona-audit-research.md) | **Persona 审计机制**：Anchor 论文逐节拆解、Identity Probe 与 Trajectory Probe 全量还原、CharacterEval/CharacterBench/InCharacter/PersonaMem/LongMemEval/HorizonBench 对比、三层审计方案 + 20 题题库 + 月度自检清单 |
+| [docs/research-self-evolving-papers.md](docs/research-self-evolving-papers.md) | **自我进化论文精读**：SEAgent(11.3%→34.5%) / Mem2Evolve(+18.53%) / CPE(能力侵蚀 41.8%→52.8%) / COVE 双通道 + 三套 taxonomy |
+| [docs/research-cpe-mechanism.md](docs/research-cpe-mechanism.md) | **CPE 机制拆解**：能力侵蚀的形式化 `L_<t(R_t) > L_<t(R_{t-1})`、曲率机理、`Ω` 正则、四通道；以及我们的纯 JSON 版（回归集 + 变更闸门） |
+| [docs/research-event-sourcing.md](docs/research-event-sourcing.md) | **事件溯源深挖**：Fowler 原始定义三大能力、MS 的六条警告、8 种准则事件设计、与双时态的关系、结论：先写事件别改存储 |
+| [docs/research-learning-budget.md](docs/research-learning-budget.md) | **学习预算设计**：`W=clamp(ceil(N×1%),4,12)`、修旧/学新/预留分配、5 条停止信号、shadow 试运行、8 类不学清单、伪代码 + 8 条验收 |
+| [docs/research-memobase-update-policy.md](docs/research-memobase-update-policy.md) | **Memobase 更新策略**：`update_description` 是自然语言指令（不是枚举）、两种官方示例、validate_mode vs strict_mode |
+| [docs/research-memobase-profile-model.md](docs/research-memobase-profile-model.md) | **Memobase 画像模型**：两层 topic→sub_topics、slot 白名单、`profile_delta` 必填、`update_description` 更新策略 |
+| [docs/research-agent-skills-spec.md](docs/research-agent-skills-spec.md) | **Agent Skills 规范核验**：`name` 必须 ASCII 小写且与目录同名、description 1–1024、三级披露 token 预算、validate 用法 |
 | [docs/research-agent-projects-deep-read.md](docs/research-agent-projects-deep-read.md) | **19 个 Agent 项目精读**：只有 8 个有运行时学习机制、L4 为 0；编排≠学习；Super-agent 的 P50/P95 不是 SLA；star 可信度提醒 |
 | [docs/research-learning-theory-deep-read.md](docs/research-learning-theory-deep-read.md) | **学习理论深读**：控制论/神经科学/心理学/教育学/经济学/进化生物学/安全对齐，7 条设计准则（含字段与验收） |
 | [docs/self-learning-agent-landscape.md](docs/self-learning-agent-landscape.md) | **自我学习 Agent 2026 全景**：四层框架、三个综述、SEAgent/Mem2Evolve/CPE、热门项目、能用/不能用、我们的位置 |
-| [docs/upgrade-plan-v3.md](docs/upgrade-plan-v3.md) | **升级方案 v3.0（执行版）**：四个支柱、十个阶段、数据布局、风险对策、五个里程碑、不做清单 |
+| [docs/upgrade-plan-v3.md](docs/upgrade-plan-v3.md) | **升级方案 v3.0（执行版）**：四个支柱、十个阶段、数据布局、风险对策、五个里程碑、不做清单；含 S1–S10 实现状态 |
 | [docs/vision-and-roadmap.md](docs/vision-and-roadmap.md) | **愿景与路线图**：五个张力、四层能力、六个阶段、北极星指标 |
 | [docs/research-bm25-retrieval.md](docs/research-bm25-retrieval.md) | BM25 / IDF / 中文分词：实测 MRR、参数网格搜索、显著性检验（含可复现基准 `docs/bench-bm25/`） |
 | [docs/research-negex-and-ranking.md](docs/research-negex-and-ranking.md) | NegEx 完整规则表（16 伪否定 / 15 后置否定 / 终止词）、中文否定 12 条规则、双重否定统计、多信号排序（RRF / Generative Agents 对比） |
 | [docs/research-humanlike-agents-and-autonomy.md](docs/research-humanlike-agents-and-autonomy.md) | 拟人化机制拆解（人设/记忆/时机/风格）、B 站自动化真实流水线、QQ bot 可控记忆四层、LLM 自主行动与学习论文清单 |
 | [docs/research-super-agent-and-persona.md](docs/research-super-agent-and-persona.md) | Super-agent 项目清单 + 人格块设计 + 「自我学习」四层辨析（L1 上下文 / L2 记忆 / L3 工具自造 / L4 权重更新） |
-| [docs/research-frozen-weight-learning.md](docs/research-frozen-weight-learning.md) | 冻结权重下的学习与遗忘：ExpeL / Voyager / AWM / Reflexion / ReasoningBank / ACE / PATH-Bench / Oblivion 的机制与数字 |
+| [docs/research-frozen-weight-learning.md](docs/research-frozen-weight-learning.md) | 冻结权重下的学习与遗忘：ExpeL / Voyager / AWM / Reflexion / ReasoningBank / ACE / PATH-Bench / Oblivion |
 | [docs/research-philosophy-engineering.md](docs/research-philosophy-engineering.md) | 哲学工程化项目逐项核实：GRACE / SCL / LeAP / ITEM / HADES / cognee，**含两个被证伪的引用** |
 | [docs/topic-research.md](docs/topic-research.md) / [topic-research-oss.md](docs/topic-research-oss.md) | 为什么删掉自动聚类：论文证据 + 开源项目对比 |
 | [docs/in-context-learning-research.md](docs/in-context-learning-research.md) | 「学习」在这个插件里到底指什么；四类记忆我们占哪几格 |
 | [docs/upgrade-plan-v2.1.md](docs/upgrade-plan-v2.1.md) | 可信度治理的完整设计方案（六条机制 + 八阶段路线 + 验收标准） |
 | [docs/evaluation-review-and-learning.md](docs/evaluation-review-and-learning.md) | 对外部评估备忘的逐条核实与反驳（含「哪三条说错了」） |
+| [docs/checkpoint-2026-11-05.md](docs/checkpoint-2026-11-05.md) | **存档：2026-11-05**：完成事项、设计决策、还差什么、下次第一件事 |
 
 **取证原则：查不到的写「未找到」，不补全。** 上面几份文档里明确标注了几处查不到的东西：
 
@@ -742,134 +602,102 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 - 中文「规则/指令文本」否定识别的论文**未找到**；
 - 成熟的中文 NegEx + 作用域开源实现**未找到**。
 
+---
+
 ## 参考与致谢
 
-本项目的机制设计来自以下开源工作。**只借鉴思想，未复制任何代码**——所有实现均为重新编写。
+本项目的机制设计来自以下工作。**只借鉴思想，未复制任何代码**——所有实现均为重新编写。
 
 ### 记忆与主题
 
 | 项目 | 借了什么 |
 |---|---|
 | [LongMemory](https://github.com/CaviraOSS/LongMemory) | 双时态模型：`validFrom/validTo` 与 `recordedAt/supersededAt` 两条时间轴；半开区间判定；闭合区间不改变内容指纹与 id |
-| [CAM: A Constructivist View of Agentic Memory](https://arxiv.org/abs/2510.05520)（NeurIPS 2025） | 借鉴同化/顺应概念。**实现已移除**：CAM 面向长文档阅读理解，实测不适合跨会话个人记忆（见 docs/topic-research.md） |
-| [A-MEM: Agentic Memory](https://arxiv.org/abs/2502.12110)（NeurIPS 2025） | 卡片盒式动态链接：新笔记写入时分析历史笔记并建立语义连接。本项目的 `linkedBy` 记录「为什么连上它」（共享词 + 相似度）即源于此 |
+| [CAM: A Constructivist View of Agentic Memory](https://arxiv.org/abs/2510.05520)（NeurIPS 2025） | 借鉴同化/顺应概念。**实现已移除**：面向长文档阅读理解，不适合跨会话个人记忆（见 docs/topic-research.md） |
+| [A-MEM: Agentic Memory](https://arxiv.org/abs/2502.12110)（NeurIPS 2025） | 卡片盒式动态链接：新笔记写入时分析历史笔记并建语义连接。本项目 `linkedBy` 记录「为什么连上它」即源于此 |
 | [MemGPT / Letta](https://github.com/letta-ai/letta) | 记忆分层与分页（对照参考） |
-| [GraphRAG](https://github.com/microsoft/graphrag) | 社区摘要参与检索。**本项目已移除**：社区检索伤害细节型 QA（见 docs/topic-research.md） |
-| [RAPTOR](https://arxiv.org/abs/2401.18059) | 递归聚类 + 逐层摘要的树状检索。**本项目已移除**：10² 条记忆规模下无需压缩 |
-| [HippoRAG: Neurobiologically Inspired Long-Term Memory for LLMs](https://arxiv.org/abs/2405.14831)（NeurIPS 2024） | PPR 在知识图上传播相关度。**本项目已移除**：作者自认在基础事实记忆上不如标准 RAG |
-
-### 论文引用
-
-实现中直接用到的三篇：
-
-- **HippoRAG** — Gutiérrez et al. *HippoRAG: Neurobiologically Inspired Long-Term Memory for Large Language Models.* NeurIPS 2024. [arXiv:2405.14831](https://arxiv.org/abs/2405.14831)
-- **RAPTOR** — Sarthi et al. *RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval.* [arXiv:2401.18059](https://arxiv.org/abs/2401.18059)
-- **A-MEM** — Xu et al. *A-MEM: Agentic Memory for LLM Agents.* NeurIPS 2025. [arXiv:2502.12110](https://arxiv.org/abs/2502.12110)
-
-建构主义记忆框架另见 CAM（NeurIPS 2025，本项目仅借鉴概念未保留实现），辩证反思的 Prompt 编排另见 Hegelion，见下方各节。
-
-### 信念修正与图结构
-
-| 项目 | 借了什么 |
-|---|---|
-| [memoripy](https://github.com/caspianmoon/memoripy)（★693） | **`admission.py` 的准入管线**：噪声过滤、敏感数据隔离、指令注入拦截、权威冲突判定（`_higher_authority_conflict`）；以及「不可变版本 + 完整历史」的模型 |
-| [memoryweb](https://github.com/corbym/memoryweb)（★14） | **叙事边** `Edge{from,to,relationship,narrative}`：边不只有权重，还要说明为什么存在 |
-| [Graphiti](https://github.com/getzep/graphiti)（★32k） | 时序边的建模方式（事实随时间为真/失效） |
-| [Kumiho](https://arxiv.org/abs/2603.17244)（arXiv:2603.17244） | **typed dependency edges** 的理论依据；AGM 信念修正与图原生记忆的对应关系 |
+| [GraphRAG](https://github.com/microsoft/graphrag) | 社区摘要参与检索。**已移除**：社区检索伤害细节型 QA |
+| [RAPTOR](https://arxiv.org/abs/2401.18059) | 递归聚类 + 逐层摘要的树状检索。**已移除**：10² 条规模无需压缩 |
+| [HippoRAG](https://arxiv.org/abs/2405.14831)（NeurIPS 2024） | PPR 在知识图上传播相关度。**已移除**：作者自认在基础事实记忆上不如标准 RAG |
 
 ### 准则与上下文工程
 
 | 项目 | 借了什么 |
 |---|---|
-| [ACE: Agentic Context Engineering](https://arxiv.org/abs/2510.04618)（ICLR 2026） | **一条式条目 + 双向计数**（`[ctxt-00001] helpful=2 harmful=0 :: …`）；**LLM 只产 ADD 候选，合并/去重/淘汰交给确定性代码**——这是增量比整篇重写高 13.4 个点的根因；反思 3–5 轮最优 |
-| [Dynamic Cheatsheet](https://arxiv.org/abs/2504.07952)（EACL 2026） | 分节 + 使用计数、长度预算写进提示词；**DC-∅ 对照**（同指令 + 空小抄）说明「换成任何项目都成立」的套话增益为零，据此加了私有性校验 |
-| [MemoryBank](https://arxiv.org/abs/2305.10250)（AAAI 2024） | 遗忘曲线 + 「被召回即增大强度 S」的设计。**公式已改**：从它的指数形式换成幂律（见下「遗忘曲线」），因为指数在 90 天时只剩 0.0001，等于把记忆判死 |
-| [Mem0](https://arxiv.org/abs/2504.19413) | ADD / UPDATE / DELETE / NOOP 四分类与「UPDATE 前必须比较信息量」；其 token −73%、延迟 −92% 的数据支撑了「蒸馏优于堆上下文」的判断 |
+| [ACE: Agentic Context Engineering](https://arxiv.org/abs/2510.04618)（ICLR 2026） | **一条式条目 + 双向计数**（`[ctxt-00001] helpful=2 harmful=0 :: …`）；**LLM 只产 ADD 候选，合并/去重/淘汰交给确定性代码**——这是增量比整篇重写高 13.4 个点的根因 |
+| [Dynamic Cheatsheet](https://arxiv.org/abs/2504.07952)（EACL 2026） | 分节 + 使用计数、长度预算写进提示词；**DC-∅ 对照**说明「换成任何项目都成立」的套话增益为零，据此加了私有性校验 |
+| [MemoryBank](https://arxiv.org/abs/2305.10250)（AAAI 2024） | 遗忘曲线 + 「被召回即增大强度」。**公式已改**：从指数换成幂律（指数在 90 天只剩 0.0001） |
+| [Mem0](https://arxiv.org/abs/2504.19413) | ADD / UPDATE / DELETE / NOOP 四分类；token −73%、延迟 −92% 的数据支撑「蒸馏优于堆上下文」 |
 
-### 反思
-
-| 项目 | 借了什么 |
-|---|---|
-| [Hegelion](https://github.com/Hmbown/Hegelion) | 三段式 Prompt 编排：THESIS → ANTITHESIS（`CONTRADICTION:` / `EVIDENCE:` 成对）→ SYNTHESIS，以及合成的验收条件 |
-| [Self-Refine](https://github.com/madaan/self-refine) | 生成 → 自我反馈 → 重写的迭代范式 |
-| [Reflexion](https://github.com/noahshinn/reflexion) | 反思写回记忆、供下次使用的思路 |
-| [Self-RAG](http://selfrag.github.io) | 把反思作为过程内控制信号（对照参考） |
-| [Generative Agents](https://arxiv.org/abs/2304.03442) | 「记忆 → 反思 → 回写记忆」闭环；近期性 / 重要性 / 相关性三因子检索 |
-
-### 插件机制
+### 反思与信念修正
 
 | 项目 | 借了什么 |
 |---|---|
-| [dsh-superagent-prototype](https://github.com/deepseek-ai/dsh-superagent-prototype) | 准入矩阵与「默认不做」；Inline & Spill 的 `chars + read pointer`；Worker 异步隔离 |
-| [dsh-context-doctor](https://github.com/Zhenyu98/dsh-context-doctor) | 工具 schema 的 token 成本量化思路（本项目用真分词器自测） |
-| [dsh-tool-squeeze](https://github.com/w2829562572-dev/dsh-tool-squeeze) | 工具结果压缩与原文留存的取舍（评估后未采用） |
+| [Hegelion](https://github.com/Hmbown/Hegelion) | 三段式 Prompt 编排：THESIS → ANTITHESIS（`CONTRADICTION:` / `EVIDENCE:` 成对）→ SYNTHESIS |
+| [Self-Refine](https://github.com/madaan/self-refine) / [Reflexion](https://github.com/noahshinn/reflexion) | 生成→自评→重写；反思写回记忆供下次使用 |
+| [Generative Agents](https://arxiv.org/abs/2304.03442) | 「记忆 → 反思 → 回写记忆」闭环；近期性/重要性/相关性三因子检索 |
+| [memoripy](https://github.com/caspianmoon/memoripy)（★693） | **准入管线**：噪声过滤、敏感数据隔离、指令注入拦截、权威冲突判定；「不可变版本 + 完整历史」 |
+| [Graphiti](https://github.com/getzep/graphiti)（★32k） | 时序边建模（事实随时间为真/失效） |
+| [Kumiho](https://arxiv.org/abs/2603.17244) | **typed dependency edges** 的理论依据；AGM 信念修正与图原生记忆的对应 |
+| [Doyle, *A Truth Maintenance System*](https://dspace.mit.edu/handle/1721.1/6197)（AI 1979） | **撤回信念不是删一行**：信念携带 justification，撤回沿依赖网络传播。本项目准则的 `evidence` 状态（intact/weakened/orphaned）就是它 |
+| [W3C PROV-O](https://www.w3.org/TR/prov-o/) / [AGM](https://doi.org/10.2307/2274239) | `prov:wasDerivedFrom` 作为一等推导边；expansion / revision / contraction 三分与确信度排序 |
+
+### 经验学习与准入
+
+| 项目 | 借了什么 |
+|---|---|
+| [LeAP](https://zenodo.org/records/21029662) | **四层认识类型**（observation → claim → fact → belief）+ 写权限分离：agent 不能自封为 fact |
+| [SCL](https://arxiv.org/abs/2510.05107) | **propose vs verified state** 分离：模型只提候选，外部记忆存已验证状态 |
+| [ExpeL](https://arxiv.org/abs/2308.10144)（AAAI 2024） | 从经验对比提取「洞察」并带计数 → 本项目的准则本与 `helpful/harmful` |
+| [Voyager](https://arxiv.org/abs/2305.16291) | 技能必须验证才能入库；本项目「候选 → 人工确认 → active」同构 |
+| [ReasoningBank](https://arxiv.org/abs/2509.25140)（ICLR 2026） | k=1 检索就够；判官仅 72.7% 准确但 70–90% 噪声下不敏感 → 降级门槛设为「样本 ≥5 且好评率 <0.3」 |
+| [forge_dc](https://openreview.net/forum?id=7XhMLOsQoA)（NeurIPS 2026 PALM） | **带触发点的祈使规则合规 95%，描述性文本 55%，token 少约 10 倍**——本项目每条准则带 `when` 的直接依据 |
+| [MemPrompt](https://arxiv.org/abs/2201.06009) | 让模型先输出「它对用户意图的理解」，用户纠正理解而不是纠正答案 |
+
+### 场合判定（0.12.0）
+
+| 来源 | 借了什么 |
+|---|---|
+| [Rasa — KeywordIntentClassifier](https://github.com/RasaHQ/rasa/blob/main/docs/docs/components.mdx) | 第 0 层：关键词**精确子串匹配**、命中即给 `confidence 1.0`、**不进打分**——明确的和模糊的混在一起算必然互相污染 |
+| [Rasa — FallbackClassifier 源码](https://github.com/RasaHQ/rasa/blob/main/rasa/nlu/classifiers/fallback_classifier.py) | **双阈值**：除了 `threshold`（最高分不够），还有 `ambiguity_threshold`（top-2 分差太小 → 分不清）。单阈值抓不到「两个候选都很像」 |
+| [Rasa — Fallback and Human Handoff](https://legacy-docs-oss.rasa.com/docs/rasa/fallback-handoff/) | 「置信度低就走兜底而不是硬猜」的总体思路 |
+| [Chat Discrimination for Intelligent Conversational Agents](https://aclanthology.org/W18-3004/)（ACL RepL4NLP 2018） | 任务定义：判定一句话是 task-oriented 还是 chit-chat。**该走训练路线，我们没有标注数据，故不采用其模型** |
+| [A Few-shot Approach to Task-oriented Dialogue Enhanced with Chitchat](https://aclanthology.org/2024.sigdial-1.50/)（SIGDIAL 2024） | 两者混合对话的处理（对照参考） |
+| [大多数 Agent 路由器跳过的意图分类层](https://tianpan.co/zh/blog/2026/04/16/intent-classification-agent-routers) | 生产上的**级联**做法：关键词（亚毫秒）→ 嵌入路由 → 小模型 → LLM 兜底；以及 `>0.8 / 0.5–0.8 / <0.5` 的置信度分档 |
+
+### 工单阶段机（0.12.0）
+
+| 项目 | 借了什么 |
+|---|---|
+| [dsh-superagent-prototype](https://github.com/deepseek-ai/dsh-superagent-prototype) | **Ticket 状态机**（阶段由「在等什么」决定，而不是「做没做」）与「人不需要动就不占空间」的取舍；本项目把它的 External Ticket 概念落到本地待办上 |
+| [dsh-context](https://github.com/bowenliang123/dsh-context) | **UI 结构参考**：`main` 放面板主体（keyed）、`sidebar.panellist` 只放图标——我们最初把整块面板塞进 panellist，结果盖住了工作区列表，正是照它的分层才修对 |
 
 ### 检索与相似度
 
 | 来源 | 借了什么 |
 |---|---|
-| [BM25 — Robertson & Zaragoza, *The Probabilistic Relevance Framework*](https://www.staff.city.ac.uk/~sbrp622/papers/foundations_bm25_review.pdf)（2009） | 本项目 `bm25Score()` 的全部公式：IDF 用 `ln(1+(N−df+0.5)/(df+0.5))` 保证非负、TF 饱和（k1）、长度归一（b）。参数在本项目 212 个真实章节上网格搜索定为 **k1=1.2 / b=0.5** |
-| [Lucene 6.0 的相似度切换（LUCENE-6789）](https://issues.apache.org/jira/browse/LUCENE-6789) | 「TF-IDF → BM25 是工业界已验证的升级」这一判断的出处 |
-| [Xapian 的 k1=1 / b=0.5 默认值](https://xapian.org/docs/bm25.html) | 短文档语料应把 b 取低——本项目的 b=0.5 与此一致 |
-| [Lucene CJKBigramFilter](https://lucene.apache.org/core/9_0_0/analysis/common/org/apache/lucene/analysis/cjk/CJKBigramFilter.html) | 中文按二元组切分是工业标准做法；本项目 `tokenize()` 的 bigram + 虚词过滤即源于此 |
-| LCS（最长公共子序列） | 中文改写只换个别字，二元组余弦抓不住（「发版前要跑测试」vs「发布版本之前要先跑测试」：余弦 0.107，LCS 0.600）。Dice 归一化实现见 `lcsSimilarity()` |
+| [BM25 — Robertson & Zaragoza (2009)](https://www.staff.city.ac.uk/~sbrp622/papers/foundations_bm25_review.pdf) | `bm25Score()` 的全部公式：IDF 非负、TF 饱和（k1）、长度归一（b）。参数在本项目 212 个真实章节上网格搜索定为 **k1=1.2 / b=0.5** |
+| [Lucene LUCENE-6789](https://issues.apache.org/jira/browse/LUCENE-6789) / [Xapian BM25](https://xapian.org/docs/bm25.html) | TF-IDF → BM25 是工业界已验证的升级；短文档语料 b 取低（b=0.5 与此一致） |
+| [Lucene CJKBigramFilter](https://lucene.apache.org/core/9_0_0/analysis/common/org/apache/lucene/analysis/cjk/CJKBigramFilter.html) | 中文按二元组切分；本项目 `tokenize()` 的 bigram + 虚词过滤源于此 |
+| LCS（最长公共子序列） | 中文改写只换个别字，bigram 余弦抓不住（「发版前要跑测试」vs「发布版本之前要先跑测试」：余弦 0.107，LCS 0.600） |
 
-### 否定识别
-
-| 来源 | 借了什么 |
-|---|---|
-| [NegEx — Chapman et al., *A Simple Algorithm for Identifying Negated Findings*](https://doi.org/10.1006/jbin.2001.1029)（J Biomed Inform 2001） | **否定触发词 + 作用域 + 终止规则**的核心思路；伪否定（pseudo-negation）必须最长匹配后整段跳过 |
-| [ConText — Harkema et al. 2009](https://pmc.ncbi.nlm.nih.gov/articles/PMC2757457/) | NegEx 的扩展：时间性 / 假设性 / 经验者三个维度；本项目冲突判定用到它「时间不同是取代、条件不同是例外」的区分 |
-| 中文否定规则表 | 双重否定（`不得不/不能不/未尝不/非…不可`）在中文里 **83.2% 是加强肯定**（基于 8,639 句统计），必须先归一化再判极性；伪否定实词（非常/未来/别人/特别）要走白名单 |
-
-### 遗忘曲线
+### 否定识别与遗忘曲线
 
 | 来源 | 借了什么 |
 |---|---|
-| [Wixted & Ebbesen, *On the Form of Forgetting*](https://doi.org/10.1111/j.1467-9280.1991.tb00175.x)（Psych Sci 1991） | **幂函数比指数拟合更好**；两者在短延迟几乎一致，分歧只在长延迟 |
-| [Rubin & Wenzel 1996](https://doi.org/10.1037/0033-295X.103.4.734)（Psych Review） | 210 个数据集的元分析：幂函数整体最优 |
-| [FSRS（Open Spaced Repetition）](https://github.com/open-spaced-repetition/fsrs4anki) | 具体公式 `R=(1+19/81·t/S)^(−0.5)`，t=S 时 R=0.9。本项目照此实现并加了 0.2 下界 |
+| [NegEx — Chapman et al. 2001](https://doi.org/10.1006/jbin.2001.1029) | **否定触发词 + 作用域 + 终止规则**；伪否定必须最长匹配后整段跳过 |
+| [ConText — Harkema et al. 2009](https://pmc.ncbi.nlm.nih.gov/articles/PMC2757457/) | 时间性/假设性/经验者三维；本项目冲突判定用「时间不同是取代、条件不同是例外」 |
+| [Wixted & Ebbesen 1991](https://doi.org/10.1111/j.1467-9280.1991.tb00175.x) / [Rubin & Wenzel 1996](https://doi.org/10.1037/0033-295X.103.4.734) | 幂函数比指数拟合更好；210 个数据集元分析 |
+| [FSRS](https://github.com/open-spaced-repetition/fsrs4anki) | `R=(1+19/81·t/S)^(−0.5)`，t=S 时 R=0.9；本项目照此实现并加 0.2 下界 |
 
-### 信念修正
-
-| 来源 | 借了什么 |
-|---|---|
-| [Doyle, *A Truth Maintenance System*](https://dspace.mit.edu/handle/1721.1/6197)（Artificial Intelligence 1979） | **撤回信念不是删一行**：信念携带 justification，撤回要沿依赖网络传播。本项目准则的 `evidence` 状态（intact/weakened/orphaned）就是这个机制 |
-| de Kleer, *An Assumption-Based TMS*（1986） | 每个推导事实携带它的 assumption set；本项目用 `sourceIds` 承担同一角色 |
-| [W3C PROV-O](https://www.w3.org/TR/prov-o/) | `prov:wasDerivedFrom` 作为一等推导边——污染集 = 沿边可达集 |
-| [AGM 信念修正](https://doi.org/10.2307/2274239)（Alchourrón, Gärdenfors, Makinson 1985） | expansion / revision / contraction 三分；**确信度排序**（已验证 > 未验证，而非新 > 旧） |
-
-### 经验学习与准入
+### 评审基准与评测方法
 
 | 来源 | 借了什么 |
 |---|---|
-| [LeAP — *Beyond Retrieval: Layered Epistemic Agent Protocol*](https://zenodo.org/records/21029662) | **四层认识类型**（observation → claim → fact → belief）+ 写权限分离：agent 不能自封为 fact；晋升一次一级 |
-| [SCL — *Structured Cognitive Loop*](https://arxiv.org/abs/2510.05107) | **propose vs verified state** 的分离：模型只提出候选，外部记忆保存已验证状态 |
-| [GRACE](https://arxiv.org/abs/2601.10520)（AAAI IASEAI） | 规范判断与工具决策解耦；规范推理不依赖模型能力。（本项目只借「规范在模型外」这一条，未采用其 defeasible logic） |
-| [ExpeL](https://arxiv.org/abs/2308.10144)（AAAI 2024） | 从经验对比中提取「洞察」并带计数 → 本项目的准则本与 `helpful/harmful` 计数 |
-| [Voyager](https://arxiv.org/abs/2305.16291) | 技能必须先验证才能入库；本项目「蒸馏产出走 candidate，人工确认才 active」同构 |
-| [Agent Workflow Memory](https://arxiv.org/abs/2409.07429) | 把多步轨迹归纳成可复用工作流——本项目 `when` 字段的方向参考 |
-| [ReasoningBank](https://arxiv.org/abs/2509.25140)（ICLR 2026） | k=1 检索就够；判官只有 72.7% 准确但 70–90% 噪声下性能不敏感 → 本项目降级门槛设为「样本 ≥5 且好评率 <0.3」 |
-| [forge_dc](https://openreview.net/forum?id=7XhMLOsQoA)（NeurIPS 2026 PALM） | **同一条纠正写成带触发点的祈使规则合规 95%，写成描述性文本 55%，且 token 少约 10 倍**——本项目每条准则带 `when` 的直接依据 |
-| [MemPrompt](https://arxiv.org/abs/2201.06009) | 让模型先输出「它对用户意图的理解」，用户纠正理解而不是纠正答案 |
-
-### 评审基准
-
-| 来源 | 借了什么 |
-|---|---|
-| [PATH-Bench — *Path-Dependent Evaluation of Lifelong Agents*](https://arxiv.org/abs/2608.01149)（2026） | **FGT（遗忘）指标**；以及「加了记忆反而变差」（负 FGT）的实测证据。本项目的 SEU 用时准入（`[可复用]/[仅参考]/[存疑]`）来自它的 preserve/abstract/ignore 三档，实测让 FGT 最多降 16.84pp |
-| [Oblivion — *Decay-Driven Activation*](https://arxiv.org/abs/2604.00131) | 衰减驱动激活、规则类记忆永不删除 |
-| [Lifelong Learning of LLM-based Agents: A Roadmap](https://arxiv.org/abs/2501.07278)（2025） | 记忆四分（working / episodic / semantic / parametric）；「冻结主干只是把稳定性-可塑性两难挪了位置」 |
-| [Is In-Context Learning Learning?](https://arxiv.org/abs/2409.15790)（ICLR 2026）、[LLM 不能自我纠错推理](https://arxiv.org/abs/2310.01798)（ICLR 2024） | 「反馈必须来自外部结果」的理论依据 |
-
-### 评测方法
-
-| 项目 | 借了什么 |
-|---|---|
-| [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) | 数据集 + prompt + 指标绑定；先小样本验证判分器 |
-| [SWE-bench](https://github.com/princeton-nlp/SWE-bench) | 容器化复现、缓存键必须含输入 |
-| [Inspect AI](https://github.com/UKGovernmentBEIS/inspect_ai) | Task / Solver / Scorer 的可替换分层 |
-| [promptfoo](https://github.com/promptfoo/promptfoo) | 声明式用例 + 断言 + 基线对比，CI 中运行 |
+| [PATH-Bench](https://arxiv.org/abs/2608.01149)（2026） | **FGT（遗忘）指标**；「加了记忆反而变差」（负 FGT）的实测证据。SEU 准入三档来自它的 preserve/abstract/ignore |
+| [Oblivion](https://arxiv.org/abs/2604.00131) / [Lifelong Learning Roadmap](https://arxiv.org/abs/2501.07278) | 衰减驱动激活、规则类记忆永不删除；记忆四分与稳定性-可塑性两难 |
+| [Is In-Context Learning Learning?](https://arxiv.org/abs/2409.15790) / [LLM 不能自我纠错推理](https://arxiv.org/abs/2310.01798) | 「反馈必须来自外部结果」的理论依据 |
+| [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) / [SWE-bench](https://github.com/princeton-nlp/SWE-bench) / [Inspect AI](https://github.com/UKGovernmentBEIS/inspect_ai) / [promptfoo](https://github.com/promptfoo/promptfoo) | 数据集+prompt+指标绑定；容器化复现与缓存键；Task/Solver/Scorer 分层；声明式用例 + 断言 + 基线对比 |
 
 ### 特别说明
 
@@ -887,4 +715,18 @@ MIT
 
 ## English
 
-`dsh-cognition-engine` is a zero-dependency DeepSeek Harness plugin that adds bitemporal memory, a constructivist schema graph, dialectical reflection, and a long-horizon task ledger. Seven tools, one status dock, everything stored locally.
+`dsh-cognition-engine` is a zero-runtime-dependency DeepSeek Harness plugin that gives an agent **bitemporal memory**, a **distilled playbook** of working rules, a **five-stage ticket ledger**, a **dimension-wise audit**, and a per-turn **work-vs-chitchat register**.
+
+Highlights:
+
+- **Bitemporal memory** — `validFrom/validTo` plus `recordedAt/supersededAt`; four recall modes (current truth / true at a time / what it knew then / associative).
+- **Playbook** — memories distilled into one page of rules injected before every turn, with `helpful/harmful` counts and expiry dates.
+- **Tickets** — draft / open / doing / **review** / done, each with a deliverable, background and dependencies.
+- **Dimension-wise audit** — memory, style, capability and feedback, each labelled with **who evaluates it**; deliberately no single score.
+- **One sidebar panel**, six tabs, everything stored locally as plain JSON.
+
+Seven tools, zero runtime dependencies, no external requests by default. Install:
+
+```sh
+dsh plugin --profile desktop add dsh-cognition-engine
+```
