@@ -38,7 +38,7 @@
       "displayName": "用户",
       "limit": 500,
       "readOnly": false,
-      "value": "做文档整理，中文为主；要求先查证再动手；讨厌空话和总结性废话。",
+      "value": "做文档整理工作，中文为主；要求先查证再动手；讨厌空话和总结性废话。",
       "facts": [
         { "key": "工作", "value": "文档整理", "confidence": 1.0 }
       ],
