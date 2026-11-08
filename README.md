@@ -273,16 +273,59 @@ superagent 是**另一个进程**（默认 WSL `127.0.0.1:3082`），管「把�
 
 - 不可达只让页签显示「未连接」，**不影响本插件任何功能**（对面在 WSL，请求超时默认 3 秒）。
 - 配置：`superagentBaseUrl`（默认 `http://127.0.0.1:3082`）、`superagentTimeoutMs`（默认 3000）、`superagentRepo`（`owner/name`，可选）。
-- ⚠️ **实测结论（2026-11-08）：worker 会话吃不到注入。**
-  用一个真会话选了 `dsh-superagent 执行器` 预设跑了一轮，解压它的 session 日志（多帧 zstd），
-  `【工作准则】` / `cognition-engine-persona` / `ctxt-00001` **全部 0 命中**；
-  同一个 profile 里用 `标准` 预设的会话却是命中的。
-  → 说明 **preset 声明的 agent 作用域不继承 host 级的 `systemPrompt.section`**。
-  再试 `injectionOnly` 只读模式并挂进 worker preset（`--dump-config` 确认行已合成）：
-  诊断显示 **apply 跑了、`systemPrompt` 拿得到、两段都注册成功**，但那条会话的系统提示里**依旧没有**。
-  → 结论：**preset 作用域的 section 注册到不了该 agent 的提示**（注册隔离），这条路走不通。
-- 剩下的可行通道只有一条：把渲染结果写进 `$DSH_HOME/AGENTS.md`（`@deepseek-ai/dsh-agent-instructions`
-  对**每个** agent 都读它，包括 worker）。代价是会改用户的全局指令文件，需要用户同意后才做。
+
+#### worker 会话怎么拿到注入（已实测打通）
+
+superagent 的每个执行器会话都是**冷启动**的——它只知道这次工单，不知道这个仓库踩过什么坑、
+你定过什么规矩。所以要让它吃到准则本和人格。
+
+试过三条路，只有第三条通：
+
+| 通道 | 结果 |
+|---|---|
+| host 级 `systemPrompt.section` 继承给 preset 会话 | ❌ 不继承。同一个 profile 里「标准」预设会话有注入，`dsh-superagent 执行器` 会话 0 命中 |
+| 把插件挂进 worker preset 的 `plugins`（`injectionOnly` 只读模式） | ❌ `--dump-config` 确认行已合成、stderr 诊断确认 **apply 跑了、`systemPrompt` 拿得到、两段都注册成功**，但该会话系统提示里依旧没有 → **preset 作用域的 section 注册到不了该 agent 的提示**（注册隔离） |
+| **同步进 `$DSH_HOME/AGENTS.md` 的受控块** | ✅ `@deepseek-ai/dsh-agent-instructions` 读它给**每一个** agent，worker 也不例外 |
+
+**实测证据**（执行器预设新建的会话，解压其 session 日志）：
+
+```
+You are a coding agent powered by the workbuddy/deepseek-v4.1-flash model.
+
+## 人格（稳定，不要违背）
+<persona chars="103/600">
+我是长期在你电脑上干活的助手，不是客服。…
+</persona>
+
+【工作准则】（由记忆蒸馏，累计 helpful/harmful）
+## 未归类
+- [ctxt-00001] helpful=0 harmful=0 :: ……
+```
+
+上一轮同样的会话是 0 命中，现在是四段全中。
+
+**怎么开**：`agentsFileSync: true`（**默认 false**）。
+
+```yaml
+- id: cognition-engine
+  config:
+    agentsFileSync: true          # 同步进 $DSH_HOME/AGENTS.md 的受控块
+    # agentsFilePath: /root/.dsh/AGENTS.md   # 默认就是这个位置
+```
+
+然后 `POST /cognition-engine/agents-sync/apply`（或看 `GET /cognition-engine/agents-sync` 预览）。
+
+**边界（这是它只替换标记之间的原因）**：
+
+| 情形 | 行为 |
+|---|---|
+| 文件不存在 | 新建，只有受控块 |
+| 有完整标记 | **只替换 `<!-- cognition-engine:begin -->` … `<!-- cognition-engine:end -->` 之间**，标记外一个字不动 |
+| 标记残缺（只有一半） | 不猜不删，追加到末尾并返回 `malformed: true` |
+| 内容没变 | 不写盘（幂等） |
+
+写入用临时文件 + rename，并返回写入前的旧内容，可回滚。**默认关闭**——那是用户的全局指令文件。
+
 - 自检脚本：`node scripts/check-worker-injection.mjs --home <DSH_HOME>`，会解压所有 worker 会话日志并 grep 注入标记。
 
 ### 数据安全

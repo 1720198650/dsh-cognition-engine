@@ -25,16 +25,23 @@
 
 测试 155 → **160**。
 
-**B（worker 吃注入）实测不通，原因已彻底定位**：
-① 执行器预设会话：agent 的 system message 里 `【工作准则】`/`cognition-engine-persona` 全 0；同 profile 标准预设会话却命中 →
-host 级 `systemPrompt.section` 不继承到 preset 作用域。
-② 加 `injectionOnly` 只读模式并挂进 worker preset（`--dump-config` 确认已合成）后复测：
-stderr 诊断显示 **apply 已执行、`systemPrompt` 可用、2 段注册成功**，但该会话系统提示里**仍然没有** →
-**preset 作用域的 section 注册到不了该 agent 的提示**（注册隔离）。
-③ 剩下唯一可行通道：把渲染结果写进 `$DSH_HOME/AGENTS.md`（`@deepseek-ai/dsh-agent-instructions` 对每个 agent 都读）。
-**未实施**——那会改用户的全局指令文件，需用户同意。
-`injectionOnly` 模式本身保留（已测：只注册两段提示、不写任何文件），清掉诊断代码后测试 161 全绿。
-自检工具：`scripts/check-worker-injection.mjs`。
+**B（worker 吃注入）已实测打通**。试了三条通道，只有第三条通：
+
+| 通道 | 结果 |
+|---|---|
+| host 级 `systemPrompt.section` 继承给 preset 会话 | ❌ 同 profile 下「标准」预设会话有注入，`执行器` 预设会话 0 命中 |
+| 插件挂进 worker preset（`injectionOnly` 只读模式） | ❌ `--dump-config` 确认已合成、stderr 诊断确认 apply 跑了且两段注册成功，该会话提示里仍无 → **preset 作用域注册隔离** |
+| **同步进 `$DSH_HOME/AGENTS.md` 受控块** | ✅ `@deepseek-ai/dsh-agent-instructions` 读它给每个 agent（含 worker） |
+
+实测证据：执行器预设新建会话的 session 日志里，`人格（稳定，不要违背）` / `<persona chars="103/600">` /
+`【工作准则】` / `[ctxt-00001]` **四段全中**（改之前是 0）。
+
+新配置 `agentsFileSync`（**默认 false**）+ `agentsFilePath`（默认 `$DSH_HOME/AGENTS.md`），
+路由 `GET /agents-sync`（预览）/ `POST /agents-sync/apply`（写入）。
+只替换 `<!-- cognition-engine:begin -->` … `<!-- cognition-engine:end -->` 之间，标记外一字不动；
+标记残缺时追加并报 `malformed`，不吞原文；写盘用临时文件 + rename，返回旧内容可回滚。
+`injectionOnly` 模式保留（已测：只注册两段提示、不写任何文件）。
+自检工具：`scripts/check-worker-injection.mjs`。测试 155 → **167**。
 
 ---
 
