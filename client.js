@@ -469,6 +469,9 @@ window.__ModuleLoader__.load({
         const [tab, setTab] = React.useState('memories');
         const [formOpen, setFormOpen] = React.useState(null);
         const [editingId, setEditingId] = React.useState(null);
+        // 冲突裁决：点「保留 A/B」后不弹原生 prompt（Electron 不支持 window.prompt，会静默失败），
+        // 改成卡片内联输入框。这里只存「当前在哪一对、保谁」。
+        const [conflictPick, setConflictPick] = React.useState(null);
         const [expandedSchema, setExpandedSchema] = React.useState(null);
         // 毫秒 → datetime-local 需要的本地时间字符串
         const toLocalInput = (ms) => {
@@ -1236,25 +1239,36 @@ window.__ModuleLoader__.load({
                 const value = (text || '').trim();
                 return value.length > 80 ? value.slice(0, 80) + '…' : value;
               };
-              const keep = async (winner, loser) => {
-                const reason = window.prompt('保留这条的理由（会记在被取代的那条上）', '按最新确认的口径');
-                if (reason === null) return;
-                await post('/cognition-engine/memory/supersede?old=' + encodeURIComponent(loser.id) + '&new=' + encodeURIComponent(winner.id) + '&reason=' + encodeURIComponent(reason));
-                setTick((v) => v + 1);
-              };
+              const key = c.leftId + '|' + c.rightId;
+              const picking = conflictPick !== null && conflictPick.key === key ? conflictPick : null;
               return h(
                 'div',
-                { key: c.leftId + '|' + c.rightId, style: { ...S.item, borderLeft: '3px solid #f85149', marginTop: 8 } },
+                { key, style: { ...S.item, borderLeft: '3px solid #f85149', marginTop: 8 } },
                 h('div', { title: left.content }, h('b', null, 'A: '), preview(left.content)),
                 h('div', { title: right.content }, h('b', null, 'B: '), preview(right.content)),
-                h(
-                  'div',
-                  { style: S.meta },
-                  h('button', { type: 'button', style: S.tab, onClick: () => keep(left, right) }, '保留 A'),
-                  h('button', { type: 'button', style: S.tab, onClick: () => keep(right, left) }, '保留 B'),
-                  h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, '另一条将被标为失效'),
-                  h('span', null, c.subject),
-                ),
+                picking === null
+                  ? h(
+                      'div',
+                      { style: S.meta },
+                      h('button', { type: 'button', style: S.tab, onClick: () => setConflictPick({ key, winner: left, loser: right }) }, '保留 A'),
+                      h('button', { type: 'button', style: S.tab, onClick: () => setConflictPick({ key, winner: right, loser: left }) }, '保留 B'),
+                      h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, '另一条将被标为失效'),
+                      h('span', null, c.subject),
+                    )
+                  : h(
+                      'div',
+                      { style: S.meta },
+                      h('span', null, '保留 ' + (picking.winner.id === left.id ? 'A' : 'B') + '，理由：'),
+                      h('input', { id: 'cr-' + key, defaultValue: '按最新确认的口径', style: { ...S.input, maxWidth: 320 } }),
+                      h('button', { type: 'button', style: S.tab, onClick: async () => {
+                        const el = document.getElementById('cr-' + key);
+                        const typed = el !== null && typeof el.value === 'string' ? el.value.trim() : '';
+                        const reason = typed.length === 0 ? '按最新确认的口径' : typed;
+                        await post('/cognition-engine/memory/supersede?old=' + encodeURIComponent(picking.loser.id) + '&new=' + encodeURIComponent(picking.winner.id) + '&reason=' + encodeURIComponent(reason));
+                        setConflictPick(null);
+                      } }, '确认'),
+                      h('button', { type: 'button', style: S.tab, onClick: () => setConflictPick(null) }, '取消'),
+                    ),
               );
             }),
           );
