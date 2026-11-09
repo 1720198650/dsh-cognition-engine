@@ -168,6 +168,11 @@ export interface CognitionConfig {
      * 为什么默认严：一个测不出来的闸门，通过它等于没有闸门。
      */
     cpeStrictGate?: boolean;
+    /**
+     * 写入记忆时，同主题下相似度超过这个值就作为「候选冲突」提示出来（0~1，默认 0.55）。
+     * 只提示、不改数据。依据：Mem0 先检索候选再让模型选操作（arXiv:2504.19413）。
+     */
+    conflictHintThreshold?: number;
 }
 export declare const name = "cognition-engine";
 /** 需要 tools 服务才能注册工具。 */

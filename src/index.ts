@@ -283,6 +283,11 @@ export interface CognitionConfig {
    * 为什么默认严：一个测不出来的闸门，通过它等于没有闸门。
    */
   cpeStrictGate?: boolean;
+  /**
+   * 写入记忆时，同主题下相似度超过这个值就作为「候选冲突」提示出来（0~1，默认 0.55）。
+   * 只提示、不改数据。依据：Mem0 先检索候选再让模型选操作（arXiv:2504.19413）。
+   */
+  conflictHintThreshold?: number;
 }
 
 type ResolvedConfig = Required<
@@ -407,6 +412,10 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     agentsFileSync: config.agentsFileSync === true,
     reflectionFailClosed: config.reflectionFailClosed !== false,
     cpeStrictGate: config.cpeStrictGate !== false,
+    conflictHintThreshold: Math.min(
+      0.99,
+      Math.max(0.05, numberOr(config.conflictHintThreshold, 0.55)),
+    ),
     agentsFilePath:
       typeof config.agentsFilePath === 'string' && config.agentsFilePath.trim().length > 0
         ? expandHome(config.agentsFilePath.trim())
@@ -1313,6 +1322,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   // 之前只放在 /state 里，导致「准则」页签后面永远没有数字。
   const detail = (): Record<string, unknown> => ({
     ...buildDetail({ memory, taskManager }),
+    /** 同主题互斥事实对：面板「记忆」页签顶部据此显示「标记取代」，让人裁决。 */
+    memoryConflicts: memory.conflicts().map((item) => ({
+      subject: item.subject,
+      leftId: item.leftId,
+      rightId: item.rightId,
+    })),
     playbook: playbook.stats(),
     topics: {
       list: topics.all(),
@@ -2487,6 +2502,27 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       };
     });
     route('/cognition-engine/memory/orphans', () => ({ orphans: memory.orphans() }));
+    // 手动取代：把 old 标为失效并指向 new，可带理由（面板「标记取代」用这个）
+    route(
+      '/cognition-engine/memory/supersede',
+      (url) => {
+        const oldId = url.searchParams.get('old') ?? '';
+        const newId = url.searchParams.get('new') ?? '';
+        const reason = url.searchParams.get('reason') ?? undefined;
+        if (oldId.length === 0 || newId.length === 0) throw new Error('需要 old 和 new 两个记忆 id');
+        const result = memory.supersede(oldId, newId, Date.now(), reason);
+        refreshEvidence();
+        void stateStore.flush();
+        return {
+          ok: true,
+          oldId,
+          newId,
+          supersededAt: result.superseded.supersededAt,
+          reason: result.superseded.supersedeReason ?? null,
+        };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
     route('/cognition-engine/memory/repair', () => {
       const repaired = memory.repairOrphans();
       if (repaired > 0) {

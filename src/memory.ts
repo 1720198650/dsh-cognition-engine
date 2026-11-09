@@ -42,6 +42,14 @@ export interface TemporalFact {
   readonly recordedAt: number;
   readonly supersededAt: number | null;
   readonly supersededBy: string | null;
+  /**
+   * 被取代的理由（人话，一句话）。
+   *
+   * 为什么单独存：只知道「这条什么时候死的」不够审计，还要知道「为什么判它死了」。
+   * 对应 Zep/Graphiti 给旧边打 t_invalid 时记录失效原因的做法（arXiv:2501.13956）。
+   * 不参与 hash——它只是元数据。
+   */
+  readonly supersedeReason?: string;
   readonly tags: readonly string[];
   readonly source: string;
   readonly importance: number;
@@ -102,6 +110,8 @@ export interface IngestInput {
   recordedAt?: number;
   /** 显式声明本条取代哪条旧事实（LongMemory 的 supersedeNode）。 */
   supersedes?: string;
+  /** 取代理由（一句话）。只有带 supersedes 时有意义。 */
+  supersedeReason?: string;
 }
 
 export interface RecallOptions {
@@ -589,7 +599,7 @@ export class TemporalMemoryStore {
     if (input.supersedes !== undefined) {
       const previous = this.facts.get(input.supersedes);
       if (previous !== undefined) {
-        this.supersede(input.supersedes, fact.id, validFrom);
+        this.supersede(input.supersedes, fact.id, validFrom, input.supersedeReason);
         onConflictTriggered = previous.supersededAt === null;
       }
     }
@@ -600,6 +610,41 @@ export class TemporalMemoryStore {
 
   get(id: string): TemporalFact | undefined {
     return this.facts.get(id);
+  }
+
+  /**
+   * 写入前的「候选冲突」提示：同主题下语义相近的活事实。
+   *
+   * 为什么要有：原本模型要取代一条旧事实，得凭空想起它的 id——记错一个字符就污染，
+   * 想不起来就只能让两条并存。业界做法（Mem0, arXiv:2504.19413）是**先检索候选，
+   * 再让模型在 ADD/UPDATE/DELETE/NOOP 里选**。这里只做「检索候选」，不改任何数据，
+   * 所以即使提示不准也不会污染记忆库。
+   *
+   * 注意：仅按 subject 分桶，跨主题的语义重复抓不到（已知局限，见 README）。
+   */
+  similarLive(
+    content: string,
+    subjectHint?: string,
+    threshold = 0.55,
+    limit = 3,
+  ): Array<{ id: string; content: string; similarity: number; validFrom: number }> {
+    const trimmed = content.trim();
+    if (trimmed.length === 0) return [];
+    const subject = (subjectHint ?? deriveSubject(trimmed)).trim();
+    const ids = this.bySubject.get(subject);
+    if (ids === undefined) return [];
+    const out: Array<{ id: string; content: string; similarity: number; validFrom: number }> = [];
+    for (const id of ids) {
+      const fact = this.facts.get(id);
+      if (fact === undefined) continue;
+      if (fact.deletedAt !== undefined || fact.supersededAt !== null || fact.archived === true) continue;
+      if (fact.content.trim() === trimmed) continue;
+      const similarity = textSimilarity(trimmed, fact.content);
+      if (similarity < threshold) continue;
+      out.push({ id: fact.id, content: fact.content, similarity, validFrom: fact.validFrom });
+    }
+    out.sort((a, b) => b.similarity - a.similarity);
+    return out.slice(0, Math.max(1, limit));
   }
 
   all(): readonly TemporalFact[] {
@@ -643,6 +688,7 @@ export class TemporalMemoryStore {
     oldId: string,
     newId: string,
     at: number = this.clock(),
+    reason?: string,
   ): { superseded: TemporalFact; current: TemporalFact } {
     const old = this.facts.get(oldId);
     const current = this.facts.get(newId);
@@ -651,11 +697,15 @@ export class TemporalMemoryStore {
     if (oldId === newId) throw new Error('supersede: 不能用自己取代自己');
 
     const closeAt = old.validTo !== null && old.validTo < at ? old.validTo : at;
+    const trimmedReason = reason === undefined ? '' : reason.trim().slice(0, 200);
     const superseded: TemporalFact = Object.freeze({
       ...old,
       validTo: closeAt,
       supersededAt: at,
       supersededBy: newId,
+      ...(trimmedReason.length === 0 && old.supersedeReason === undefined
+        ? {}
+        : { supersedeReason: trimmedReason.length > 0 ? trimmedReason : old.supersedeReason }),
     });
     this.facts.set(oldId, superseded);
     return { superseded, current };

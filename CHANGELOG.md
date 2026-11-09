@@ -1,5 +1,29 @@
 # 更新报告
 
+## 未发布 — 记忆冲突：写入前给候选、取代留理由、面板可裁决
+
+外部批评第一条「哪条记忆该被取代靠模型自己判」查证成立（依据见
+[docs/research-reflection-and-gates.md](docs/research-reflection-and-gates.md)），
+但改成自动判别会把「模型判错」换成「规则判错」且更难发现。于是照业界做法**只降低出错面**，不夺走决定权：
+
+**A. 写入前把候选摆上桌**（Mem0 的做法，arXiv:2504.19413）
+`cognition_remember` 返回时附 `likelyConflicts`：同主题下相似度 ≥ `conflictHintThreshold`（默认 0.55）的
+最多 3 条现存事实（id + 摘要 + 相似度）+ 一句提示「要取代请带 supersedes + supersedeReason」。
+**只提示，不改任何数据**——提示不准也不会污染记忆库。
+
+**B. 取代要留理由**（Zep/Graphiti 的 t_invalid 思路，arXiv:2501.13956）
+引入 `supersedeReason`：被取代的事实记下「为什么死」，长度截断 200 字保护；
+`cognition_remember`、`POST /memory/supersede` 都可传。面板记忆条目上直接显示「取代理由：…」。
+
+**C. 面板给人裁决入口**
+「记忆」页签顶部新增冲突区：列出同主题同时有效的互斥对（来自 `memory.conflicts()`），
+每条给「保留 A / 保留 B」两个按钮，点了会弹一框填理由，然后走 `/memory/supersede`。
+这样 AGM 意义上「谁更可信」的判断落回人手上，而不是让模型静默决定。
+
+配置新增 `conflictHintThreshold`（默认 0.55，0.05~0.99 夹紧）。
+测试 173 → **176**，新增 §[25] 三条用例。
+
+---
 ## 未发布 — 三处防伪修正（外部批评查证后落实）
 
 起因：2026-11-09 一份外部批评指出三处「机制聪明但认知含量被高估」，逐条查证后**三条都成立**，全部改掉。

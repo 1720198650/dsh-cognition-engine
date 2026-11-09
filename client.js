@@ -1156,7 +1156,7 @@ window.__ModuleLoader__.load({
         } else if (tab === 'superagent') {
           body = h(SuperagentEmbedded, { variant: 'embedded' });
         } else if (tab === 'memories') {
-          body = renderList(detail.memories, (item) => {
+          const listBody = renderList(detail.memories, (item) => {
             if (editingId === item.id) {
               return h(
                 'div',
@@ -1208,6 +1208,7 @@ window.__ModuleLoader__.load({
                 h('span', { style: { ...S.chip, color: item.current ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-label-secondary)' } }, item.current ? dict.current : dict.superseded),
                 item.revisedAt ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-warn-primary)' } }, '已手动修正') : null,
                 item.mergedInto ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-label-secondary)' } }, '已并入 ' + item.mergedInto) : null,
+                item.supersedeReason ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-label-secondary)' } }, '取代理由：' + item.supersedeReason) : null,
                 h('span', null, item.subject),
                 h('span', null, new Date(item.recordedAt).toLocaleString()),
                 h('span', null, item.id),
@@ -1218,6 +1219,39 @@ window.__ModuleLoader__.load({
               topicPicker('memory', item.id, item.topicIds || []),
             );
           });
+          // —— 冲突裁决区：同主题同时有效的互斥记忆，让人来定谁对 ——
+          const conflicts = Array.isArray(detail.memoryConflicts) ? detail.memoryConflicts : [];
+          const byId = new Map((detail.memories || []).map((m) => [m.id, m]));
+          const conflictBlock = conflicts.length === 0 ? null : h(
+            'div',
+            { style: S.item },
+            h('div', { style: S.itemTitle }, '检测到 ' + conflicts.length + ' 处冲突（同主题同时有效的互斥记忆）'),
+            h('div', { style: S.meta }, '两条都还活着，说明谁对没说清。选一条保留，另一条会被标为失效并记下理由。'),
+            ...conflicts.map((c) => {
+              const left = byId.get(c.leftId) || { id: c.leftId, content: '（当前列表未包含）' };
+              const right = byId.get(c.rightId) || { id: c.rightId, content: '（当前列表未包含）' };
+              const keep = async (winner, loser) => {
+                const reason = window.prompt('保留这条的理由（会记在被取代的那条上）', '按最新确认的口径');
+                if (reason === null) return;
+                await post('/cognition-engine/memory/supersede?old=' + encodeURIComponent(loser.id) + '&new=' + encodeURIComponent(winner.id) + '&reason=' + encodeURIComponent(reason));
+                setTick((v) => v + 1);
+              };
+              return h(
+                'div',
+                { key: c.leftId + '|' + c.rightId, style: { ...S.item, borderLeft: '3px solid #f85149', marginTop: 8 } },
+                h('div', null, h('b', null, 'A: '), left.content),
+                h('div', null, h('b', null, 'B: '), right.content),
+                h(
+                  'div',
+                  { style: S.meta },
+                  h('button', { type: 'button', style: S.tab, onClick: () => keep(left, right) }, '保留 A，A 取代 B'),
+                  h('button', { type: 'button', style: S.tab, onClick: () => keep(right, left) }, '保留 B，B 取代 A'),
+                  h('span', null, c.subject),
+                ),
+              );
+            }),
+          );
+          body = conflictBlock === null ? listBody : h('div', null, conflictBlock, listBody);
         } else if (tab === 'playbook') {
           const pb = playbookData;
           if (pb === null) {

@@ -41,6 +41,7 @@ export interface ToolDeps {
     config: {
         heartbeatHours: number;
         patrolIntervalHours: number;
+        conflictHintThreshold?: number;
     };
     /** 读取当前反思引擎模式（off / local / real）。 */
     currentReflectionMode?: () => string;
@@ -97,6 +98,10 @@ export declare function createTools(deps: ToolDeps): readonly [{
                 description: string;
             };
             supersedes: {
+                type: string;
+                description: string;
+            };
+            supersedeReason: {
                 type: string;
                 description: string;
             };

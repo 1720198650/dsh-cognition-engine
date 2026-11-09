@@ -36,6 +36,14 @@ export interface TemporalFact {
     readonly recordedAt: number;
     readonly supersededAt: number | null;
     readonly supersededBy: string | null;
+    /**
+     * 被取代的理由（人话，一句话）。
+     *
+     * 为什么单独存：只知道「这条什么时候死的」不够审计，还要知道「为什么判它死了」。
+     * 对应 Zep/Graphiti 给旧边打 t_invalid 时记录失效原因的做法（arXiv:2501.13956）。
+     * 不参与 hash——它只是元数据。
+     */
+    readonly supersedeReason?: string;
     readonly tags: readonly string[];
     readonly source: string;
     readonly importance: number;
@@ -93,6 +101,8 @@ export interface IngestInput {
     recordedAt?: number;
     /** 显式声明本条取代哪条旧事实（LongMemory 的 supersedeNode）。 */
     supersedes?: string;
+    /** 取代理由（一句话）。只有带 supersedes 时有意义。 */
+    supersedeReason?: string;
 }
 export interface RecallOptions {
     mode?: RecallMode;
@@ -305,6 +315,22 @@ export declare class TemporalMemoryStore {
      */
     ingest(input: IngestInput): IngestResult;
     get(id: string): TemporalFact | undefined;
+    /**
+     * 写入前的「候选冲突」提示：同主题下语义相近的活事实。
+     *
+     * 为什么要有：原本模型要取代一条旧事实，得凭空想起它的 id——记错一个字符就污染，
+     * 想不起来就只能让两条并存。业界做法（Mem0, arXiv:2504.19413）是**先检索候选，
+     * 再让模型在 ADD/UPDATE/DELETE/NOOP 里选**。这里只做「检索候选」，不改任何数据，
+     * 所以即使提示不准也不会污染记忆库。
+     *
+     * 注意：仅按 subject 分桶，跨主题的语义重复抓不到（已知局限，见 README）。
+     */
+    similarLive(content: string, subjectHint?: string, threshold?: number, limit?: number): Array<{
+        id: string;
+        content: string;
+        similarity: number;
+        validFrom: number;
+    }>;
     all(): readonly TemporalFact[];
     /** 删除一条事实（连同索引与分词缓存）。用于纠正错误数据、清理测试数据。 */
     remove(id: string): boolean;
@@ -316,7 +342,7 @@ export declare class TemporalMemoryStore {
      * 用新事实取代旧事实：给旧事实闭合 validTo 与 supersededAt，并记下 supersededBy。
      * id / hash 不变——被取代的版本仍然可以被「历史召回」找回。
      */
-    supersede(oldId: string, newId: string, at?: number): {
+    supersede(oldId: string, newId: string, at?: number, reason?: string): {
         superseded: TemporalFact;
         current: TemporalFact;
     };
