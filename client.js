@@ -1230,6 +1230,12 @@ window.__ModuleLoader__.load({
             ...conflicts.map((c) => {
               const left = byId.get(c.leftId) || { id: c.leftId, content: '（当前列表未包含）' };
               const right = byId.get(c.rightId) || { id: c.rightId, content: '（当前列表未包含）' };
+              // 只显示前 80 字：真实记忆动辄两三百字，全铺开会把裁决按钮挤到屏幕外。
+              // 完整原文留在 title 里，鼠标悬停可看。
+              const preview = (text) => {
+                const value = (text || '').trim();
+                return value.length > 80 ? value.slice(0, 80) + '…' : value;
+              };
               const keep = async (winner, loser) => {
                 const reason = window.prompt('保留这条的理由（会记在被取代的那条上）', '按最新确认的口径');
                 if (reason === null) return;
@@ -1239,13 +1245,14 @@ window.__ModuleLoader__.load({
               return h(
                 'div',
                 { key: c.leftId + '|' + c.rightId, style: { ...S.item, borderLeft: '3px solid #f85149', marginTop: 8 } },
-                h('div', null, h('b', null, 'A: '), left.content),
-                h('div', null, h('b', null, 'B: '), right.content),
+                h('div', { title: left.content }, h('b', null, 'A: '), preview(left.content)),
+                h('div', { title: right.content }, h('b', null, 'B: '), preview(right.content)),
                 h(
                   'div',
                   { style: S.meta },
-                  h('button', { type: 'button', style: S.tab, onClick: () => keep(left, right) }, '保留 A，A 取代 B'),
-                  h('button', { type: 'button', style: S.tab, onClick: () => keep(right, left) }, '保留 B，B 取代 A'),
+                  h('button', { type: 'button', style: S.tab, onClick: () => keep(left, right) }, '保留左边这条'),
+                  h('button', { type: 'button', style: S.tab, onClick: () => keep(right, left) }, '保留右边这条'),
+                  h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, '另一条将被标为失效'),
                   h('span', null, c.subject),
                 ),
               );
