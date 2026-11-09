@@ -674,6 +674,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/research-humanlike-agents-and-autonomy.md](docs/research-humanlike-agents-and-autonomy.md) | 拟人化机制拆解（人设/记忆/时机/风格）、B 站自动化真实流水线、QQ bot 可控记忆四层、LLM 自主行动与学习论文清单 |
 | [docs/research-super-agent-and-persona.md](docs/research-super-agent-and-persona.md) | Super-agent 项目清单 + 人格块设计 + 「自我学习」四层辨析（L1 上下文 / L2 记忆 / L3 工具自造 / L4 权重更新） |
 | [docs/research-frozen-weight-learning.md](docs/research-frozen-weight-learning.md) | 冻结权重下的学习与遗忘：ExpeL / Voyager / AWM / Reflexion / ReasoningBank / ACE / PATH-Bench / Oblivion |
+| [docs/upgrade-plan-v4.md](docs/upgrade-plan-v4.md) | **升级计划 v4**：15 篇论文速览（多实例崩塌、ICL 外溢失准、多轮掉 39%、null model 骗过 86.5% 基准、思维链日志泄 PII）+ P0/P1/P2 路线 |
 | [docs/research-reflection-and-gates.md](docs/research-reflection-and-gates.md) | **反思与闸门的防伪修正**：自评不可靠的实证（2607.28576 中 18/18 自检比较为负、Reflexion 静默退化为单链）、自偏好与 wireheading、金丝雀/质量门的「测不出即不放行」 |
 | [docs/research-philosophy-engineering.md](docs/research-philosophy-engineering.md) | 哲学工程化项目逐项核实：GRACE / SCL / LeAP / ITEM / HADES / cognee，**含两个被证伪的引用** |
 | [docs/topic-research.md](docs/topic-research.md) / [topic-research-oss.md](docs/topic-research-oss.md) | 为什么删掉自动聚类：论文证据 + 开源项目对比 |
