@@ -2437,11 +2437,15 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     }), { method: 'POST' });
 
     // —— 工单（S10）——
-    route('/cognition-engine/tickets', () => ({
-      phase: proactiveStore.phase,
-      board: proactiveStore.board(),
-      stats: proactiveStore.document.stats,
-    }));
+    route('/cognition-engine/tickets', () => {
+      // 来源待办已被删除的提醒自动下线，否则会永远挂在「待办」里（实测过）。
+      proactiveStore.pruneOrphanedTargets((id) => taskManager.get(id) !== undefined);
+      return {
+        phase: proactiveStore.phase,
+        board: proactiveStore.board(),
+        stats: proactiveStore.document.stats,
+      };
+    });
     route('/cognition-engine/tickets/stage', (url) => {
       const id = url.searchParams.get('id') ?? '';
       const raw = url.searchParams.get('stage');

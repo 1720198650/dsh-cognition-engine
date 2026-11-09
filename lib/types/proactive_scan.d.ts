@@ -189,6 +189,16 @@ export declare class ProactiveStore {
     recordScan(source: ScanSource, score: number): WouldDo[];
     /** 明确清掉某一条目标（任务/缺口/准则）对应的待处理提醒。即时联动用。 */
     clearByTarget(targetId: string, reason?: string): number;
+    /**
+     * 清理「来源已经不存在」的待办提醒。
+     *
+     * 实测问题：由待办扫描生成的 `pending-due` 工单，来源待办被删掉后，它会一直挂在「待办」里
+     * （用户看到的是「已逾期 32 小时」，但那条待办早就不存在了）。
+     * 每次扫描/打开面板时调用一次，把这类工单下线（`stale`），并写一条历史说明原因。
+     *
+     * 只处理 `pending-due` 这一类——别的工单（比如手动建的）本来就不依赖外部目标。
+     */
+    pruneOrphanedTargets(exists: (targetId: string) => boolean): number;
     /** 当前待处理的 wouldDo（新的在前）。 */
     pending(): WouldDo[];
     /**
