@@ -394,6 +394,8 @@ You are a coding agent powered by the workbuddy/deepseek-v4.1-flash model.
         heartbeatHours: 6              # 多久没更新算超时
         patrolIntervalHours: 3         # 后台巡视间隔
         recordOnly: true               # 主动发言只记录不发送
+        reflectionFailClosed: true     # 反题零矛盾就不出合题（默认 true）
+        cpeStrictGate: true            # 回归集样本不足时新准则转 shadow，不放行（默认 true）
         # lockToken: 你的固定口令
         # llmProvider: deepseek
         # llmModel: deepseek-chat
@@ -401,6 +403,12 @@ You are a coding agent powered by the workbuddy/deepseek-v4.1-flash model.
 
 > 路径开头的 `~` 会展开到用户主目录；相对路径按进程 cwd 解析（换工作区会指向不同文件），
 > 所以配置里建议一律写 `~/...` 或绝对路径。默认落盘位置 `~/.dsh/cognition-engine/`。
+>
+> 最后两项是 2026-11-09 加的防伪开关，依据见
+> [docs/research-reflection-and-gates.md](docs/research-reflection-and-gates.md)：
+> **`reflectionFailClosed`** 让「反题没找到任何矛盾」时不产出合题（零矛盾什么都证明不了）；
+> **`cpeStrictGate`** 让「回归集测不出来」时不放行新准则、改转 shadow 观察（测不出来的闸门等于没有闸门）。
+> 两者都是**默认开启**；把它们设成 `false` 会退回旧行为。
 
 ---
 
@@ -664,6 +672,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/research-humanlike-agents-and-autonomy.md](docs/research-humanlike-agents-and-autonomy.md) | 拟人化机制拆解（人设/记忆/时机/风格）、B 站自动化真实流水线、QQ bot 可控记忆四层、LLM 自主行动与学习论文清单 |
 | [docs/research-super-agent-and-persona.md](docs/research-super-agent-and-persona.md) | Super-agent 项目清单 + 人格块设计 + 「自我学习」四层辨析（L1 上下文 / L2 记忆 / L3 工具自造 / L4 权重更新） |
 | [docs/research-frozen-weight-learning.md](docs/research-frozen-weight-learning.md) | 冻结权重下的学习与遗忘：ExpeL / Voyager / AWM / Reflexion / ReasoningBank / ACE / PATH-Bench / Oblivion |
+| [docs/research-reflection-and-gates.md](docs/research-reflection-and-gates.md) | **反思与闸门的防伪修正**：自评不可靠的实证（2607.28576 中 18/18 自检比较为负、Reflexion 静默退化为单链）、自偏好与 wireheading、金丝雀/质量门的「测不出即不放行」 |
 | [docs/research-philosophy-engineering.md](docs/research-philosophy-engineering.md) | 哲学工程化项目逐项核实：GRACE / SCL / LeAP / ITEM / HADES / cognee，**含两个被证伪的引用** |
 | [docs/topic-research.md](docs/topic-research.md) / [topic-research-oss.md](docs/topic-research-oss.md) | 为什么删掉自动聚类：论文证据 + 开源项目对比 |
 | [docs/in-context-learning-research.md](docs/in-context-learning-research.md) | 「学习」在这个插件里到底指什么；四类记忆我们占哪几格 |

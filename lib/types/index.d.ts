@@ -152,6 +152,22 @@ export interface CognitionConfig {
     /** 启动时是否直接启用真模型。 */
     /** 反思引擎初始模式，默认 off（不开启，避免默认产出误导性输出）。 */
     reflectionMode?: string;
+    /**
+     * 反题没给出任何 CONTRADICTION/EVIDENCE 对时是否跳过合题。**默认 true（fail-closed）**。
+     *
+     * 「没找到矛盾」不等于「没问题」：模型自洽地走过场是最常见的失效模式，
+     * 而零矛盾的结果什么都证明不了。关掉它 = 允许把「结构走完」当成「认知发生」。
+     */
+    reflectionFailClosed?: boolean;
+    /**
+     * CPE 回归闸门严格模式。**默认 true**。
+     *
+     * 打开时：回归集样本不足（status=insufficient）**不放行**，新准则转 shadow 观察，
+     * 等有足够用例再启用。关掉时退回旧行为（insufficient 直接放行）。
+     *
+     * 为什么默认严：一个测不出来的闸门，通过它等于没有闸门。
+     */
+    cpeStrictGate?: boolean;
 }
 export declare const name = "cognition-engine";
 /** 需要 tools 服务才能注册工具。 */

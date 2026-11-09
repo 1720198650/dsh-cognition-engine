@@ -33,11 +33,33 @@ export interface DialecticalResult {
     synthesis: string;
     calls: DialecticalCall[];
     durationMs: number;
+    /**
+     * 结果的可信度标记。
+     *
+     * - `synthesized`：反题里至少给出了一条 CONTRADICTION/EVIDENCE 对，合题建立在它上面。
+     * - `no-contradiction`：反题**没找到任何具体矛盾**。此时不产出合题，因为
+     *   「没找到矛盾」不等于「没有问题」——它也可能只是模型自洽地走过场。
+     *
+     * 依据：LLM 自评普遍偏正面，"judged itself correct every time" 是已知失效模式
+     * （arXiv:2607.28576 里 Reflexion 在小模型上从未触发过一次重试）；
+     * 而「检测到矛盾」才能推出「至少一方错」，「没检测到」什么都证明不了
+     * （Consistency Is Not Correctness, 2026）。所以这里 fail-closed。
+     */
+    verdict: 'synthesized' | 'no-contradiction';
+    /** 给调用方看的一句话说明（verdict 为 no-contradiction 时必填）。 */
+    note?: string;
 }
 export interface ReflectionOptions {
     now?: () => number;
     /** 传给 synthesis 的批判原文上限，避免 prompt 无限膨胀。 */
     maxAntithesisChars?: number;
+    /**
+     * 反题没给出任何 CONTRADICTION/EVIDENCE 对时，是否跳过合题（默认 true）。
+     *
+     * 关掉它 = 允许「零矛盾的批判」也能产出合题，等于把「结构走完」当成「认知发生」，
+     * 而证据表明这两件事经常不是一回事。只有明确知道自己要什么时才关。
+     */
+    failClosedOnNoContradiction?: boolean;
 }
 export declare function buildThesisPrompt(query: string): string;
 export declare function buildAntithesisPrompt(query: string, thesis: string): string;
@@ -66,6 +88,8 @@ export declare class DialecticalReflectionEngine {
     private readonly callLLM;
     private readonly clock;
     private readonly maxAntithesisChars;
+    /** 零矛盾时是否跳过合题（fail-closed）。 */
+    private readonly failClosedOnNoContradiction;
     /** 结果缓存：同样的 query + draft 不重复调用模型。 */
     private readonly cache;
     constructor(callLLM: CallLLM, options?: ReflectionOptions);

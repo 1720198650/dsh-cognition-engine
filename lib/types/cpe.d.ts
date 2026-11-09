@@ -68,10 +68,11 @@ export interface CpeFailure {
     expected: string[];
     got: string[];
 }
+export type CpeStatus = 'insufficient' | 'green' | 'yellow' | 'red';
 export interface CpeCheck {
     at: number;
     passRate: number | null;
-    status: 'insufficient' | 'green' | 'yellow' | 'red';
+    status: CpeStatus;
     delta: number | null;
     failures: CpeFailure[];
     note: string;
@@ -97,6 +98,16 @@ export interface CpeStoreOptions {
 }
 /** 文件快照：路径 → 内容（null 表示文件原本不存在）。 */
 export type FileSnapshot = Record<string, string | null>;
+/**
+ * 严格闸门下，这次检查结果是否应该**拦住**新准则启用。
+ *
+ * 只拦 `insufficient`——也就是「测不出来」。`green/yellow` 放行，`red` 由调用方走回滚逻辑。
+ *
+ * 为什么把「测不出来」当拦：一个测不出来的闸门，通过它等于没有闸门。
+ * 同类做法见 NeMo 质量门（基准缺失即判失败）与 ai_eval（空题集 passed_gate=FALSE，
+ * 不给 0 分当及格）。
+ */
+export declare function blocksAcceptance(status: CpeStatus, strict: boolean): boolean;
 export declare class CpeStore {
     #private;
     private readonly filePath;

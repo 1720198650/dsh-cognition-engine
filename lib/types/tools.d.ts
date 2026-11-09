@@ -249,6 +249,10 @@ export declare function createTools(deps: ToolDeps): readonly [{
                 type: string;
                 description: string;
             };
+            evidence: {
+                type: string;
+                description: string;
+            };
             action: {
                 type: string;
                 enum: string[];

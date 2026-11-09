@@ -258,7 +258,8 @@ export function createTools(deps: ToolDeps) {
       properties: {
         query: { type: 'string', description: '要反思的问题；playbook/rate 时随便填。' },
         ruleId: { type: 'string', description: 'rate 用：准则 id。' },
-        usageKind: { type: 'string', description: 'rate 用：applied/appliedGood/appliedBad/missed/userCorrected。' },
+        usageKind: { type: 'string', description: 'rate 用：applied/appliedGood/appliedBad/missed/userCorrected。appliedGood/appliedBad 属于自报，只留痕，不参与准则升降级。' },
+      evidence: { type: 'string', description: 'rate 用：自报 appliedGood / appliedBad 时必填，至少 8 个字的具体依据（可核对的事实，不是「感觉不错」）。' },
         action: {
           type: 'string',
           enum: ['reflect', 'playbook', 'rate', 'gap'],
@@ -292,11 +293,20 @@ export function createTools(deps: ToolDeps) {
         const allowed = ['applied', 'appliedGood', 'appliedBad', 'missed', 'userCorrected'];
         if (!allowed.includes(kind)) throw new Error(`usageKind 只能是 ${allowed.join(' / ')}`);
         if (playbookRate === undefined) throw new Error('打标不可用：插件未初始化');
-        if (!playbookRate(ruleId, kind as 'applied', optionalString(input, 'draft') ?? '')) {
+        // 自报必须带可核对的具体依据：没有 evidence 的「用得好」只是一句自我感觉，
+        // 而把打分权交给被评对象就是在给它刷分的激励（arXiv:2511.23092）。
+        // 这条 evidence 只作为线索留痕，不参与准则生死判断。
+        const evidence = (optionalString(input, 'evidence') ?? '').trim();
+        if (kind === 'appliedGood' || kind === 'appliedBad') {
+          if (evidence.length < 8) {
+            throw new Error('自报 appliedGood / appliedBad 必须带 evidence（至少 8 个字的具体依据，如「用户说这次结果对了」）');
+          }
+        }
+        if (!playbookRate(ruleId, kind as 'applied', evidence.length > 0 ? evidence : (optionalString(input, 'draft') ?? ''))) {
           throw new Error(`准则不存在：${ruleId}`);
         }
         touch();
-        return JSON.stringify({ ruleId, usageKind: kind, ok: true });
+        return JSON.stringify({ ruleId, usageKind: kind, ok: true, countedAs: 'self-report' });
       }
 
       if (optionalString(input, 'action') === 'playbook') {

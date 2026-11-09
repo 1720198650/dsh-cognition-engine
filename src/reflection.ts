@@ -38,12 +38,34 @@ export interface DialecticalResult {
   synthesis: string;
   calls: DialecticalCall[];
   durationMs: number;
+  /**
+   * 结果的可信度标记。
+   *
+   * - `synthesized`：反题里至少给出了一条 CONTRADICTION/EVIDENCE 对，合题建立在它上面。
+   * - `no-contradiction`：反题**没找到任何具体矛盾**。此时不产出合题，因为
+   *   「没找到矛盾」不等于「没有问题」——它也可能只是模型自洽地走过场。
+   *
+   * 依据：LLM 自评普遍偏正面，"judged itself correct every time" 是已知失效模式
+   * （arXiv:2607.28576 里 Reflexion 在小模型上从未触发过一次重试）；
+   * 而「检测到矛盾」才能推出「至少一方错」，「没检测到」什么都证明不了
+   * （Consistency Is Not Correctness, 2026）。所以这里 fail-closed。
+   */
+  verdict: 'synthesized' | 'no-contradiction';
+  /** 给调用方看的一句话说明（verdict 为 no-contradiction 时必填）。 */
+  note?: string;
 }
 
 export interface ReflectionOptions {
   now?: () => number;
   /** 传给 synthesis 的批判原文上限，避免 prompt 无限膨胀。 */
   maxAntithesisChars?: number;
+  /**
+   * 反题没给出任何 CONTRADICTION/EVIDENCE 对时，是否跳过合题（默认 true）。
+   *
+   * 关掉它 = 允许「零矛盾的批判」也能产出合题，等于把「结构走完」当成「认知发生」，
+   * 而证据表明这两件事经常不是一回事。只有明确知道自己要什么时才关。
+   */
+  failClosedOnNoContradiction?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -316,6 +338,8 @@ export class DialecticalReflectionEngine {
   private readonly callLLM: CallLLM;
   private readonly clock: () => number;
   private readonly maxAntithesisChars: number;
+  /** 零矛盾时是否跳过合题（fail-closed）。 */
+  private readonly failClosedOnNoContradiction: boolean;
   /** 结果缓存：同样的 query + draft 不重复调用模型。 */
   private readonly cache = new Map<string, DialecticalResult>();
 
@@ -323,6 +347,7 @@ export class DialecticalReflectionEngine {
     this.callLLM = callLLM;
     this.clock = options.now ?? (() => Date.now());
     this.maxAntithesisChars = options.maxAntithesisChars ?? 4000;
+    this.failClosedOnNoContradiction = options.failClosedOnNoContradiction !== false;
   }
 
   /**
@@ -389,6 +414,34 @@ export class DialecticalReflectionEngine {
       antithesis.length > this.maxAntithesisChars
         ? `${antithesis.slice(0, this.maxAntithesisChars)}\n…(truncated)`
         : antithesis;
+
+    // fail-closed：反题没给出任何具体矛盾 → 不产出合题。
+    // 理由见 DialecticalResult.verdict 的注释：零矛盾什么都证明不了，
+    // 而多调一次 synthesis 只会把「没批判」包装成「已升华」。
+    if (contradictions.length === 0 && this.failClosedOnNoContradiction) {
+      const result: DialecticalResult = {
+        query: trimmed,
+        thesis,
+        antithesis,
+        contradictions,
+        synthesis: '',
+        calls,
+        durationMs: this.clock() - startedAt,
+        verdict: 'no-contradiction',
+        note:
+          '反题没有给出任何 CONTRADICTION/EVIDENCE 对，因此没有产出合题。' +
+          '这不代表正题成立，只代表这次批判没有找到具体问题——可能真没问题，' +
+          '也可能只是模型在自洽地走过场。要下结论，换一个更具体的问法，' +
+          '或补充外部证据（真实结果、日志、用户反馈）后再反思。',
+      };
+      this.cache.set(cacheKey, result);
+      if (this.cache.size > 50) {
+        const oldest = this.cache.keys().next().value;
+        if (oldest !== undefined) this.cache.delete(oldest);
+      }
+      return result;
+    }
+
     const rawSynthesis = await this.step(
       'synthesis',
       withJsonContract(buildSynthesisPrompt(trimmed, thesis, clipped, contradictions), 'synthesis'),
@@ -405,6 +458,7 @@ export class DialecticalReflectionEngine {
       synthesis,
       calls,
       durationMs: this.clock() - startedAt,
+      verdict: 'synthesized',
     };
 
     this.cache.set(cacheKey, result);
@@ -434,6 +488,11 @@ export class DialecticalReflectionEngine {
     }
     lines.push('');
     lines.push('## SYNTHESIS');
+    if (result.verdict === 'no-contradiction') {
+      lines.push('（未产出合题）');
+      if (result.note !== undefined) lines.push(result.note);
+      return lines.join('\n');
+    }
     lines.push(result.synthesis.trim());
     return lines.join('\n');
   }

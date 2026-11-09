@@ -29,19 +29,35 @@ export type PlaybookOrigin = 'human' | 'agent' | 'auto';
 export interface UsageStats {
     /** 被应用次数（模型点名引用）。 */
     applied: number;
-    /** 应用且结果好。 */
+    /** 应用且结果好。**只记外部来源**（用户确认 / 系统判定）。 */
     appliedGood: number;
-    /** 应用且结果差（准则可能错）。 */
+    /** 应用且结果差（准则可能错）。**只记外部来源**。 */
     appliedBad: number;
     /** 该用而没用（检索/触发条件问题，不是准则错）。 */
     missed: number;
     /** 用户明确纠正。 */
     userCorrected: number;
+    /**
+     * **模型自报**的「用得好」次数。单独存，绝不参与降级/升级判断。
+     *
+     * 为什么不合并：把打分权力交给被评的对象，就是在给它刷分的激励。
+     * 证据：自评与奖励耦合会诱发 wireheading（arXiv:2511.23092）；
+     * 模型自评普遍偏向自己（arXiv:2404.13076）；无参照判官打的是「像不像对」而不是「对不对」
+     * （arXiv:2607.05904）。所以自报只作为线索展示，决策只认外部信号。
+     */
+    selfAppliedGood?: number;
+    /** 模型自报的「用得差」次数。同样不参与决策。 */
+    selfAppliedBad?: number;
     /** 最近一次变化的说明，便于复盘。 */
     lastTrace?: string;
 }
 /** 打标的种类。 */
-export type UsageKind = keyof Omit<UsageStats, 'lastTrace'>;
+export type UsageKind = keyof Omit<UsageStats, 'lastTrace' | 'selfAppliedGood' | 'selfAppliedBad'>;
+/**
+ * 打分来源。只有 `user` / `system` 能推动准则升级或降级；
+ * `self`（模型自报）只落在 selfApplied* 计数器里。
+ */
+export type UsageSource = 'user' | 'system' | 'self';
 /** 证据链状态。 */
 export interface EvidenceState {
     /** 仍然有效的来源记忆 id。 */
@@ -367,7 +383,7 @@ export declare class PlaybookStore {
      * 只有 appliedGood / appliedBad / userCorrected 会影响降级判断——
      * missed 记的是检索问题，不该算到准则头上。
      */
-    markUsage(id: string, kind: UsageKind, trace?: string): boolean;
+    markUsage(id: string, kind: UsageKind, trace?: string, source?: UsageSource): boolean;
     /**
      * 是否受证据门控保护。
      *

@@ -19,7 +19,7 @@ import { PlaybookEventLog } from './events.ts';
 import { InjectionLog, TurnFeedbackTracker, classifyFeedback, extractUserText } from './injection_log.ts';
 import type { FeedbackKind } from './injection_log.ts';
 import { PersonaStore } from './persona.ts';
-import { CpeStore } from './cpe.ts';
+import { CpeStore, blocksAcceptance } from './cpe.ts';
 import { BudgetStore } from './budget.ts';
 import { ShadowStore } from './shadow.ts';
 import { shouldReject, summarize } from './notlearn.ts';
@@ -267,6 +267,22 @@ export interface CognitionConfig {
   /** 启动时是否直接启用真模型。 */
   /** 反思引擎初始模式，默认 off（不开启，避免默认产出误导性输出）。 */
   reflectionMode?: string;
+  /**
+   * 反题没给出任何 CONTRADICTION/EVIDENCE 对时是否跳过合题。**默认 true（fail-closed）**。
+   *
+   * 「没找到矛盾」不等于「没问题」：模型自洽地走过场是最常见的失效模式，
+   * 而零矛盾的结果什么都证明不了。关掉它 = 允许把「结构走完」当成「认知发生」。
+   */
+  reflectionFailClosed?: boolean;
+  /**
+   * CPE 回归闸门严格模式。**默认 true**。
+   *
+   * 打开时：回归集样本不足（status=insufficient）**不放行**，新准则转 shadow 观察，
+   * 等有足够用例再启用。关掉时退回旧行为（insufficient 直接放行）。
+   *
+   * 为什么默认严：一个测不出来的闸门，通过它等于没有闸门。
+   */
+  cpeStrictGate?: boolean;
 }
 
 type ResolvedConfig = Required<
@@ -389,6 +405,8 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
         : '',
     injectionOnly: config.injectionOnly === true,
     agentsFileSync: config.agentsFileSync === true,
+    reflectionFailClosed: config.reflectionFailClosed !== false,
+    cpeStrictGate: config.cpeStrictGate !== false,
     agentsFilePath:
       typeof config.agentsFilePath === 'string' && config.agentsFilePath.trim().length > 0
         ? expandHome(config.agentsFilePath.trim())
@@ -900,14 +918,16 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   };
   installToolGuards();
 
-  const reflection = new DialecticalReflectionEngine((prompt, phase) =>
-    reflectionMode === 'real'
-      ? callRealModel(prompt)
-      : reflectionMode === 'local'
-        // 不在中间产物上加警示：它会作为下一阶段的输入，会被模型当成正文引用。
-        // 警示统一在工具层按模式补。
-        ? Promise.resolve(mockLLM.call(prompt, phase))
-        : Promise.reject(new Error('反思引擎未开启：请在设置页开启，或直接回答而不调用 cognition_reflect')),
+  const reflection = new DialecticalReflectionEngine(
+    (prompt, phase) =>
+      reflectionMode === 'real'
+        ? callRealModel(prompt)
+        : reflectionMode === 'local'
+          // 不在中间产物上加警示：它会作为下一阶段的输入，会被模型当成正文引用。
+          // 警示统一在工具层按模式补。
+          ? Promise.resolve(mockLLM.call(prompt, phase))
+          : Promise.reject(new Error('反思引擎未开启：请在设置页开启，或直接回答而不调用 cognition_reflect')),
+    { failClosedOnNoContradiction: config.reflectionFailClosed },
   );
   const worker = new ReflectionWorker(reflection, 1);
   const proactive = new ProactiveGate({
@@ -997,7 +1017,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     const trace = `${kind}: ${message.slice(0, 40)}`;
     for (const id of ids) {
       try {
-        playbook.markUsage(id, usageKind, trace);
+        playbook.markUsage(id, usageKind, trace, 'user');
         ruleEvents.append({ type: 'RuleUsageRecorded', ruleId: id, usage: usageKind, trace, by: 'system' });
       } catch {
         /* 单条失败不影响其余 */
@@ -1927,6 +1947,32 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
             }
             // CPE 闸门：启用一条新准则前先快照，启用后跑回归集；
             // 掉分超阈值就回滚文件并拒绝本次启用——这是「越学越稳」的落点。
+            //
+            // 严格模式（默认）：如果回归集样本不足，压根测不出来，就不放行——
+            // 转 shadow 观察，等有足够用例再启用。理由：一个测不出来的闸门，
+            // 通过它等于没有闸门（NeMo 的质量门要求基准必须两边都在，缺就算失败；
+            // ai_eval 空题集直接 passed_gate=FALSE，不给 0 分当及格）。
+            if (config.cpeStrictGate) {
+              const preCheck = cpe.check(ruleRankResolver);
+              if (blocksAcceptance(preCheck.status, config.cpeStrictGate)) {
+                const candidate = playbook.get(id);
+                const shadowed = shadow.add({
+                  text: candidate?.content ?? '',
+                  subject: candidate?.section ?? '未分类',
+                  source: 'gate-insufficient',
+                  note: preCheck.note ?? '回归集样本不足，无法评估',
+                });
+                ok = playbook.reject(id);
+                softFail = true;
+                gate = {
+                  ...preCheck,
+                  movedToShadow: true,
+                  shadowId: shadowed.entry?.id ?? null,
+                  reason: '回归集样本不足，无法评估；已转 shadow 观察，先补用例再启用',
+                };
+                break;
+              }
+            }
             const snap = cpe.snapshotFiles([playbook.path]);
             ok = playbook.accept(id);
             if (ok) {
@@ -2713,7 +2759,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       return { id: gap.id, duplicate, open: gaps.open().length };
     },
     playbookRate: (id, kind, trace) => {
-      const ok = playbook.markUsage(id, kind, trace);
+      // 这是**模型自报**路径（cognition_reflect action=rate）：只记 selfApplied*，
+      // 推不动准则的升级/降级。要影响判定，只能走用户反馈那条路。
+      const ok = playbook.markUsage(id, kind, trace, 'self');
       if (ok) void playbook.flush();
       return ok;
     },

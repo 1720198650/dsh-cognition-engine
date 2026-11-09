@@ -1,5 +1,33 @@
 # 更新报告
 
+## 未发布 — 三处防伪修正（外部批评查证后落实）
+
+起因：2026-11-09 一份外部批评指出三处「机制聪明但认知含量被高估」，逐条查证后**三条都成立**，全部改掉。
+依据与文献见 [docs/research-reflection-and-gates.md](docs/research-reflection-and-gates.md)。
+
+**① 反思：零矛盾不再产出合题**
+- `verdict: 'synthesized' | 'no-contradiction'`；反题没抽到任何 `CONTRADICTION/EVIDENCE` 对时**跳过 synthesis**，
+  `note` 明说「这不代表正题成立」，报告里写「（未产出合题）」。
+- 依据：arXiv:2607.28576（36 组等成本比较，**18/18 自检比较为负**，Reflexion 在 1.5B 上「每次判自己正确」静默退化为单链）；
+  「Consistency Is Not Correctness」（没检测到矛盾什么都证明不了）。
+- 配置 `reflectionFailClosed`（默认 **true**）。
+
+**② 准则打分：模型自报不再能决定准则生死**
+- `UsageStats` 拆两组：主计数器只收外部来源；`selfAppliedGood/Bad` 单独存、只展示。
+- `action=rate` 报 appliedGood/Bad 必须带 `evidence`（≥8 字），返回标注 `countedAs: 'self-report'`。
+- 依据：arXiv:2404.13076（自偏好在「认出自己写的」与「加分」之间线性相关）、
+  arXiv:2511.23092（自评接上奖励就通胀，解耦后缓解）。
+- 用户/系统来源的降级能力**保留并有测试守着**。
+
+**③ 回归闸门：测不出来不放行**
+- `blocksAcceptance(status, strict)`：`insufficient` 即拦；`accept` 改为把候选**转 shadow 观察**，不再直接进注入池。
+- 依据：Kayenta 自动金丝雀（分数不达标自动回滚）、NeMo 质量门（基准缺失即失败）、ai_eval（空题集 `passed_gate=FALSE`）。
+- 配置 `cpeStrictGate`（默认 **true**）。
+
+测试 167 → **173**，新增 §[24] 六条用例。同时更正 BM25 调研文档在脱敏语料上重测后的数字（见上一节）。
+
+---
+
 ## 未发布 — 超级代理接入
 
 把 dsh-superagent（另一个进程，默认 WSL `127.0.0.1:3082`）接进面板工作流，四件事：
