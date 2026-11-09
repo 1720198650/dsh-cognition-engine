@@ -81,6 +81,29 @@ export interface CpeFailure {
 
 export type CpeStatus = 'insufficient' | 'green' | 'yellow' | 'red';
 
+/**
+ * 反作弊标记。
+ *
+ * 依据：ICLR 2025 Oral《Cheating Automatic LLM Benchmarks》(arXiv:2410.07137)——
+ * 一个对任何输入都返回同一段文本的「null model」能在 AlpacaEval 2.0 拿到 86.5% 的
+ * length-controlled 胜率；改写评测模板、加困惑度过滤都挡不住。
+ *
+ * 我们的回归集是「问题 → 应该被检索到的准则 id」，对应的作弊形态就是
+ * **对每个问题都返回同一个排名**（恒定 top-1）。那不是「检索准」，是没在检索。
+ */
+export type CpeAntiCheat = 'constant-ranking';
+
+/**
+ * 恒定排名检测：用例数 ≥ 3 且所有用例的 top-1 完全相同。
+ *
+ * 阈值定 3 是因为 1~2 条时同分撞车属正常；3 条以上还完全一致基本不可能是巧合。
+ */
+export function detectsConstantRanking(top1s: readonly string[]): boolean {
+  if (top1s.length < 3) return false;
+  const first = top1s[0];
+  return top1s.every((id) => id === first);
+}
+
 export interface CpeCheck {
   at: number;
   passRate: number | null;
@@ -89,6 +112,8 @@ export interface CpeCheck {
   failures: CpeFailure[];
   note: string;
   cases: number;
+  /** 反作弊标记；非空表示这次结果不可信（详见 CpeAntiCheat）。 */
+  antiCheat?: CpeAntiCheat;
 }
 
 export interface CpeDoc {
@@ -293,21 +318,31 @@ export class CpeStore {
     total: number;
     passed: number;
     failures: CpeFailure[];
+    /** 反作弊判定：null = 正常；'constant-ranking' = 疑似被恒定输出刷分。 */
+    antiCheat: CpeAntiCheat | null;
   } {
     this.loadSync();
     const cases = this.doc.holdout.cases;
-    if (cases.length === 0) return { passRate: null, total: 0, passed: 0, failures: [] };
+    if (cases.length === 0) return { passRate: null, total: 0, passed: 0, failures: [], antiCheat: null };
     const topK = Math.max(1, this.doc.thresholds.topK);
     let passed = 0;
     const failures: CpeFailure[] = [];
+    const top1s: string[] = [];
     for (const item of cases) {
       const ranked = resolver(item.question);
       const top = ranked.slice(0, topK);
+      if (top.length > 0 && top[0] !== undefined) top1s.push(top[0]);
       const ok = item.expectedRuleIds.every((id) => top.includes(id));
       if (ok) passed += 1;
       else failures.push({ caseId: item.id, question: item.question, expected: [...item.expectedRuleIds], got: top });
     }
-    return { passRate: Number((passed / cases.length).toFixed(4)), total: cases.length, passed, failures };
+    return {
+      passRate: Number((passed / cases.length).toFixed(4)),
+      total: cases.length,
+      passed,
+      failures,
+      antiCheat: detectsConstantRanking(top1s) ? 'constant-ranking' : null,
+    };
   }
 
   /** 测一次并写入基线。基线只能在「当前状态被认为正确」时打。 */
@@ -349,6 +384,24 @@ export class CpeStore {
           ? '回归集为空：先在 S5 页面/接口加用例，或从现有准则派生起步集'
           : `用例不足（${result.total}/${minCases}），不做判断`;
       const check: CpeCheck = { at: this.clock(), passRate: result.passRate, status: 'insufficient', delta: null, failures: result.failures, note, cases: result.total };
+      this.doc.lastCheck = check;
+      this.#save();
+      return check;
+    }
+
+    // 反作弊：恒定排名 = 评测失效，直接判红，不参与基线比较。
+    // 否则「所有问题都返回同一条准则」会稳定拿高分，闸门形同虚设。
+    if (result.antiCheat !== null) {
+      const check: CpeCheck = {
+        at: this.clock(),
+        passRate: result.passRate,
+        status: 'red',
+        delta: null,
+        failures: result.failures,
+        note: '评测疑似被恒定输出刷分：所有用例的 top-1 完全相同，这次分数不可信，已判红',
+        cases: result.total,
+        antiCheat: result.antiCheat,
+      };
       this.doc.lastCheck = check;
       this.#save();
       return check;

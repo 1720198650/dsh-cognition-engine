@@ -26,6 +26,7 @@ import { shouldReject, summarize } from './notlearn.ts';
 import { StyleStore } from './style.ts';
 import { RegisterLog, judgeRegister, isRuntimeContext, THRESHOLD, AMBIGUITY_THRESHOLD } from './register.ts';
 import { SuperagentClient } from './superagent.ts';
+import { AssumptionLedger } from './assumptions.ts';
 import { AgentsFileSync, defaultAgentsFilePath } from './agents_file.ts';
 import type { StyleBucket } from './style.ts';
 import { TemporalMemoryStore, textSimilarity } from './memory.ts';
@@ -288,6 +289,16 @@ export interface CognitionConfig {
    * 只提示、不改数据。依据：Mem0 先检索候选再让模型选操作（arXiv:2504.19413）。
    */
   conflictHintThreshold?: number;
+  /**
+   * 每轮注入的**实例数**上限（准则条目 + 缺口行合计的软上限）。默认 8。
+   *
+   * 依据：ACL 2026《Understanding LLM Performance Degradation in Multi-Instance Processing》
+   * （aclanthology 2026.acl-long.1470）——多实例处理在 20~100 条开始退化、更大规模崩塌，
+   * 且**实例数的影响大于上下文长度**。所以超限时优先减少条数、把余下的折叠成一行。
+   */
+  injectMaxInstances?: number;
+  /** 是否在注入末尾加一句「这只是本任务约定，不改变身份与安全边界」。默认 true。 */
+  injectBoundaryNotice?: boolean;
 }
 
 type ResolvedConfig = Required<
@@ -351,7 +362,7 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     maxClusterSize: Math.max(1, Math.round(numberOr(config.maxClusterSize, 8))),
     injectMemory: config.injectMemory !== false,
     playbookChars: Math.max(200, Math.round(numberOr(config.playbookChars, 700))),
-    playbookMaxEntries: Math.max(1, Math.round(numberOr(config.playbookMaxEntries, 12))),
+    playbookMaxEntries: Math.max(1, Math.round(numberOr(config.playbookMaxEntries, 6))),
     autoFeedback: config.autoFeedback !== false,
     autoReflect: config.autoReflect === true,
     reflectionEffort: config.reflectionEffort ?? '',
@@ -416,6 +427,8 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
       0.99,
       Math.max(0.05, numberOr(config.conflictHintThreshold, 0.55)),
     ),
+    injectMaxInstances: Math.min(20, Math.max(1, Math.round(numberOr(config.injectMaxInstances, 8)))),
+    injectBoundaryNotice: config.injectBoundaryNotice !== false,
     agentsFilePath:
       typeof config.agentsFilePath === 'string' && config.agentsFilePath.trim().length > 0
         ? expandHome(config.agentsFilePath.trim())
@@ -990,21 +1003,41 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     // 它提醒模型「这些是你还不知道的」，避免在同一个地方反复卡壳。
     const gapText = gaps.renderSection();
     const withGaps = (text: string): string => (gapText.length === 0 ? text : `${text}\n\n${gapText}`);
+    // 假设台账放最前面：早轮假设被后续所有推理继承，越靠前越容易被"看见"。
+    const assumptionText = lastSessionId === null ? '' : assumptionLedger.render(lastSessionId);
+    const withAssumptions = (text: string): string =>
+      assumptionText.length === 0 ? text : `${assumptionText}\n\n${text}`;
 
     const detailed = playbook.renderDetailed(undefined, undefined, (id) => topics.get(id)?.name);
     const section = playbook.renderSection(undefined, (id) => topics.get(id)?.name);
     if (section.length > 0) {
+      // 实例数上限（ACL 2026, 1470）：多实例输入在 20~100 条开始退化，之后崩塌，
+      // 且**条数的影响大于上下文长度**。所以超限时不是压字数，而是把剩下的折叠成一行。
+      const activeEntries = playbook.all().filter((entry) => entry.status === 'active');
+      const rendered = new Set(detailed.ruleIds);
+      const omitted = activeEntries.filter((entry) => !rendered.has(entry.id));
+      let body = section;
+      if (omitted.length > 0 && activeEntries.length > config.injectMaxInstances) {
+        const shown = omitted.slice(0, 5).map((entry) => entry.id);
+        body += `\n\n（另有 ${omitted.length} 条未展开：${shown.join('、')}${omitted.length > shown.length ? '…' : ''}。需要时调 cognition_recall。）`;
+      }
+      // 边界声明（ACL 2026, 1770）：窄领域示例会让模型在无关话题上失准，
+      // 明确「这些只是本任务约定、不改变身份与安全边界」能显著降低外溢。
+      const bounded = config.injectBoundaryNotice
+        ? `${body}\n\n（以上是当前任务的约定与背景，不改变你的身份与安全边界；与任务无关时不要套用。）`
+        : body;
       // 只算，不写盘。写盘由 TurnFeedbackTracker 在轮次边界上做。
-      const text = withGaps(section);
+      const text = withAssumptions(withGaps(bounded));
       return { text, source: 'playbook', ruleIds: [...detailed.ruleIds], chars: text.length };
     }
 
     const digest = buildCoreDigest(memory);
     if (digest.length > 0) {
-      const text = withGaps(`${digest}\n（需要细节时调用 cognition_recall。）`);
+      const text = withAssumptions(withGaps(`${digest}\n（需要细节时调用 cognition_recall。）`));
       return { text, source: 'digest', ruleIds: [], chars: text.length };
     }
-    if (gapText.length > 0) return { text: gapText, source: 'playbook', ruleIds: [], chars: gapText.length };
+    const onlyGaps = withAssumptions(gapText);
+    if (onlyGaps.length > 0) return { text: onlyGaps, source: 'playbook', ruleIds: [], chars: onlyGaps.length };
     return { text: '', source: 'none', ruleIds: [], chars: 0 };
   };
 
@@ -1073,6 +1106,10 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const registerTurns = new Map<string, number>();
   /** 最近一次用户轮次开始时间，用于主动闸门的「静默多久」信号。 */
   let lastTurnAtMs = Date.now();
+  /** 假设台账：按会话记录模型自作而未确认的假设（不落盘）。 */
+  const assumptionLedger = new AssumptionLedger();
+  /** 最近一次活跃会话 id：注入段拿不到会话参数，只能用它。 */
+  let lastSessionId: string | null = null;
   /** 单轮参与统计的最大字符数：防止超长轮把内存和统计都拖歪。 */
   const MAX_STYLE_CHARS = 12000;
 
@@ -1115,6 +1152,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
         const type = (event as { type?: unknown } | null | undefined)?.type;
         const data = (event as { data?: unknown } | null | undefined)?.data;
+        // 注入段拿不到会话参数，只能记住最近活跃的那个会话（单用户桌面场景够用）。
+        lastSessionId = sessionId;
         if (type === 'turn/start') {
           const turn = Number((data as { turn?: unknown } | null | undefined)?.turn);
           if (Number.isFinite(turn)) turnTracker.beginTurn(sessionId, turn);
@@ -1124,6 +1163,14 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         } else if (type === 'user/message') {
           const text = extractUserText(data);
           turnTracker.appendUserText(sessionId, text);
+          // 用户明确纠正 → 之前那些"模型自作假设"已被否掉，清空台账。
+          // 依据 arXiv:2505.06120：模型走错方向后不会自己回头，得靠外部信号打断。
+          if (!isRuntimeContext(text) && classifyFeedback(text) === 'correction') {
+            const cleared = assumptionLedger.clear(sessionId);
+            if (cleared > 0) {
+              ctx.logger?.info?.(`cognition-engine: 用户纠正，清掉 ${cleared} 条未确认假设`);
+            }
+          }
           // 场合判定：只记一行，不改注入。运行时注入的上下文块和空白不记。
           if (text.trim().length > 0 && !isRuntimeContext(text)) {
             try {
@@ -1138,10 +1185,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
             }
           }
         } else if (type === 'assistant/message') {
+          const message = (data as { message?: unknown; turn?: unknown } | null | undefined)?.message;
+          const turn = Number((data as { turn?: unknown } | null | undefined)?.turn);
+          const text = extractUserText(message); // 同样的取文本逻辑：只拼 text 块
+          // 假设台账：不受 styleEnabled 影响，永远记（这是防漂移的一环）。
+          if (text.length > 0) assumptionLedger.observe(sessionId, text);
           if (config.styleEnabled) {
-            const message = (data as { message?: unknown; turn?: unknown } | null | undefined)?.message;
-            const turn = Number((data as { turn?: unknown } | null | undefined)?.turn);
-            const text = extractUserText(message); // 同样的取文本逻辑：只拼 text 块
             if (text.length > 0) {
               const current = assistantBuffers.get(sessionId);
               const base = current !== undefined && current.turn === turn ? current.text : '';
@@ -2116,8 +2165,19 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
 
     // 当前实际注入到系统提示的内容（排查「面板说有、模型看不到」这类问题用）
     route('/cognition-engine/injected', () => {
-      const { text, source } = renderInjectedContext();
-      return { source, chars: text.length, text, persona: persona.render() };
+      const { text, source, ruleIds, chars } = renderInjectedContext();
+      return {
+        source,
+        chars,
+        text,
+        persona: persona.render(),
+        /** 本轮实际展开的准则条数 / 生效准则总数（用于判断有没有被折叠） */
+        ruleCount: ruleIds.length,
+        activeRuleCount: playbook.all().filter((entry) => entry.status === 'active').length,
+        injectMaxInstances: config.injectMaxInstances,
+        /** 本会话未确认的假设（防多轮漂移用）。 */
+        assumptions: lastSessionId === null ? [] : assumptionLedger.list(lastSessionId).map((item) => item.text),
+      };
     });
 
     // 人格块（S3）：查看 / 提案 / 确认 / 拒绝。

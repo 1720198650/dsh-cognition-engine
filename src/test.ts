@@ -36,7 +36,8 @@ import { SuperagentClient, compactTicket, buildOverview } from './superagent.ts'
 import { apply } from './index.ts';
 import { upsertManagedBlock, readManagedBlock, wrapBlock, AgentsFileSync, BEGIN_MARKER, END_MARKER } from './agents_file.ts';
 import { PlaybookStore } from './playbook.ts';
-import { blocksAcceptance } from './cpe.ts';
+import { blocksAcceptance, detectsConstantRanking } from './cpe.ts';
+import { extractAssumptions, AssumptionLedger } from './assumptions.ts';
 import { TopicStore } from './topics.ts';
 import { buildDistillPrompt, parseDistillResult } from './distill.ts';
 import { dataDir, expandHome, packageRoot, resolveDataFile, resolveUserPath } from './util.ts';
@@ -2032,12 +2033,12 @@ async function main(): Promise<void> {
     const doc = store.document;
     doc.thresholds.minCases = 5;
     doc.thresholds.maxDrop = 0.2;
-    const base = store.measureBaseline(() => ['ctxt-00001', 'ctxt-00002']);
+    const base = store.measureBaseline((q) => [q, 'ctxt-00001', 'ctxt-00002']);
     assert.equal(base.ok, true);
     assert.equal(base.baseline?.passRate, 1);
 
     // 同一状态下检查 → green
-    assert.equal(store.check(() => ['ctxt-00001']).status, 'green');
+    assert.equal(store.check((q) => [q, 'ctxt-00001', 'ctxt-00002']).status, 'green');
     // 期望的准则被挤出前 K → 3/5 通过 = 0.6，掉 0.4 > 0.2 → red
     let call = 0;
     const degraded = store.check(() => {
@@ -3100,6 +3101,62 @@ async function main(): Promise<void> {
     store.supersede(a.id, b.id, Date.now(), longReason);
     const closed = store.get(a.id)!;
     assert.equal(closed.supersedeReason!.length, 200, '理由应被截到 200 字');
+  });
+
+  section('[26] P0 三项：注入上限 / 假设台账 / 评测反作弊');
+
+  await test('假设抽取：抓住「按…理解」「我默认」「应该是…」，忽略普通陈述', () => {
+    const hits = extractAssumptions(
+      '好的，我来处理。按照你的理解，这次只改 README。我默认这份文档只给内部看。另外今天天气不错。应该是把标题改成二级。',
+    );
+    assert.ok(hits.some((h) => h.includes('按照你的理解')), hits.join(' | '));
+    assert.ok(hits.some((h) => h.includes('我默认')), hits.join(' | '));
+    assert.ok(hits.some((h) => h.includes('应该是')), hits.join(' | '));
+    assert.equal(hits.some((h) => h.includes('天气不错')), false, '普通陈述不该被抓');
+    assert.ok(hits.length <= 3);
+  });
+
+  await test('假设台账：去重、上限 3 条、用户纠正后清空、渲染为空时不占位', () => {
+    const ledger = new AssumptionLedger();
+    assert.equal(ledger.render('s1'), '', '空台账应返回空串');
+    ledger.observe('s1', '我假设你要的是 A 方案。');
+    ledger.observe('s1', '我假设你要的是 A 方案。'); // 重复
+    assert.equal(ledger.count('s1'), 1, '重复假设不应重复登记');
+    ledger.observe('s1', '应该是要在周五前交。');
+    ledger.observe('s1', '按照惯例这块归你确认。');
+    ledger.observe('s1', '我默认这次不动数据。');
+    assert.ok(ledger.count('s1') <= 3, '最多 3 条');
+    const rendered = ledger.render('s1');
+    assert.ok(rendered.includes('尚未确认的假设'), rendered);
+    ledger.clear('s1');
+    assert.equal(ledger.count('s1'), 0, '清空后应为 0');
+  });
+
+  await test('CPE 反作弊：恒定 top-1 判红，正常排名不误伤', () => {
+    assert.equal(detectsConstantRanking(['a', 'a', 'a']), true);
+    assert.equal(detectsConstantRanking(['a', 'b', 'a']), false);
+    assert.equal(detectsConstantRanking(['a', 'a']), false, '少于 3 条不判');
+
+    const store = new CpeStore({ filePath: join(TEST_TMP, 'cpe-cheat.json') });
+    // minCases 默认 20，这里只放 4 条用例，所以先把阈值调低。
+    store.document.thresholds.minCases = 3;
+    const ruleIds = ['r1', 'r2', 'r3'];
+    for (let i = 0; i < 4; i += 1) {
+      store.addCase({ question: `问题${i}`, expectedRuleIds: [ruleIds[i % 3]!], by: 'user' });
+    }
+    // 作弊解析器：对任何问题都返回同一顺序
+    const cheating = store.check(() => ['r1', 'r2', 'r3']);
+    assert.equal(cheating.antiCheat, 'constant-ranking');
+    assert.equal(cheating.status, 'red', '恒定排名必须判红，不能当高分');
+
+    // 正常解析器：按问题给不同 order
+    const honest = store.check((question) => {
+      const index = Number(question.replace(/\D/g, '')) % 3;
+      return [ruleIds[index]!, ...ruleIds.filter((id) => id !== ruleIds[index])];
+    });
+    assert.equal(honest.antiCheat, undefined, '正常排名不应被判作弊');
+    assert.notEqual(honest.status, 'red', '正常且全对不应判红');
+    rmSync(join(TEST_TMP, 'cpe-cheat.json'), { force: true });
   });
 
   /* ---------------------------------------------------------------- */

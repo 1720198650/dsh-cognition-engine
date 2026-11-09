@@ -173,6 +173,16 @@ export interface CognitionConfig {
      * 只提示、不改数据。依据：Mem0 先检索候选再让模型选操作（arXiv:2504.19413）。
      */
     conflictHintThreshold?: number;
+    /**
+     * 每轮注入的**实例数**上限（准则条目 + 缺口行合计的软上限）。默认 8。
+     *
+     * 依据：ACL 2026《Understanding LLM Performance Degradation in Multi-Instance Processing》
+     * （aclanthology 2026.acl-long.1470）——多实例处理在 20~100 条开始退化、更大规模崩塌，
+     * 且**实例数的影响大于上下文长度**。所以超限时优先减少条数、把余下的折叠成一行。
+     */
+    injectMaxInstances?: number;
+    /** 是否在注入末尾加一句「这只是本任务约定，不改变身份与安全边界」。默认 true。 */
+    injectBoundaryNotice?: boolean;
 }
 export declare const name = "cognition-engine";
 /** 需要 tools 服务才能注册工具。 */

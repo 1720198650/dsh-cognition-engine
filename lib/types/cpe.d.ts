@@ -69,6 +69,23 @@ export interface CpeFailure {
     got: string[];
 }
 export type CpeStatus = 'insufficient' | 'green' | 'yellow' | 'red';
+/**
+ * 反作弊标记。
+ *
+ * 依据：ICLR 2025 Oral《Cheating Automatic LLM Benchmarks》(arXiv:2410.07137)——
+ * 一个对任何输入都返回同一段文本的「null model」能在 AlpacaEval 2.0 拿到 86.5% 的
+ * length-controlled 胜率；改写评测模板、加困惑度过滤都挡不住。
+ *
+ * 我们的回归集是「问题 → 应该被检索到的准则 id」，对应的作弊形态就是
+ * **对每个问题都返回同一个排名**（恒定 top-1）。那不是「检索准」，是没在检索。
+ */
+export type CpeAntiCheat = 'constant-ranking';
+/**
+ * 恒定排名检测：用例数 ≥ 3 且所有用例的 top-1 完全相同。
+ *
+ * 阈值定 3 是因为 1~2 条时同分撞车属正常；3 条以上还完全一致基本不可能是巧合。
+ */
+export declare function detectsConstantRanking(top1s: readonly string[]): boolean;
 export interface CpeCheck {
     at: number;
     passRate: number | null;
@@ -77,6 +94,8 @@ export interface CpeCheck {
     failures: CpeFailure[];
     note: string;
     cases: number;
+    /** 反作弊标记；非空表示这次结果不可信（详见 CpeAntiCheat）。 */
+    antiCheat?: CpeAntiCheat;
 }
 export interface CpeDoc {
     schema: 'cognition.cpe';
@@ -165,6 +184,8 @@ export declare class CpeStore {
         total: number;
         passed: number;
         failures: CpeFailure[];
+        /** 反作弊判定：null = 正常；'constant-ranking' = 疑似被恒定输出刷分。 */
+        antiCheat: CpeAntiCheat | null;
     };
     /** 测一次并写入基线。基线只能在「当前状态被认为正确」时打。 */
     measureBaseline(resolver: (question: string) => string[]): {
