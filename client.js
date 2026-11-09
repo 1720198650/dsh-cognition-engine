@@ -1250,8 +1250,8 @@ window.__ModuleLoader__.load({
                 h(
                   'div',
                   { style: S.meta },
-                  h('button', { type: 'button', style: S.tab, onClick: () => keep(left, right) }, '保留左边这条'),
-                  h('button', { type: 'button', style: S.tab, onClick: () => keep(right, left) }, '保留右边这条'),
+                  h('button', { type: 'button', style: S.tab, onClick: () => keep(left, right) }, '保留 A'),
+                  h('button', { type: 'button', style: S.tab, onClick: () => keep(right, left) }, '保留 B'),
                   h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, '另一条将被标为失效'),
                   h('span', null, c.subject),
                 ),
