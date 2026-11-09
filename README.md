@@ -422,6 +422,16 @@ You are a coding agent powered by the workbuddy/deepseek-v4.1-flash model.
 
 ## 数据与隐私
 
+> **日志本身就是敏感数据。** arXiv:2608.09867 从公开仓库的 315,320 个推理块里解出
+> 367 条 PII 和 182 个凭据。`cognition-*.jsonl`（审计/快照）和会话日志都含真实正文，
+> **不要直接贴进 issue、聊天或仓库**。
+>
+> 要分享排障信息，用导出脚本先把正文打码（只留结构 + 前 N 字）：
+>
+> ```bash
+> node scripts/redact-export.mjs ~/.dsh/cognition-engine ./redacted --keep 8
+> ```
+
 | 项 | 说明 |
 |---|---|
 | 落盘位置 | `~/.dsh/cognition-engine/`（可用环境变量 `DSH_COGNITION_DATA_DIR` 覆盖） |

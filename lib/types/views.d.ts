@@ -25,3 +25,20 @@ export declare function buildCoreDigest(memory: TemporalMemoryStore, options?: {
 }): string;
 /** 面板展开时按需拉取的明细（不走模型上下文，只给页面看）。 */
 export declare function buildDetail({ memory, taskManager }: DetailDeps): Record<string, unknown>;
+/**
+ * 记忆的置信度分档。
+ *
+ * 依据：EMNLP 2026《Popular but Wrong》(2505.17537)——置信度与「答案有多流行」强相关，
+ * 而流行不等于正确；不做分档，模型会把「听起来顺」当成「确定」。
+ * 我们没有 logits，只能用**证据强度**做代理：
+ *
+ * - `verified`：用户亲口说过 / 人工修正过 —— 可以当事实用
+ * - `reported`：从外部导入（文件/导入工具）—— 需要复核来源
+ * - `inferred`：模型自己写的 —— 只能当线索，不能当结论
+ */
+export type MemoryConfidence = 'verified' | 'reported' | 'inferred';
+export declare function memoryConfidence(fact: {
+    source: string;
+    origin?: string;
+    revisedAt?: number;
+}): MemoryConfidence;

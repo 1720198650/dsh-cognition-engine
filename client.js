@@ -3219,46 +3219,50 @@ window.__ModuleLoader__.load({
                               h(
                                 'div',
                                 { style: PS.rowFlex },
-                                ['draft', 'open', 'doing', 'review', 'done']
+                                h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, '推进到：'),
+                                ['doing', 'review', 'done']
                                   .filter((s) => s !== t.stage)
-                                  .slice(0, 2)
                                   .map((s) =>
                                     h(
                                       'button',
                                       {
                                         type: 'button',
-                                        style: PS.btn,
+                                        style: Object.assign({}, PS.btn, s === 'done' ? { fontWeight: 600 } : {}),
                                         disabled: busy,
                                         key: s,
                                         onClick: () =>
                                           post(
-                                            '/cognition-engine/tickets/stage?id=' +
-                                              encodeURIComponent(t.id) +
-                                              '&stage=' +
-                                              s,
+                                            '/cognition-engine/tickets/stage?id=' + encodeURIComponent(t.id) + '&stage=' + s,
                                           ),
                                       },
-                                      dict.stage[s],
+                                      s === 'done' ? '✓ 标为已完成' : dict.stage[s],
                                     ),
                                   ),
-                                h(
-                                  'input',
-                                  {
-                                    placeholder: dict.deliverableHint,
-                                    defaultValue: t.deliverable || '',
-                                    style: Object.assign({}, PS.ta, { minHeight: 0, height: 26, padding: '2px 8px', fontSize: 11, flex: '1 1 120px' }),
-                                    onKeyDown: (event) => {
-                                      if (event.key !== 'Enter') return;
-                                      const v = event.target.value || '';
-                                      post(
-                                        '/cognition-engine/tickets/update?id=' +
-                                          encodeURIComponent(t.id) +
-                                          '&deliverable=' +
-                                          encodeURIComponent(v),
-                                      );
-                                    },
+                              ),
+                              h(
+                                'div',
+                                { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+                                h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, '产物：'),
+                                h('input', {
+                                  id: 'dv-' + t.id,
+                                  placeholder: dict.deliverableHint,
+                                  defaultValue: t.deliverable || '',
+                                  style: Object.assign({}, PS.ta, { minHeight: 0, height: 26, padding: '2px 8px', fontSize: 11, flex: '1 1 120px' }),
+                                  onKeyDown: (event) => {
+                                    if (event.key !== 'Enter') return;
+                                    event.target.blur();
                                   },
-                                ),
+                                }),
+                                h('button', {
+                                  type: 'button',
+                                  style: PS.btn,
+                                  disabled: busy,
+                                  onClick: () => {
+                                    const el = document.getElementById('dv-' + t.id);
+                                    const v = el && typeof el.value === 'string' ? el.value : '';
+                                    post('/cognition-engine/tickets/update?id=' + encodeURIComponent(t.id) + '&deliverable=' + encodeURIComponent(v));
+                                  },
+                                }, '保存产物'),
                               ),
                             ),
                           ),

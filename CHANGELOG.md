@@ -1,5 +1,31 @@
 # 更新报告
 
+## v0.13.0（2026-11-09）— 把「防伪」补齐：注入上限、假设台账、评测反作弊、记忆冲突裁决
+
+依据 15 篇论文的调研（见 [docs/upgrade-plan-v4.md](docs/upgrade-plan-v4.md)），一轮做完 P0/P1/P2：
+
+**P0**
+- 注入实例数上限（`injectMaxInstances`，默认 8）+ 超限折叠；`playbookMaxEntries` 默认 12→6（ACL 2026, 1470：实例数比字数更伤）
+- 注入边界声明（`injectBoundaryNotice`）：窄示例会外溢到无关任务（ACL 2026, 1770）
+- 假设台账：记下模型自作而未确认的假设，下一轮摆出来；用户纠正即清空（arXiv:2505.06120：多轮掉 39%）
+- 评测反作弊：所有用例 top-1 相同 → 判 `constant-ranking` 直接红（ICLR 2025 Oral, 2410.07137：null model 拿 86.5%）
+
+**P1**
+- 完成必须有证据：`manage_long_task` 标 COMPLETED 需 `evidence`（ACL 2026 Best Paper, 689：目的论偏差）
+- 新工具 `cognition_clarify`：开工前查歧义，命中只问一个问题（arXiv:2604.21505）
+- 主题隔离注入（`injectTopicScoped`）：只注入当前主题 + 未归类（ACL 2026, 1770）
+- 派单文本自带最小编辑约束（ACL 2026, 2604.05963：过度编辑是主因）
+
+**P2**
+- 反题用语言化采样：先列 3 条候选并标概率，再取最高展开（arXiv:2510.01171）
+- 召回结果带置信度分档：`verified / reported / inferred`（EMNLP 2026, 2505.17537）
+- 日志脱敏导出脚本 `scripts/redact-export.mjs` + README「数据与隐私」警示（arXiv:2608.09867）
+- 人格审计题库确认是自由作答 + held/soft/hard 三档细则，不是选择题（无需改，已加测试守住）
+
+**其他**：记忆冲突候选提示 + `supersedeReason` + 面板裁决；来源待办已删除的提醒自动下线；BM25 调研在脱敏语料上重测。
+测试 155 → **188**。
+
+---
 ## 未发布 — 升级计划 v4 的 P1 四项
 
 **① 完成必须有证据**

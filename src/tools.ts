@@ -17,6 +17,7 @@ import { ProactiveGate } from './proactive.ts';
 import { LongHorizonTaskManager } from './task_manager.ts';
 import { completionNeedsEvidence } from './task_manager.ts';
 import { inspectRequirement } from './ambiguity.ts';
+import { memoryConfidence } from './views.ts';
 import { asRecord, optionalString, pick, requireString, textOutput, parseMoment } from './util.ts';
 
 /** 工具定义用到的全部外部依赖。 */
@@ -260,6 +261,7 @@ export function createTools(deps: ToolDeps) {
             validFrom: hit.fact.validFrom,
             validTo: hit.fact.validTo,
             supersededBy: hit.fact.supersededBy,
+            confidence: memoryConfidence(hit.fact),
           })),
         });
     },
