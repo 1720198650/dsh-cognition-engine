@@ -299,6 +299,8 @@ export interface CognitionConfig {
   injectMaxInstances?: number;
   /** 是否在注入末尾加一句「这只是本任务约定，不改变身份与安全边界」。默认 true。 */
   injectBoundaryNotice?: boolean;
+  /** 是否按当前任务主题隔离注入（只注入相关主题 + 未归类）。默认 true。 */
+  injectTopicScoped?: boolean;
 }
 
 type ResolvedConfig = Required<
@@ -429,6 +431,7 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     ),
     injectMaxInstances: Math.min(20, Math.max(1, Math.round(numberOr(config.injectMaxInstances, 8)))),
     injectBoundaryNotice: config.injectBoundaryNotice !== false,
+    injectTopicScoped: config.injectTopicScoped !== false,
     agentsFilePath:
       typeof config.agentsFilePath === 'string' && config.agentsFilePath.trim().length > 0
         ? expandHome(config.agentsFilePath.trim())
@@ -1008,8 +1011,19 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     const withAssumptions = (text: string): string =>
       assumptionText.length === 0 ? text : `${assumptionText}\n\n${text}`;
 
-    const detailed = playbook.renderDetailed(undefined, undefined, (id) => topics.get(id)?.name);
-    const section = playbook.renderSection(undefined, (id) => topics.get(id)?.name);
+    // 主题隔离（ACL 2026, 1770）：窄领域示例会外溢到无关任务。
+    // 命中当前任务主题时，只注入该主题 + 未归类的准则；没命中则全量（信息不足时不猜）。
+    let topicFilter: ((entry: { topicIds: readonly string[] }) => boolean) | undefined;
+    if (config.injectTopicScoped && lastUserText.length > 0) {
+      const hit = topics.match(lastUserText, 1)[0];
+      if (hit !== undefined) {
+        const topicId = hit.topic.id;
+        topicFilter = (entry) => entry.topicIds.length === 0 || entry.topicIds.includes(topicId);
+      }
+    }
+
+    const detailed = playbook.renderDetailed(undefined, undefined, (id) => topics.get(id)?.name, topicFilter);
+    const section = playbook.renderSection(undefined, (id) => topics.get(id)?.name, topicFilter);
     if (section.length > 0) {
       // 实例数上限（ACL 2026, 1470）：多实例输入在 20~100 条开始退化，之后崩塌，
       // 且**条数的影响大于上下文长度**。所以超限时不是压字数，而是把剩下的折叠成一行。
@@ -1110,6 +1124,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const assumptionLedger = new AssumptionLedger();
   /** 最近一次活跃会话 id：注入段拿不到会话参数，只能用它。 */
   let lastSessionId: string | null = null;
+  /** 最近一条用户消息：用于主题匹配，决定注入哪些主题的准则（主题隔离）。 */
+  let lastUserText = '';
+
   /** 单轮参与统计的最大字符数：防止超长轮把内存和统计都拖歪。 */
   const MAX_STYLE_CHARS = 12000;
 
@@ -1163,6 +1180,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         } else if (type === 'user/message') {
           const text = extractUserText(data);
           turnTracker.appendUserText(sessionId, text);
+          if (!isRuntimeContext(text) && text.trim().length > 0) lastUserText = text;
           // 用户明确纠正 → 之前那些"模型自作假设"已被否掉，清空台账。
           // 依据 arXiv:2505.06120：模型走错方向后不会自己回头，得靠外部信号打断。
           if (!isRuntimeContext(text) && classifyFeedback(text) === 'correction') {
@@ -2867,9 +2885,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     // S8：每次真实召回都记一条（只记 id 与分数，不记正文）
     onRecall: (info) => recallLog.record(info),
   });
-  const [remember, recall, forget, reflect, state, cognitionContext, manageLongTask] = toolList;
+  const [remember, recall, forget, reflect, state, cognitionContext, manageLongTask, clarify] = toolList;
 
-  for (const definition of [remember, recall, forget, reflect, state, cognitionContext, manageLongTask]) {
+  for (const definition of [remember, recall, forget, reflect, state, cognitionContext, manageLongTask, clarify]) {
     try {
       assertObjectSchema(definition.name, definition.parameters);
       disposers.push(tools.register(definition));

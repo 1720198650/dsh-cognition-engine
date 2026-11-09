@@ -2829,14 +2829,20 @@ window.__ModuleLoader__.load({
               );
 
         const unhealthy = data.unhealthy || [];
+        // 最小编辑约束（依据 arXiv:2604.05963：过度编辑是修复的主要失败模式）。
+        // 派出去的单子自带这条，比事后 review 便宜。
+        const MIN_EDIT_RULE =
+          '\n\n约束：只改必要的行，不要顺手重构或统一格式；' +
+          '改动行数不得超过必要行数的 3 倍，超了先说明理由。';
+        const dispatchText = draft.trim().length === 0 ? '' : draft.trim() + MIN_EDIT_RULE;
         const issueUrl =
-          data.repo && draft.trim().length > 0
+          data.repo && dispatchText.length > 0
             ? 'https://github.com/' +
               data.repo +
               '/issues/new?title=' +
               encodeURIComponent(draft.trim().slice(0, 80)) +
               '&body=' +
-              encodeURIComponent(draft.trim())
+              encodeURIComponent(dispatchText)
             : null;
 
         return h(
@@ -2900,10 +2906,10 @@ window.__ModuleLoader__.load({
                 {
                   type: 'button',
                   style: PS.btn,
-                  disabled: draft.trim().length === 0,
+                  disabled: dispatchText.length === 0,
                   onClick: async () => {
                     try {
-                      await navigator.clipboard.writeText(draft.trim());
+                      await navigator.clipboard.writeText(dispatchText);
                       setCopied(true);
                     } catch {
                       setCopied(false);

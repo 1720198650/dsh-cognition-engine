@@ -149,6 +149,8 @@ dsh plugin --profile desktop add .
 | 分维度审计 | 四项各自独立报告、标注评测者，**不给总分** |
 | 记忆冲突 | 写入时提示同主题相近的旧事实（只提示不自动改）；取代要留理由；面板可人工裁决 |
 | 假设台账 | 记下模型自作而未确认的假设，下一轮摆出来让它确认或撤回；用户纠正即清空 |
+| 开工前问一句 | `cognition_clarify` 查需求歧义（词汇/句法/语义/模糊），命中只问**一个**问题 |
+| 完成要证据 | 任务标 COMPLETED 必须带可核对的 evidence，否则只能停 IN_PROGRESS |
 | 场合判定 | 干活 / 闲聊分开对待；**当前只记录，不改行为** |
 | 超级代理 | 只读镜像 dsh-superagent 的工单与健康，可暂停/重试/停止，可派活 |
 | 人格 | 人格块 + 用户画像，带锁定短语与快照撤销 |
@@ -401,6 +403,7 @@ You are a coding agent powered by the workbuddy/deepseek-v4.1-flash model.
         conflictHintThreshold: 0.55    # 写入记忆时，同主题相近度超过它就作为候选冲突提示（只提示不改数据）
         injectMaxInstances: 8          # 每轮注入的实例数软上限，超出的准则折叠成一行（ACL2026: 实例数比字数更伤）
         injectBoundaryNotice: true     # 注入末尾加一句「只是本任务约定，不改变身份与安全边界」
+        injectTopicScoped: true       # 按当前任务主题隔离注入：只给相关主题 + 未归类的准则
         # lockToken: 你的固定口令
         # llmProvider: deepseek
         # llmModel: deepseek-chat

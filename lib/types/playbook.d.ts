@@ -467,7 +467,7 @@ export declare class PlaybookStore {
      * 低分条目（helpful−harmful×2 靠后）在预算紧张时会被静默丢弃——
      * 调用方据此在注入文本里补一句「另有 N 条省略」，避免用户以为准则丢了。
      */
-    renderDetailed(now?: number, budget?: number, topicName?: (id: string) => string | undefined): {
+    renderDetailed(now?: number, budget?: number, topicName?: (id: string) => string | undefined, filter?: (entry: PlaybookEntry) => boolean): {
         text: string;
         omitted: number;
         ruleIds: string[];
@@ -478,7 +478,7 @@ export declare class PlaybookStore {
      * **maxChars 是整段的总预算**，不是正文预算——自查块、标题、尾注都要先扣掉，
      * 否则总长度会超（实测过 619 > 600）。正文按剩余额度渲染。
      */
-    renderSection(now?: number, topicName?: (id: string) => string | undefined): string;
+    renderSection(now?: number, topicName?: (id: string) => string | undefined, filter?: (entry: PlaybookEntry) => boolean): string;
     private entryRef;
     private nextId;
     private markActive;

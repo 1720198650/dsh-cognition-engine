@@ -183,6 +183,8 @@ export interface CognitionConfig {
     injectMaxInstances?: number;
     /** 是否在注入末尾加一句「这只是本任务约定，不改变身份与安全边界」。默认 true。 */
     injectBoundaryNotice?: boolean;
+    /** 是否按当前任务主题隔离注入（只注入相关主题 + 未归类）。默认 true。 */
+    injectTopicScoped?: boolean;
 }
 export declare const name = "cognition-engine";
 /** 需要 tools 服务才能注册工具。 */

@@ -352,6 +352,10 @@ export declare function createTools(deps: ToolDeps): readonly [{
                 type: string;
                 description: string;
             };
+            evidence: {
+                type: string;
+                description: string;
+            };
             startAt: {
                 type: string;
                 description: string;
@@ -361,6 +365,31 @@ export declare function createTools(deps: ToolDeps): readonly [{
                 description: string;
             };
             parallel: {
+                type: string;
+                description: string;
+            };
+        };
+    };
+    output: {
+        schema: {
+            type: "string";
+        };
+        render: (_args: unknown, value: unknown) => Array<{
+            type: "text";
+            text: string;
+        }>;
+        presentationMeta: (_args: unknown, value: unknown) => Record<string, unknown>;
+    };
+    execute(args: unknown): Promise<string>;
+}, {
+    name: string;
+    description: string;
+    parameters: {
+        type: string;
+        additionalProperties: boolean;
+        required: string[];
+        properties: {
+            text: {
                 type: string;
                 description: string;
             };

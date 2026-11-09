@@ -1338,10 +1338,14 @@ export class PlaybookStore {
     now: number = this.clock(),
     budget?: number,
     topicName?: (id: string) => string | undefined,
+    filter?: (entry: PlaybookEntry) => boolean,
   ): { text: string; omitted: number; ruleIds: string[] } {
     const maxChars = Math.max(120, Math.round(budget ?? this.maxChars));
     // 证据链断裂的条目不注入——但不是删除，前提恢复后它会自动回来
-    const active = this.active(now).filter((entry) => entry.evidence?.status !== 'orphaned');
+    // filter 用于主题隔离：只注入当前任务相关主题的条目（ACL 2026, 1770：窄示例会外溢）
+    const active = this.active(now)
+      .filter((entry) => entry.evidence?.status !== 'orphaned')
+      .filter((entry) => (filter === undefined ? true : filter(entry)));
     if (active.length === 0) return { text: '', omitted: 0, ruleIds: [] };
 
     const score = (entry: PlaybookEntry): number => this.effectiveScore(entry);
@@ -1422,7 +1426,11 @@ export class PlaybookStore {
    * **maxChars 是整段的总预算**，不是正文预算——自查块、标题、尾注都要先扣掉，
    * 否则总长度会超（实测过 619 > 600）。正文按剩余额度渲染。
    */
-  renderSection(now: number = this.clock(), topicName?: (id: string) => string | undefined): string {
+  renderSection(
+    now: number = this.clock(),
+    topicName?: (id: string) => string | undefined,
+    filter?: (entry: PlaybookEntry) => boolean,
+  ): string {
     const selfCheck = this.renderSelfCheck(now);
     const header = '【工作准则】（由记忆蒸馏，累计 helpful/harmful）';
     // 尾注顺带告诉模型怎么回写使用效果——不写这句，分项计数永远是 0。
@@ -1438,7 +1446,7 @@ export class PlaybookStore {
     // 给「另有 N 条省略」预留空间，否则提示自己会把总长顶出预算
     const hintReserve = 32;
     const detail = hasBody
-      ? this.renderDetailed(now, this.maxChars - overhead - hintReserve, topicName)
+      ? this.renderDetailed(now, this.maxChars - overhead - hintReserve, topicName, filter)
       : { text: '', omitted: 0 };
     const body = detail.text;
     const omittedHint = detail.omitted > 0 ? `（另有 ${detail.omitted} 条准则因预算省略）` : '';
