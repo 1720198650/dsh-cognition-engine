@@ -692,6 +692,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/research-super-agent-and-persona.md](docs/research-super-agent-and-persona.md) | Super-agent 项目清单 + 人格块设计 + 「自我学习」四层辨析（L1 上下文 / L2 记忆 / L3 工具自造 / L4 权重更新） |
 | [docs/research-frozen-weight-learning.md](docs/research-frozen-weight-learning.md) | 冻结权重下的学习与遗忘：ExpeL / Voyager / AWM / Reflexion / ReasoningBank / ACE / PATH-Bench / Oblivion |
 | [docs/upgrade-plan-memory-v5.md](docs/upgrade-plan-memory-v5.md) | **记忆 v5**：Anthropic 记忆四层 + dreaming 离线整合 + HarnessMM 的 token 经济；开源对照（Mem0/Zep/Letta/A-MEM）+ P0/P1/P2 |
+| [docs/analytic-mind-sourcebook.md](docs/analytic-mind-sourcebook.md) | **分析心灵哲学：只选不拖累实现的**（功能主义/BDI/GWT/CTM/HOT/自我模型/IIT 逐流派取舍；ACT-R 幂律衰减、pyphi、pymdp、Soar/SPADE 工程对照） |
 | [docs/phenomenology-sourcebook.md](docs/phenomenology-sourcebook.md) | **现象学清单（10 条，逐条标注取/不取）**：Husserl 滞留/前提/被动综合、Merleau-Ponty 习性、Zahavi 最小自我、Gallagher 自我模式、Heidegger 在世、Dreyfus 技能应对、Seth 具身自我、Varela 神经现象学 + 概念→计算翻译表 |
 | [docs/plan-sediment-layer-v1.md](docs/plan-sediment-layer-v1.md) | **原创方案：沉积层**（4 维偏置 + 哈希链只追加轨迹 + 检索消融判据）；含与 Pae/ITCMA/yogacara 的差异对照 |
 | [docs/upgrade-plan-persona-phenomenology.md](docs/upgrade-plan-persona-phenomenology.md) | **人格：现象学偏置层**（含材料真伪甄别：ITCMA/Pae/AutoPersonas/yogacara 为真，Sawyer/ARPM/Melissa/Sue 查无记录）+ 单文件原型与影子期方案 |
