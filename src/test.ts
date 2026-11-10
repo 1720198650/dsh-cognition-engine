@@ -3330,6 +3330,20 @@ async function main(): Promise<void> {
     assert.equal(report.items[0]!.severity, 'high');
   });
 
+  section('[30] 沉积层 Step 0 原型：四项断言');
+
+  await test('沉积层原型：不对称/不可逆/路径依赖+非检索/惊奇≠张力 四项全过', () => {
+    const out = execFileSync(process.execPath, ['scripts/sediment-proto.mjs'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    });
+    assert.ok(out.includes('4/4 通过'), out);
+    assert.ok(out.includes('全部通过'), out);
+    for (const name of ['A 不对称', 'B 不可逆', 'C 路径依赖', 'D 惊奇≠张力']) {
+      assert.ok(out.includes(name), `缺少断言：${name}`);
+    }
+  });
+
   /* ---------------------------------------------------------------- */
   console.log('');
   if (failures.length === 0) {
