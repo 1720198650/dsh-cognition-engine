@@ -150,3 +150,31 @@ delta = η × tension × direction(flip 方向)
 6. 可实现基底参考（只读其结构）：`tancheng33/dsh-yogacara`、`WindDreamboat/dsh_laap`。
 
 **不引用**：Sawyer《Temporal Skew》、ARPM、Melissa、Project Sue、Robodiment、5594→32 篇综述——均查无记录。
+
+---
+
+## 十、v1.1 修订：吸收现象学文献后的四条改动（2026-11-10）
+
+来源：[phenomenology-sourcebook.md](phenomenology-sourcebook.md)（收 10 条，逐条标注取/不取）。
+四条改动都是**可实现的规则改**，不是加概念：
+
+1. **新增事件 `protentionError`（前提/预期）**
+   每次交互前，用当前状态算"该主题的期望张力"（最近 10 次同主题事件均值）；
+   实际张力与期望偏差 > 0.2 时记一次，位移幅度为普通 tension 的 **1/3**。
+   → 让偏置层从"纯反应式"变成"带预期"，对应 Husserl 的前提结构。
+2. **新增 `settle` 巩固（被动综合）**
+   同主题连续 ≥ 8 轮无 tension → 记一次 settle，`retention *= 0.995`（地板 0.2），**追加事件实现**。
+3. **作用域限制 K=20（在世存在）**
+   偏置只对最近 20 轮出现过的 subject 生效，其余走中性值——防止一次冲突污染所有话题。
+4. **明确排除叙事自我（Ricoeur）**
+   不生成任何"关于自己的叙述"；`attachment` 只影响排序权重。避免滑回人格文案。
+
+**新增一条验收（防把"新奇"当"张力"）**：
+
+```
+新事实与旧事实相似但不矛盾（flip=0）→ 允许产生 protentionError，retention 必须不变。
+若 retention 变化 → 把"惊讶"错当"被推翻"，判失败。
+```
+
+哲学立场（写死在方案的"不能证明"里）：我们只做**可测的路径依赖**；
+第一人称报告只作为线索（Varela 1996 的方法论约束），不对意识作任何断言。
