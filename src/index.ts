@@ -12,7 +12,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { GapStore } from './gaps.ts';
 import { PlaybookEventLog } from './events.ts';
@@ -27,6 +28,7 @@ import { StyleStore } from './style.ts';
 import { RegisterLog, judgeRegister, isRuntimeContext, THRESHOLD, AMBIGUITY_THRESHOLD } from './register.ts';
 import { SuperagentClient } from './superagent.ts';
 import { AssumptionLedger } from './assumptions.ts';
+import { runDreaming } from './dreaming.ts';
 import { AgentsFileSync, defaultAgentsFilePath } from './agents_file.ts';
 import type { StyleBucket } from './style.ts';
 import { TemporalMemoryStore, textSimilarity } from './memory.ts';
@@ -301,6 +303,8 @@ export interface CognitionConfig {
   injectBoundaryNotice?: boolean;
   /** 是否按当前任务主题隔离注入（只注入相关主题 + 未归类）。默认 true。 */
   injectTopicScoped?: boolean;
+  /** 注入只给索引（id+摘要），正文靠 recall 取。默认 false。 */
+  injectIndexOnly?: boolean;
 }
 
 type ResolvedConfig = Required<
@@ -432,6 +436,7 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     injectMaxInstances: Math.min(20, Math.max(1, Math.round(numberOr(config.injectMaxInstances, 8)))),
     injectBoundaryNotice: config.injectBoundaryNotice !== false,
     injectTopicScoped: config.injectTopicScoped !== false,
+    injectIndexOnly: config.injectIndexOnly === true,
     agentsFilePath:
       typeof config.agentsFilePath === 'string' && config.agentsFilePath.trim().length > 0
         ? expandHome(config.agentsFilePath.trim())
@@ -1022,14 +1027,18 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       }
     }
 
-    const detailed = playbook.renderDetailed(undefined, undefined, (id) => topics.get(id)?.name, topicFilter);
-    const section = playbook.renderSection(undefined, (id) => topics.get(id)?.name, topicFilter);
+    const topicName = (id: string) => topics.get(id)?.name;
+    const detailed = playbook.renderDetailed(undefined, undefined, topicName, topicFilter);
+    // 索引模式（Anthropic 分层记忆）：注入层只放 id + 标题，正文靠 recall。
+    const section = config.injectIndexOnly
+      ? playbook.renderIndexOnly(undefined, topicName)
+      : playbook.renderSection(undefined, topicName, topicFilter);
     if (section.length > 0) {
       // 实例数上限（ACL 2026, 1470）：多实例输入在 20~100 条开始退化，之后崩塌，
       // 且**条数的影响大于上下文长度**。所以超限时不是压字数，而是把剩下的折叠成一行。
       const activeEntries = playbook.all().filter((entry) => entry.status === 'active');
       const rendered = new Set(detailed.ruleIds);
-      const omitted = activeEntries.filter((entry) => !rendered.has(entry.id));
+      const omitted = config.injectIndexOnly ? [] : activeEntries.filter((entry) => !rendered.has(entry.id));
       let body = section;
       if (omitted.length > 0 && activeEntries.length > config.injectMaxInstances) {
         const shown = omitted.slice(0, 5).map((entry) => entry.id);
@@ -1042,7 +1051,10 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         : body;
       // 只算，不写盘。写盘由 TurnFeedbackTracker 在轮次边界上做。
       const text = withAssumptions(withGaps(bounded));
-      return { text, source: 'playbook', ruleIds: [...detailed.ruleIds], chars: text.length };
+      const emittedIds = config.injectIndexOnly
+        ? playbook.active().filter((entry) => topicFilter === undefined || topicFilter(entry)).map((entry) => entry.id)
+        : [...detailed.ruleIds];
+      return { text, source: 'playbook', ruleIds: emittedIds, chars: text.length };
     }
 
     const digest = buildCoreDigest(memory);
@@ -2605,6 +2617,48 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       },
       { method: 'POST', requireAuth: explicitLock },
     );
+    // —— 离线整合（dreaming）：只出报告，不改数据 ——
+    const dreamFile = (): string => join(dataDir(), 'cognition-dream.json');
+    const runDream = (threshold?: number) => {
+      const report = runDreaming({
+        facts: memory.all().map((fact) => ({
+          id: fact.id,
+          subject: fact.subject,
+          content: fact.content,
+          supersededAt: fact.supersededAt,
+          deletedAt: fact.deletedAt,
+          archived: fact.archived,
+        })),
+        rules: playbook.all().map((entry) => ({
+          id: entry.id,
+          section: entry.section,
+          content: entry.content,
+          status: entry.status,
+          topicIds: entry.topicIds,
+          evidenceStatus: entry.evidence?.status,
+        })),
+        topicCount: topics.all().length,
+        ...(threshold === undefined ? {} : { duplicateThreshold: threshold }),
+      });
+      try {
+        writeFileSync(dreamFile(), JSON.stringify(report, null, 2) + '\n', 'utf8');
+      } catch {
+        /* 写不进报告不影响返回值 */
+      }
+      return report;
+    };
+    route('/cognition-engine/dreaming', () => {
+      try {
+        if (!existsSync(dreamFile())) return { report: null, path: dreamFile() };
+        return { report: JSON.parse(readFileSync(dreamFile(), 'utf8')), path: dreamFile() };
+      } catch (error) {
+        return { report: null, path: dreamFile(), error: messageOf(error) };
+      }
+    });
+    route('/cognition-engine/dreaming/run', (url) => {
+      const raw = Number(url.searchParams.get('threshold'));
+      return runDream(Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : undefined);
+    }, { method: 'POST' });
     route('/cognition-engine/memory/repair', () => {
       const repaired = memory.repairOrphans();
       if (repaired > 0) {

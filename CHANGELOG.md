@@ -1,5 +1,27 @@
 # 更新报告
 
+## 未发布 — 记忆模块 v5 的 P0（Anthropic 分层记忆 + dreaming）
+
+**① 索引注入模式** `injectIndexOnly`（默认 false，实测后再决定是否默认开）
+注入只给「id + 标题」，正文靠 `cognition_recall` 取。依据 Anthropic《The components of agent memory》：
+注入层只当索引（Claude Code 只加载 MEMORY.md 前 200 行 / 25KB），正文放下层按需读。
+`playbook.renderIndexOnly()` 负责渲染，`/injected` 用 `ruleIds` 回报实际索引到哪些准则。
+
+**② 离线整合（dreaming）第一版** `src/dreaming.ts` + `GET/POST /cognition-engine/dreaming(/run)`
+纯规则、不调模型、**只出报告不改数据**，写 `cognition-dream.json`。检出四类：
+- `duplicate-live`：同主题两条活事实高度相似 → 建议合并/取代
+- `untopiced-rule`：准则没挂主题 → 影响主题隔离注入
+- `orphan-evidence`：准则证据链全断但仍在生效
+- （冲突对沿用已有的 `memory.conflicts()` 与面板裁决）
+严重度排序，报告带扫描规模（facts/rules/topics），便于判断报告是否可信。
+`?threshold=` 可临时调相似度阈值（调试用，0~1）。
+
+**真实数据首跑结果**：18 条活事实 / 4 条准则 / 3 个主题 → **0 条建议**（当前数据确实干净，不是漏检；
+把阈值降到 0.30 仍为 0，且同主题内的活事实两两相似度均低于阈值）。
+
+测试 188 → **191**，新增 §[29] 三条用例。
+
+---
 ## v0.13.0（2026-11-09）— 把「防伪」补齐：注入上限、假设台账、评测反作弊、记忆冲突裁决
 
 依据 15 篇论文的调研（见 [docs/upgrade-plan-v4.md](docs/upgrade-plan-v4.md)），一轮做完 P0/P1/P2：

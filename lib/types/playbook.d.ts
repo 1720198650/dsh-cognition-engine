@@ -478,6 +478,14 @@ export declare class PlaybookStore {
      * **maxChars 是整段的总预算**，不是正文预算——自查块、标题、尾注都要先扣掉，
      * 否则总长度会超（实测过 619 > 600）。正文按剩余额度渲染。
      */
+    /**
+     * 索引模式：只输出「id + 一句话摘要」，正文留给 cognition_recall 取。
+     *
+     * 依据：Anthropic《The components of agent memory》——注入层只放索引
+     * （Claude Code 只加载 MEMORY.md 前 200 行 / 25 KB），正文放在下层按需读。
+     * 好处是注入 token 大幅下降；代价是多一步工具调用，所以默认关闭，等实测再定。
+     */
+    renderIndexOnly(now?: number, topicName?: (id: string) => string | undefined): string;
     renderSection(now?: number, topicName?: (id: string) => string | undefined, filter?: (entry: PlaybookEntry) => boolean): string;
     private entryRef;
     private nextId;

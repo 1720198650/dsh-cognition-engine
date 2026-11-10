@@ -404,6 +404,7 @@ You are a coding agent powered by the workbuddy/deepseek-v4.1-flash model.
         injectMaxInstances: 8          # 每轮注入的实例数软上限，超出的准则折叠成一行（ACL2026: 实例数比字数更伤）
         injectBoundaryNotice: true     # 注入末尾加一句「只是本任务约定，不改变身份与安全边界」
         injectTopicScoped: true       # 按当前任务主题隔离注入：只给相关主题 + 未归类的准则
+        injectIndexOnly: false        # 注入只给索引（id+标题），正文靠 recall 取；默认关，实测后再定
         # lockToken: 你的固定口令
         # llmProvider: deepseek
         # llmModel: deepseek-chat

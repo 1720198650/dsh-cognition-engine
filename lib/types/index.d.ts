@@ -185,6 +185,8 @@ export interface CognitionConfig {
     injectBoundaryNotice?: boolean;
     /** 是否按当前任务主题隔离注入（只注入相关主题 + 未归类）。默认 true。 */
     injectTopicScoped?: boolean;
+    /** 注入只给索引（id+摘要），正文靠 recall 取。默认 false。 */
+    injectIndexOnly?: boolean;
 }
 export declare const name = "cognition-engine";
 /** 需要 tools 服务才能注册工具。 */
