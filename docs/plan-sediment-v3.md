@@ -144,7 +144,7 @@ sedimentMaxDim: 4           # 硬上限，写死不可配
 把原型搬进 `src/sediment.ts`，写真实 JSONL，实现 `verify`。
 **验收**：单测覆盖"正常链 ok / 篡改中间一条 → brokenAt 正确 / 追加后仍 ok"。
 
-### Step 2：接 supersede（0.5 天）
+### Step 2：接 supersede（0.5 天）— ✅ 2026-11-10 已完成（两个入口已接，195 测试全绿）
 两个写入口：`cognition_remember(supersedes)` 与 `POST /memory/supersede` 成功后调用 `sediment.observe`。
 **验收**：真实数据里做一次取代 → 日志多一条，`from/to` 是真实 id；做纯补充 → 日志不增加。
 

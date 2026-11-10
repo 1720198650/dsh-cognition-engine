@@ -29,7 +29,7 @@ import { RegisterLog, judgeRegister, isRuntimeContext, THRESHOLD, AMBIGUITY_THRE
 import { SuperagentClient } from './superagent.ts';
 import { AssumptionLedger } from './assumptions.ts';
 import { runDreaming } from './dreaming.ts';
-import { SedimentStore } from './sediment.ts';
+import { SedimentStore, observeSupersedeFrom } from './sediment.ts';
 import { AgentsFileSync, defaultAgentsFilePath } from './agents_file.ts';
 import type { StyleBucket } from './style.ts';
 import { TemporalMemoryStore, textSimilarity } from './memory.ts';
@@ -1148,6 +1148,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   let lastSessionId: string | null = null;
   /** 最近一条用户消息：用于主题匹配，决定注入哪些主题的准则（主题隔离）。 */
   let lastUserText = '';
+  /** 由 setupRoutes 内赋值；工具层通过它把真实取代转给沉积层。 */
+  let observeSupersedeRef: ((oldId: string, newId: string, reason?: string) => void) | undefined;
 
   /** 单轮参与统计的最大字符数：防止超长轮把内存和统计都拖歪。 */
   const MAX_STYLE_CHARS = 12000;
@@ -2615,6 +2617,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         const reason = url.searchParams.get('reason') ?? undefined;
         if (oldId.length === 0 || newId.length === 0) throw new Error('需要 old 和 new 两个记忆 id');
         const result = memory.supersede(oldId, newId, Date.now(), reason);
+        observeSupersede(oldId, newId, reason);
         refreshEvidence();
         void stateStore.flush();
         return {
@@ -2629,6 +2632,15 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     );
     // —— 沉积层（Step 1）：只追加哈希链，只读日志/校验 ——
     const sediment = new SedimentStore({ filePath: config.sedimentFile, eta: config.sedimentEta });
+    /** 一次真实取代 → 沉积层（单向：事实 → 偏置）。任何异常都不许冒到调用方。 */
+    const observeSupersede = (oldId: string, newId: string, reason?: string): void => {
+      try {
+        observeSupersedeFrom(sediment, (id) => memory.get(id), oldId, newId, reason);
+      } catch {
+        /* 沉积层故障不影响记忆写入 */
+      }
+    };
+    observeSupersedeRef = observeSupersede;
     route('/cognition-engine/sediment/log', (url) => {
       const raw = Number(url.searchParams.get('limit') ?? '50');
       const limit = Number.isFinite(raw) ? Math.max(1, Math.min(500, raw)) : 50;
@@ -2963,6 +2975,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     tasksReady,
     config,
     refreshEvidence,
+    sedimentObserve: (oldId, newId, reason) => observeSupersedeRef?.(oldId, newId, reason),
     gapRecorder: (text, context) => {
       const { gap, duplicate } = gaps.add({ text, ...(context === undefined ? {} : { context }) });
       if (!duplicate) gaps.flush();

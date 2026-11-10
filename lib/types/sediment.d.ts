@@ -29,6 +29,8 @@ export interface ObserveInput {
     newText: string;
     personRelated?: boolean;
     protention?: boolean;
+    /** 取代理由（人话），常用于判断是不是翻案。 */
+    reason?: string;
     at?: number;
 }
 export interface ObserveResult {
@@ -45,13 +47,22 @@ export interface SedimentOptions {
     eta?: number;
     threshold?: number;
 }
-export declare function detectFlip(oldText: string, newText: string): {
+export declare function detectFlip(_oldText: string, newText: string, reason?: string): {
     flip: number;
     kind: 'reversal' | 'softening' | 'supplement';
 };
 /** 规范化序列化：字段顺序固定、数字 6 位，保证同一事件永远同一哈希。 */
 export declare function canonicalEvent(event: Omit<SedimentEvent, 'hash'>): string;
 export declare function hashEvent(event: Omit<SedimentEvent, 'hash'>): string;
+/**
+ * 一次真实取代 → 沉积层事件（单向：事实 → 偏置）。
+ * 抽成纯函数便于单测；`lookup` 由调用方提供（插件里就是 memory.get）。
+ * 找不到任一事实就静默返回——取代已被别处处理，这里不报错。
+ */
+export declare function observeSupersedeFrom(store: SedimentStore, lookup: (id: string) => {
+    subject: string;
+    content: string;
+} | undefined, oldId: string, newId: string, reason?: string): void;
 export declare class SedimentStore {
     readonly filePath: string;
     private readonly clock;

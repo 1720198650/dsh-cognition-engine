@@ -51,6 +51,8 @@ export interface ObserveInput {
   newText: string;
   personRelated?: boolean;
   protention?: boolean;
+  /** 取代理由（人话），常用于判断是不是翻案。 */
+  reason?: string;
   at?: number;
 }
 
@@ -78,9 +80,16 @@ const DEFAULT_THRESHOLD = 0.45;
 const HARD_FLIP = /(不对|不是|取消|作废|推翻|改成|换成|改为|不再|停止|撤销)/;
 const SOFT_FLIP = /(其实|更准确|严格讲|准确说|补充一下)/;
 
-export function detectFlip(oldText: string, newText: string): { flip: number; kind: 'reversal' | 'softening' | 'supplement' } {
-  if (HARD_FLIP.test(newText) || HARD_FLIP.test(`${oldText} ${newText}`)) return { flip: 1, kind: 'reversal' };
-  if (SOFT_FLIP.test(newText)) return { flip: 0.5, kind: 'softening' };
+export function detectFlip(
+  _oldText: string,
+  newText: string,
+  reason = '',
+): { flip: number; kind: 'reversal' | 'softening' | 'supplement' } {
+  // 只看「新的说法」和「取代理由」——绝不能把旧文本里的翻转词算进来，
+  // 否则一次翻案之后的每一条补充都会被误判成翻案（实测踩过）。
+  const signal = `${newText} ${reason}`;
+  if (HARD_FLIP.test(signal)) return { flip: 1, kind: 'reversal' };
+  if (SOFT_FLIP.test(signal)) return { flip: 0.5, kind: 'softening' };
   return { flip: 0, kind: 'supplement' };
 }
 
@@ -108,6 +117,31 @@ export function canonicalEvent(event: Omit<SedimentEvent, 'hash'>): string {
 
 export function hashEvent(event: Omit<SedimentEvent, 'hash'>): string {
   return createHash('sha256').update(canonicalEvent(event)).digest('hex');
+}
+
+/**
+ * 一次真实取代 → 沉积层事件（单向：事实 → 偏置）。
+ * 抽成纯函数便于单测；`lookup` 由调用方提供（插件里就是 memory.get）。
+ * 找不到任一事实就静默返回——取代已被别处处理，这里不报错。
+ */
+export function observeSupersedeFrom(
+  store: SedimentStore,
+  lookup: (id: string) => { subject: string; content: string } | undefined,
+  oldId: string,
+  newId: string,
+  reason?: string,
+): void {
+  const oldFact = lookup(oldId);
+  const newFact = lookup(newId);
+  if (oldFact === undefined || newFact === undefined) return;
+  store.observe({
+    subject: newFact.subject,
+    from: oldId,
+    to: newId,
+    oldText: oldFact.content,
+    newText: newFact.content,
+    ...(reason === undefined ? {} : { reason }),
+  });
 }
 
 export class SedimentStore {
@@ -186,7 +220,7 @@ export class SedimentStore {
    */
   observe(input: ObserveInput): ObserveResult {
     this.loadSync();
-    const { flip, kind } = detectFlip(input.oldText, input.newText);
+    const { flip, kind } = detectFlip(input.oldText, input.newText, input.reason ?? '');
     if (flip === 0) return { skipped: true, reason: '纯补充（flip=0）不触发位移' };
     const similarity = textSimilarity(input.oldText, input.newText);
     const tension = Number((similarity * flip).toFixed(6));

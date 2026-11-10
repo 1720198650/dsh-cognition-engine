@@ -25,6 +25,8 @@ export interface ToolDeps {
   memory: TemporalMemoryStore;
   /** 记忆变更后重算准则证据链（作废会传染）。 */
   refreshEvidence?: () => void;
+  /** 沉积层：一次真实取代发生时调用（旧 id → 新 id）。失败不影响记忆写入。 */
+  sedimentObserve?: (oldId: string, newId: string, reason?: string) => void;
   /** 登记知识缺口。 */
   gapRecorder?: (text: string, context?: string) => { id: string; duplicate: boolean; open: number };
   /** 分项打标。 */
@@ -122,6 +124,14 @@ export function createTools(deps: ToolDeps) {
 
       // 重建多级图式层次（CAM 的 run_hierarchy）；图很小，成本可忽略
       touch();
+      // 沉积层：只有真实取代才可能产生一次熏习（纯补充不会进来）
+      if (supersedes !== undefined) {
+        try {
+          deps.sedimentObserve?.(supersedes, fact.id, optionalString(input, 'supersedeReason'));
+        } catch {
+          /* 沉积层失败不能影响记忆写入 */
+        }
+      }
 
       return JSON.stringify({
         stored: {

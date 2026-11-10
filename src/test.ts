@@ -41,7 +41,7 @@ import { blocksAcceptance, detectsConstantRanking } from './cpe.ts';
 import { extractAssumptions, AssumptionLedger } from './assumptions.ts';
 import { memoryConfidence } from './views.ts';
 import { runDreaming } from './dreaming.ts';
-import { SedimentStore } from './sediment.ts';
+import { SedimentStore, observeSupersedeFrom } from './sediment.ts';
 import { inspectRequirement } from './ambiguity.ts';
 import { completionNeedsEvidence } from './task_manager.ts';
 import { TopicStore } from './topics.ts';
@@ -3414,6 +3414,36 @@ async function main(): Promise<void> {
     const result = after.verify();
     assert.equal(result.ok, false);
     assert.equal(result.brokenAt, 2, `应指向 seq=2，实得 ${result.brokenAt}`);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  section('[32] 沉积层 Step 2：接到真实取代');
+
+  await test('取代 → 一条沉积事件；纯补充 → 不产生事件', () => {
+    const dir = join(TEST_TMP, 'sediment-step2');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'chain.jsonl');
+    const store = new SedimentStore({ filePath: file, now: () => 3000 });
+    const facts = new Map([
+      ['mem-old', { subject: '部署区域', content: '部署区域在上海机房，主用' }],
+      ['mem-new', { subject: '部署区域', content: '不对，部署区域改成北京机房，主用' }],
+      ['mem-add', { subject: '部署区域', content: '部署区域在北京机房，主用，另外加了一台缓存服务器' }],
+    ]);
+
+    // 真实取代 → 应有一条
+    observeSupersedeFrom(store, (id) => facts.get(id), 'mem-old', 'mem-new');
+    assert.equal(store.log().length, 1, '取代必须产生一条事件');
+    assert.equal(store.log()[0]!.from, 'mem-old');
+    assert.equal(store.log()[0]!.to, 'mem-new');
+
+    // 纯补充（无翻转词）→ 不产生
+    observeSupersedeFrom(store, (id) => facts.get(id), 'mem-new', 'mem-add');
+    assert.equal(store.log().length, 1, '纯补充不能产生事件');
+
+    // 任一事实不存在 → 静默跳过
+    observeSupersedeFrom(store, (id) => facts.get(id), 'mem-missing', 'mem-new');
+    assert.equal(store.log().length, 1);
+
     rmSync(dir, { recursive: true, force: true });
   });
 
