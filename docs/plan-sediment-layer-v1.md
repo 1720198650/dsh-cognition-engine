@@ -1,4 +1,4 @@
-# 原创方案：沉积层（Sediment Layer）— 让经历以非检索方式改变生成起点
+# 原创方案：沉积层（Sediment Layer）— v1（**已被 [plan-persona-v2.md](plan-persona-v2.md) 取代，仅留档**）
 
 > 2026-11-10 第一版方案（未开工）。目标：设计一个**我们自己的**现象学取向的人格发生模块。
 > 不抄 `dsh-yogacara`（它带解脱论目的论），不抄 `dsh_laap`（它的五维/微分方程无法核实），
