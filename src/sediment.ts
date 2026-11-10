@@ -341,6 +341,12 @@ export class SedimentStore {
     };
   }
 
+  /** 视角窗：拿当前 4 维（**不受影子模式限制**，因为是预览）+ 一组事实算出来。 */
+  perspective(subject: string, facts: readonly PerspectiveFact[]): Perspective {
+    this.loadSync();
+    return computePerspective(this.dims, subject, facts);
+  }
+
   /** 只读日志（给界面）。不含参数值。 */
   log(limit = 50): SedimentEvent[] {
     this.loadSync();
@@ -361,4 +367,98 @@ export class SedimentStore {
     }
     return { ok: true, brokenAt: null, total: this.events.length };
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* 视角窗（Step 3.5）：只读，只回答「这一件事在她眼里长什么样」          */
+/* ------------------------------------------------------------------ */
+
+export interface PerspectiveFact {
+  id: string;
+  subject: string;
+  content: string;
+  validFrom: number;
+  importance: number;
+}
+
+export interface PerspectiveItem {
+  id: string;
+  label: string;
+  wasRank: number;
+  nowRank: number;
+  why: string;
+}
+
+export interface Perspective {
+  subject: string;
+  noticed: PerspectiveItem[];
+  suppressed: PerspectiveItem[];
+  stance: 'direct' | 'ask-first' | 'wait';
+  note: string;
+}
+
+/**
+ * 计算视角。
+ *
+ * 规则（保持可解释、可单测）：
+ * - 中性排序：importance 降序，同分按新→旧
+ * - 偏置排序：retention 抬高「更旧」的事实（旧结论分量重）；attachment 抬高 importance
+ * - 前 3 名进入「会先看到」；原本在前 3、现在掉出去的进「会忽略」
+ * - 姿态由 caution 分档（<0.65 直接给 / <0.78 先确认 / 否则再等等）
+ *
+ * 注意：**影子期也照常计算**——这是预览，不是生效；只有 biasFor 才受 shadow 限制。
+ */
+export function computePerspective(
+  dims: SedimentState,
+  subject: string,
+  facts: readonly PerspectiveFact[],
+): Perspective {
+  const list = facts.filter((fact) => fact.subject === subject);
+  const stance: Perspective['stance'] =
+    dims.caution < 0.65 ? 'direct' : dims.caution < 0.78 ? 'ask-first' : 'wait';
+  const note = '这是她此刻看到的世界，不是她本人。只读，不改变任何东西。';
+  if (list.length === 0) {
+    return { subject, noticed: [], suppressed: [], stance, note: '这个主题还没有记忆，看不到什么。' };
+  }
+
+  const byImportance = [...list].sort((a, b) => b.importance - a.importance || b.validFrom - a.validFrom);
+  const neutralRank = new Map(byImportance.map((fact, index) => [fact.id, index + 1]));
+
+  const age = (fact: PerspectiveFact): number => {
+    const times = list.map((item) => item.validFrom);
+    const min = Math.min(...times);
+    const max = Math.max(...times);
+    if (max === min) return 0.5;
+    return 1 - (fact.validFrom - min) / (max - min); // 越旧越接近 1
+  };
+  const biasScore = (fact: PerspectiveFact): number =>
+    fact.importance +
+    (dims.retention - 0.5) * age(fact) * 0.8 +
+    (dims.attachment - 0.5) * fact.importance * 0.4;
+
+  const byBias = [...list].sort((a, b) => biasScore(b) - biasScore(a) || b.validFrom - a.validFrom);
+  const biasedRank = new Map(byBias.map((fact, index) => [fact.id, index + 1]));
+
+  const label = (fact: PerspectiveFact): string => {
+    const text = fact.content.replace(/\s+/g, ' ');
+    return text.length > 34 ? `${text.slice(0, 34)}…` : text;
+  };
+
+  const noticed: PerspectiveItem[] = [];
+  for (const fact of byBias.slice(0, 3)) {
+    const was = neutralRank.get(fact.id) ?? 0;
+    const now = biasedRank.get(fact.id) ?? 0;
+    if (now < was) {
+      noticed.push({ id: fact.id, label: label(fact), wasRank: was, nowRank: now, why: '旧结论的分量把它往前挪' });
+    }
+  }
+  const suppressed: PerspectiveItem[] = [];
+  for (const fact of byImportance.slice(0, 3)) {
+    const now = biasedRank.get(fact.id) ?? 0;
+    const was = neutralRank.get(fact.id) ?? 0;
+    if (now > 3 && was <= 3) {
+      suppressed.push({ id: fact.id, label: label(fact), wasRank: was, nowRank: now, why: '细节被压后（她这次不太愿意翻旧账）' });
+    }
+  }
+  return { subject, noticed, suppressed, stance, note };
 }

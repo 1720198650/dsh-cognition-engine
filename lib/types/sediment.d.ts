@@ -101,6 +101,8 @@ export declare class SedimentStore {
         cautionWeight: number;
         relateBoost: number;
     };
+    /** 视角窗：拿当前 4 维（**不受影子模式限制**，因为是预览）+ 一组事实算出来。 */
+    perspective(subject: string, facts: readonly PerspectiveFact[]): Perspective;
     /** 只读日志（给界面）。不含参数值。 */
     log(limit?: number): SedimentEvent[];
     /** 校验整条链。返回第一处断点；**不自动修复**。 */
@@ -110,3 +112,36 @@ export declare class SedimentStore {
         total: number;
     };
 }
+export interface PerspectiveFact {
+    id: string;
+    subject: string;
+    content: string;
+    validFrom: number;
+    importance: number;
+}
+export interface PerspectiveItem {
+    id: string;
+    label: string;
+    wasRank: number;
+    nowRank: number;
+    why: string;
+}
+export interface Perspective {
+    subject: string;
+    noticed: PerspectiveItem[];
+    suppressed: PerspectiveItem[];
+    stance: 'direct' | 'ask-first' | 'wait';
+    note: string;
+}
+/**
+ * 计算视角。
+ *
+ * 规则（保持可解释、可单测）：
+ * - 中性排序：importance 降序，同分按新→旧
+ * - 偏置排序：retention 抬高「更旧」的事实（旧结论分量重）；attachment 抬高 importance
+ * - 前 3 名进入「会先看到」；原本在前 3、现在掉出去的进「会忽略」
+ * - 姿态由 caution 分档（<0.65 直接给 / <0.78 先确认 / 否则再等等）
+ *
+ * 注意：**影子期也照常计算**——这是预览，不是生效；只有 biasFor 才受 shadow 限制。
+ */
+export declare function computePerspective(dims: SedimentState, subject: string, facts: readonly PerspectiveFact[]): Perspective;

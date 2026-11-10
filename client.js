@@ -92,6 +92,17 @@ window.__ModuleLoader__.load({
         sedimentTab: '沉积',
         sedimentHint: '这里只显示事件日志：哪一次翻案让她的方向偏了一点。不显示参数值，也不提供任何修改入口。',
         sedimentEmpty: '还没有事件。只有真的推翻旧结论（不是补充细节）时才会记一条。',
+        perspTitle: '她眼中的世界',
+        perspHint: '给一个主题，看她此刻会先注意到什么、会忽略什么。只读，不改任何东西。',
+        perspPlaceholder: '例如：部署区域',
+        perspButton: '看看',
+        perspNoticed: '会先看到',
+        perspSuppressed: '会忽略',
+        perspStance: '开口姿态',
+        perspStanceDirect: '直接给方案',
+        perspStanceAsk: '先确认一句',
+        perspStanceWait: '再等等，先要更多信息',
+        perspNone: '和中性一样——这件事还没在她身上留下痕迹。',
         sedimentEnough: '已积累 {n} 条，够做观察了。',
         sedimentNotEnough: '目前 {n} 条，还没到 20 条；不到 20 条不做结论。',
         sedimentVerifyOk: '哈希链校验通过（{n} 条，未被改动）。',
@@ -183,6 +194,17 @@ window.__ModuleLoader__.load({
         sedimentTab: 'Sediment',
         sedimentHint: 'Event log only: which reversal nudged her direction. No parameter values, no editing here.',
         sedimentEmpty: 'No events yet. A record appears only when an old conclusion is overturned (not when details are added).',
+        perspTitle: 'The world in her eyes',
+        perspHint: 'Name one topic; see what she would notice first and what she would skip. Read-only.',
+        perspPlaceholder: 'e.g. deployment region',
+        perspButton: 'Look',
+        perspNoticed: 'Would notice first',
+        perspSuppressed: 'Would skip',
+        perspStance: 'Opening stance',
+        perspStanceDirect: 'Answer directly',
+        perspStanceAsk: 'Ask one question first',
+        perspStanceWait: 'Wait for more information',
+        perspNone: 'Same as neutral — this topic has not left a mark on her yet.',
         sedimentEnough: '{n} events so far — enough to look at.',
         sedimentNotEnough: '{n} events — below 20; no conclusion yet.',
         sedimentVerifyOk: 'Hash chain verified ({n} events, untouched).',
@@ -498,6 +520,8 @@ window.__ModuleLoader__.load({
         };
         const [detail, setDetail] = React.useState(null);
         const [sedimentData, setSedimentData] = React.useState(null);
+        const [perspSubject, setPerspSubject] = React.useState('');
+        const [perspData, setPerspData] = React.useState(null);
         const [playbookData, setPlaybookData] = React.useState(null);
         const [pbFlagsFor, setPbFlagsFor] = React.useState(null);
         const [topicsData, setTopicsData] = React.useState(null);
@@ -546,6 +570,22 @@ window.__ModuleLoader__.load({
           })();
           return () => { alive = false; };
         }, [tab, tick]);
+
+        const loadPerspective = async () => {
+          const subject = perspSubject.trim();
+          if (subject.length === 0) {
+            setPerspData({ error: dict.perspPlaceholder });
+            return;
+          }
+          try {
+            const response = await call('/cognition-engine/sediment/perspective?subject=' + encodeURIComponent(subject), { cache: 'no-store' });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+            setPerspData(data);
+          } catch (error) {
+            setPerspData({ error: error instanceof Error ? error.message : String(error) });
+          }
+        };
 
         const rememberToken = (value) => {
           setToken(value);
@@ -1209,6 +1249,35 @@ window.__ModuleLoader__.load({
             'div',
             { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
             h('div', { style: S.explain }, dict.sedimentHint),
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 0', borderTop: '1px solid var(--dsw-alias-border-l1)' } },
+              h('div', { style: { fontSize: 12, fontWeight: 600 } }, dict.perspTitle),
+              h('div', { style: S.explain }, dict.perspHint),
+              h('div', { style: { display: 'flex', gap: 6 } },
+                h('input', {
+                  id: 'persp-subj',
+                  placeholder: dict.perspPlaceholder,
+                  defaultValue: perspSubject,
+                  onChange: (event) => setPerspSubject(event.target.value),
+                  style: Object.assign({}, PS.ta, { minHeight: 0, height: 26, padding: '2px 8px', fontSize: 12, flex: '1 1 auto' }),
+                  onKeyDown: (event) => { if (event.key === 'Enter') loadPerspective(); },
+                }),
+                h('button', { type: 'button', style: PS.btn, onClick: loadPerspective }, dict.perspButton),
+              ),
+              perspData === null
+                ? null
+                : perspData.error
+                  ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-error-primary)' } }, String(perspData.error))
+                  : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 } },
+                      h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                        dict.perspStance + '：' + (perspData.stance === 'direct' ? dict.perspStanceDirect : perspData.stance === 'ask-first' ? dict.perspStanceAsk : dict.perspStanceWait)),
+                      perspData.noticed.length === 0 && perspData.suppressed.length === 0
+                        ? h('div', { style: S.explain }, dict.perspNone)
+                        : null,
+                      ...perspData.noticed.map((item) => h('div', { key: 'n-' + item.id }, '↑ ' + item.label)),
+                      ...perspData.suppressed.map((item) => h('div', { key: 's-' + item.id, style: { color: 'var(--dsw-alias-label-secondary)' } }, '↓ ' + item.label)),
+                      h('div', { style: { fontSize: 10, color: 'var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary))' } }, perspData.note || ''),
+                    ),
+            ),
             verify === null
               ? null
               : h('div', {
