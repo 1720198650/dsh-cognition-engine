@@ -697,6 +697,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/tri-phenomenology-engineering-refs.md](docs/tri-phenomenology-engineering-refs.md) | **胡塞尔/舍勒/拉康的工程化参考**：胡塞尔有（2208.09058、PCM、ITCMA）、拉康有（2403.07664 + LacanAgent 代码）、**舍勒零实现**（方法论上自相矛盾） |
 | [docs/charter-phenomenological-persona.md](docs/charter-phenomenological-persona.md) | **理念与方向（宪章）**：三条不可让渡承诺、五个"不是"、四维操作定义、术语翻译表、跑偏自查清单 |
 | [docs/decision-reuse-vs-build.md](docs/decision-reuse-vs-build.md) | **要不要原创？** 三条判据 × 7 个候选的对照矩阵；结论：机制不必原创，只剩「哈希链不可逆 + 检索消融验收」这一处薄增量；给出 A/B/C 三条路线 |
+| [docs/plan-sediment-v3.md](docs/plan-sediment-v3.md) | **实施方案 v3（怎么做）**：接口/哈希链规范/四个公式/三处钩子/Step 0–5 与五条验收；最短 3 周含两段观察期 |
 | [docs/plan-persona-v2.md](docs/plan-persona-v2.md) | **方案 v2（现行）**：先做先行工作诚实对照（ARPM/Melissa/Project Sue/Pae/ITCMA/AutoPersonas/Sawyer），再给 4 维+哈希链+检索消融的工程方案与 M0–M3 |
 | [docs/plan-sediment-layer-v1.md](docs/plan-sediment-layer-v1.md) | **原创方案：沉积层**（4 维偏置 + 哈希链只追加轨迹 + 检索消融判据）；含与 Pae/ITCMA/yogacara 的差异对照 |
 | [docs/upgrade-plan-persona-phenomenology.md](docs/upgrade-plan-persona-phenomenology.md) | **人格：现象学偏置层**（含材料真伪甄别：ITCMA/Pae/AutoPersonas/yogacara 为真，Sawyer/ARPM/Melissa/Sue 查无记录）+ 单文件原型与影子期方案 |
