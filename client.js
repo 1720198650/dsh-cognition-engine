@@ -103,6 +103,15 @@ window.__ModuleLoader__.load({
         perspStanceAsk: '先确认一句',
         perspStanceWait: '再等等，先要更多信息',
         perspNone: '和中性一样——这件事还没在她身上留下痕迹。',
+        selfCheckButton: '自检',
+        selfCheckEmpty: '结论：还没有任何翻案事件——四维仍是中性。',
+        selfCheckNeutral: '结论：有事件，但四维仍是中性。',
+        selfCheckDrifted: '结论：已经偏移（{dims}）。方向来自 {n} 次翻案，不是设定。',
+        selfCheckBroken: '结论：哈希链断在 seq={n}，数据被改过。',
+        dimRetention: '旧结论的分量',
+        dimCaution: '下判断的谨慎',
+        dimOpenness: '对新证据的开放',
+        dimAttachment: '对具体人的看重',
         sedimentEnough: '已积累 {n} 条，够做观察了。',
         sedimentNotEnough: '目前 {n} 条，还没到 20 条；不到 20 条不做结论。',
         sedimentVerifyOk: '哈希链校验通过（{n} 条，未被改动）。',
@@ -205,6 +214,15 @@ window.__ModuleLoader__.load({
         perspStanceAsk: 'Ask one question first',
         perspStanceWait: 'Wait for more information',
         perspNone: 'Same as neutral — this topic has not left a mark on her yet.',
+        selfCheckButton: 'Self-check',
+        selfCheckEmpty: 'Verdict: no reversals yet — all four dimensions are still neutral.',
+        selfCheckNeutral: 'Verdict: events exist, but all four dimensions are still neutral.',
+        selfCheckDrifted: 'Verdict: shifted ({dims}). Driven by {n} reversals, not by configuration.',
+        selfCheckBroken: 'Verdict: hash chain broken at seq={n} — the file was modified.',
+        dimRetention: 'weight of old conclusions',
+        dimCaution: 'caution before judging',
+        dimOpenness: 'openness to new evidence',
+        dimAttachment: 'weight of specific people',
         sedimentEnough: '{n} events so far — enough to look at.',
         sedimentNotEnough: '{n} events — below 20; no conclusion yet.',
         sedimentVerifyOk: 'Hash chain verified ({n} events, untouched).',
@@ -522,6 +540,7 @@ window.__ModuleLoader__.load({
         const [sedimentData, setSedimentData] = React.useState(null);
         const [perspSubject, setPerspSubject] = React.useState('');
         const [perspData, setPerspData] = React.useState(null);
+        const [selfCheckData, setSelfCheckData] = React.useState(null);
         const [playbookData, setPlaybookData] = React.useState(null);
         const [pbFlagsFor, setPbFlagsFor] = React.useState(null);
         const [topicsData, setTopicsData] = React.useState(null);
@@ -585,6 +604,26 @@ window.__ModuleLoader__.load({
           } catch (error) {
             setPerspData({ error: error instanceof Error ? error.message : String(error) });
           }
+        };
+
+        const runSelfCheck = async () => {
+          try {
+            const response = await call('/cognition-engine/sediment/selfcheck', { cache: 'no-store' });
+            setSelfCheckData(await response.json());
+          } catch {
+            setSelfCheckData(null);
+          }
+        };
+        const dimName = (key) =>
+          ({ retention: dict.dimRetention, caution: dict.dimCaution, openness: dict.dimOpenness, attachment: dict.dimAttachment }[key] || key);
+        const selfCheckText = () => {
+          if (selfCheckData === null) return '';
+          if (selfCheckData.verdict === 'broken') return dict.selfCheckBroken.replace('{n}', String(selfCheckData.brokenAt));
+          if (selfCheckData.verdict === 'empty') return dict.selfCheckEmpty;
+          if (selfCheckData.verdict === 'neutral') return dict.selfCheckNeutral;
+          return dict.selfCheckDrifted
+            .replace('{dims}', (selfCheckData.moved || []).map(dimName).join('、'))
+            .replace('{n}', String(selfCheckData.tensions));
         };
 
         const rememberToken = (value) => {
@@ -1277,6 +1316,19 @@ window.__ModuleLoader__.load({
                       ...perspData.suppressed.map((item) => h('div', { key: 's-' + item.id, style: { color: 'var(--dsw-alias-label-secondary)' } }, '↓ ' + item.label)),
                       h('div', { style: { fontSize: 10, color: 'var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary))' } }, perspData.note || ''),
                     ),
+            ),
+            h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+              h('button', { type: 'button', style: PS.btn, onClick: runSelfCheck }, dict.selfCheckButton),
+              selfCheckData === null
+                ? null
+                : h('span', {
+                    style: {
+                      fontSize: 11,
+                      color: selfCheckData.verdict === 'broken'
+                        ? 'var(--dsw-alias-state-error-primary)'
+                        : 'var(--dsw-alias-label-secondary)',
+                    },
+                  }, selfCheckText()),
             ),
             verify === null
               ? null

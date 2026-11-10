@@ -2650,6 +2650,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       return { events: sediment.log(limit), filePath: sediment.filePath };
     });
     route('/cognition-engine/sediment/verify', () => sediment.verify());
+    // 自检：只回结论，不回数值（面板按钮用）
+    route('/cognition-engine/sediment/selfcheck', () => sediment.summary());
     // 视角窗：只回答一个具体情境；不聚合、不给参数值
     route('/cognition-engine/sediment/perspective', (url) => {
       const subject = (url.searchParams.get('subject') ?? '').trim();

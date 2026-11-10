@@ -103,6 +103,8 @@ export declare class SedimentStore {
     };
     /** 视角窗：拿当前 4 维（**不受影子模式限制**，因为是预览）+ 一组事实算出来。 */
     perspective(subject: string, facts: readonly PerspectiveFact[]): Perspective;
+    /** 自检摘要：只给结论与「哪几维动了」，**不给数值**（界面上只用它）。 */
+    summary(): SedimentSummary;
     /** 只读日志（给界面）。不含参数值。 */
     log(limit?: number): SedimentEvent[];
     /** 校验整条链。返回第一处断点；**不自动修复**。 */
@@ -145,3 +147,14 @@ export interface Perspective {
  * 注意：**影子期也照常计算**——这是预览，不是生效；只有 biasFor 才受 shadow 限制。
  */
 export declare function computePerspective(dims: SedimentState, subject: string, facts: readonly PerspectiveFact[]): Perspective;
+export interface SedimentSummary {
+    verdict: 'empty' | 'neutral' | 'drifted' | 'broken';
+    events: number;
+    tensions: number;
+    /** 已经偏离中性的维度名（对外只说"哪几维"，不说数值）。 */
+    moved: string[];
+    chainOk: boolean;
+    brokenAt: number | null;
+    lastAt: number | null;
+}
+export declare function summarizeSediment(events: readonly SedimentEvent[], brokenAt: number | null): SedimentSummary;

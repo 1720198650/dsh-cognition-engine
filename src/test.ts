@@ -3500,6 +3500,37 @@ async function main(): Promise<void> {
     assert.ok(view.suppressed.length >= 1, '应有一条被挤出前三');
     assert.equal(view.noticed[0]!.nowRank < view.noticed[0]!.wasRank, true);
   });
+  section('[35] 沉积层自检摘要：只给结论，不给数值');
+
+  await test('自检摘要：空库=empty；有翻案=drifted 且只说哪几维；断链=broken', () => {
+    const dir = join(TEST_TMP, 'sediment-summary');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'chain.jsonl');
+    const store = new SedimentStore({ filePath: file, now: () => 5000 });
+    const before = store.summary();
+    assert.equal(before.verdict, 'empty');
+    assert.equal(before.events, 0);
+    assert.equal('retention' in before, false, '摘要里不允许出现维度数值字段');
+
+    store.observe({
+      subject: '部署区域', from: 'mem-a', to: 'mem-b',
+      oldText: '部署区域在上海机房，主用', newText: '不对，部署区域改成北京机房，主用',
+    });
+    const after = store.summary();
+    assert.equal(after.verdict, 'drifted');
+    assert.ok(after.moved.includes('retention') && after.moved.includes('caution'), JSON.stringify(after.moved));
+    assert.equal(JSON.stringify(after).includes('0.5'), false, '摘要不应携带数值');
+
+    // 篡改 → broken
+    const lines = readFileSync(file, 'utf8').trim().split('\n');
+    const target = JSON.parse(lines[0]!);
+    target.tension = Number((target.tension + 0.01).toFixed(6));
+    writeFileSync(file, JSON.stringify(target) + '\n', 'utf8');
+    const broken = new SedimentStore({ filePath: file }).summary();
+    assert.equal(broken.verdict, 'broken');
+    assert.equal(broken.brokenAt, 0);
+    rmSync(dir, { recursive: true, force: true });
+  });
   /* ---------------------------------------------------------------- */
   console.log('');
   if (failures.length === 0) {

@@ -347,6 +347,13 @@ export class SedimentStore {
     return computePerspective(this.dims, subject, facts);
   }
 
+  /** 自检摘要：只给结论与「哪几维动了」，**不给数值**（界面上只用它）。 */
+  summary(): SedimentSummary {
+    this.loadSync();
+    const broken = this.verify();
+    return summarizeSediment(this.events, broken.ok ? null : broken.brokenAt);
+  }
+
   /** 只读日志（给界面）。不含参数值。 */
   log(limit = 50): SedimentEvent[] {
     this.loadSync();
@@ -461,4 +468,37 @@ export function computePerspective(
     }
   }
   return { subject, noticed, suppressed, stance, note };
+}
+/* ------------------------------------------------------------------ */
+/* 自检摘要（只给结论，不给数值）                                        */
+/* ------------------------------------------------------------------ */
+
+export interface SedimentSummary {
+  verdict: 'empty' | 'neutral' | 'drifted' | 'broken';
+  events: number;
+  tensions: number;
+  /** 已经偏离中性的维度名（对外只说"哪几维"，不说数值）。 */
+  moved: string[];
+  chainOk: boolean;
+  brokenAt: number | null;
+  lastAt: number | null;
+}
+
+export function summarizeSediment(
+  events: readonly SedimentEvent[],
+  brokenAt: number | null,
+): SedimentSummary {
+  const dims: SedimentState = { retention: 0.5, caution: 0.5, openness: 0.5, attachment: 0.5 };
+  for (const event of events) {
+    for (const dim of DIMS) {
+      const d = Number(event.delta?.[dim] ?? 0);
+      if (d !== 0) dims[dim] = Math.min(1, Math.max(0, dims[dim] + d));
+    }
+  }
+  const moved = DIMS.filter((dim) => Math.abs(dims[dim] - 0.5) > 1e-9);
+  const tensions = events.filter((event) => event.kind === 'tension').length;
+  const lastAt = events.length === 0 ? null : events[events.length - 1]!.at;
+  const verdict: SedimentSummary['verdict'] =
+    brokenAt !== null ? 'broken' : events.length === 0 ? 'empty' : moved.length === 0 ? 'neutral' : 'drifted';
+  return { verdict, events: events.length, tensions, moved, chainOk: brokenAt === null, brokenAt, lastAt };
 }
