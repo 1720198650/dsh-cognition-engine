@@ -121,3 +121,20 @@ DeepSeek Harness 上成功率 71.43%→85.71%，token 96.28k→11.62k（**−87.
 5. *Sleep-time compute.* arXiv:2504.13171（Letta / UC Berkeley）.
 6. Xu, W. et al. *A-MEM: Agentic Memory for LLM Agents.* arXiv:2502.12110, NeurIPS 2025.
 7. Claude Code 文档 — memory（注入层 200 行 / 25KB 的依据）。<https://code.claude.com/docs/en/memory>
+
+---
+
+## 七、先行工作补充：ARPM（必须对照）
+
+**A Heterogeneous Temporal Memory Governance Framework for Long-Term LLM Persona Consistency**（[arXiv:2605.14802](https://arxiv.org/abs/2605.14802)）
+把"长期人格一致性"当**可审计的治理问题**，拆成：静态知识记忆 / 动态对话经验记忆分离；向量 + BM25 + RRF 融合；**双时间坐标重排**；按时间顺序读证据；受控分析协议做证据校验与答案绑定。
+
+它给了三个直接可用的数字：
+- 信噪比 1:5 时，CSV 自动判定召回 54.0%，人工复核 100.0%（**自动规则会低估召回**）；
+- **关掉对话历史检索**：严格准确率 100% → 66.7%；关掉 BM25 → 80.0%（**纯语义检索不够**）；
+- 在 510 万字符噪声 + 周期清空上下文 + 多模型交接下仍保持连续性。
+
+**对我们的三条结论**：
+1. 我们 P1 的 wiki 检索**必须保留关键词通道（BM25）**，不能只靠相似度——这是它的消融直接证明的；
+2. 我们的"双时态"要用在**重排**上，不仅是存储（它在重排层用双时间坐标）；
+3. 评估要报"自动判定 vs 人工复核"两个数，别只报自动的（否则像它的 54% vs 100%）。

@@ -1,4 +1,24 @@
 # 人格模块升级方案：现象学偏置层（含材料真伪甄别）
+> ## ⚠️ 更正声明（2026-11-10 晚，重要）
+>
+> 本文第一节那张「查无记录」表**是错的，我撤回**。原因：当时搜索后端配置坏了（provider 名 `ddg` 未注册），
+> 我只能搜 arXiv 与通用网页，**搜不到哲学库（PhilPapers）、Zenodo 预印本平台、Springer 期刊**。
+> 换成可用搜索后，六条全部查到了：
+>
+> | 之前判定 | 实际 | 出处 |
+> |---|---|---|
+> | Chris Sawyer《Temporal Skew》查无 | ✅ **存在** | [PhilPapers 记录](https://philpapers.org/rec/SAWTSA) |
+> | ARPM 查无 | ✅ **存在**，且是 arXiv 论文 | [arXiv:2605.14802](https://arxiv.org/abs/2605.14802)《A Heterogeneous Temporal Memory Governance Framework for Long-Term LLM Persona Consistency》 |
+> | Melissa 查无 | ✅ **存在**（Zenodo 白皮书 + GitHub） | [Zenodo 18333447](https://zenodo.org/records/18333447)，作者 Marcelo Nicchio |
+> | Project Sue 查无 | ✅ **存在**（Zenodo） | [Zenodo 22022948](https://zenodo.org/records/22022948) |
+> | Robodiment 未证实 | ✅ **存在** | [PhilPapers 记录](https://philpapers.org/rec/INCRSA)（Incao / Sciutti / Gallagher） |
+> | 5594→32 篇综述未证实 | ✅ **存在** | [Springer 10.1007/s44163-026-02602-4](https://link.springer.com/article/10.1007/s44163-026-02602-4) |
+>
+> **教训写在这里**：搜索引擎返回「0 条」不等于「不存在」。以后判定「查无此文」前，
+> 必须先确认搜到的库覆盖了目标领域（哲学→PhilPapers，预印本→Zenodo/SSRN），否则只能说「本次未检索到」。
+>
+> 下面第一节保留原文，仅作记录；**以本声明为准**。
+
 
 > 2026-11-10。用户给了一份"现象学人格工程化"材料。**动手前先做了一件事：逐条核实引用**。
 > 结果：材料里 **5—6 条关键引用查不到任何记录**，另有 3 条真实可查。方案只能建立在真实的那几条上。

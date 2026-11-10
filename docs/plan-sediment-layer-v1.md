@@ -149,7 +149,13 @@ delta = η × tension × direction(flip 方向)
 5. 工程参考（不引入依赖）：`infer-actively/pymdp`（主动推理的 Python 实现，751★）——只用来对照"慢变量/先验"怎么写，不作为依赖。
 6. 可实现基底参考（只读其结构）：`tancheng33/dsh-yogacara`、`WindDreamboat/dsh_laap`。
 
-**不引用**：Sawyer《Temporal Skew》、ARPM、Melissa、Project Sue、Robodiment、5594→32 篇综述——均查无记录。
+**更正（2026-11-10 晚）**：此前写的"查无记录"是搜索后端故障导致的误判，已撤回。以下均真实存在，且与本题高度相关：
+
+- **Sawyer《Temporal Skew: Asymmetry and the Ground of Subjectivity》**（PhilPapers）——正是"不对称/不可逆"判据的哲学出处。**我们的三判据应直接引用它，而不是自己造词。**
+- **ARPM（arXiv:2605.14802）**：异构时序记忆治理，把长期人格一致性拆成可治理组件；其消融显示「关掉对话历史检索，严格准确率 100%→66.7%；关掉 BM25 → 80%」——**纯语义检索不足以纠错与追溯**，这条直接影响我们记忆模块 P1 的检索设计。
+- **Melissa Framework**（Zenodo 18333447，Marcelo Nicchio）：六层（DNA/SOUL/PLAYBOOK + LETTER/DOC-EVOLUTION/TESTAMENT），主张用"遗产层"传递经验。**存在但属自发布白皮书，未经同行评审**，其"10+ 实例复现、97.1% 相关"只能当作者自述，不作依据。
+- **Project Sue**（Zenodo 22022948）：长期运行型人格的工程架构。同为预印本，参考其分层，不采信其效果数字。
+- **Robodiment（Incao/Sciutti/Gallagher，PhilPapers）**：滞留-前提动态用于机器人认知架构。
 
 ---
 
