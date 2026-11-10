@@ -694,6 +694,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/upgrade-plan-memory-v5.md](docs/upgrade-plan-memory-v5.md) | **记忆 v5**：Anthropic 记忆四层 + dreaming 离线整合 + HarnessMM 的 token 经济；开源对照（Mem0/Zep/Letta/A-MEM）+ P0/P1/P2 |
 | [docs/analytic-mind-sourcebook.md](docs/analytic-mind-sourcebook.md) | **分析心灵哲学：只选不拖累实现的**（功能主义/BDI/GWT/CTM/HOT/自我模型/IIT 逐流派取舍；ACT-R 幂律衰减、pyphi、pymdp、Soar/SPADE 工程对照） |
 | [docs/phenomenology-sourcebook.md](docs/phenomenology-sourcebook.md) | **现象学清单（10 条，逐条标注取/不取）**：Husserl 滞留/前提/被动综合、Merleau-Ponty 习性、Zahavi 最小自我、Gallagher 自我模式、Heidegger 在世、Dreyfus 技能应对、Seth 具身自我、Varela 神经现象学 + 概念→计算翻译表 |
+| [docs/decision-reuse-vs-build.md](docs/decision-reuse-vs-build.md) | **要不要原创？** 三条判据 × 7 个候选的对照矩阵；结论：机制不必原创，只剩「哈希链不可逆 + 检索消融验收」这一处薄增量；给出 A/B/C 三条路线 |
 | [docs/plan-persona-v2.md](docs/plan-persona-v2.md) | **方案 v2（现行）**：先做先行工作诚实对照（ARPM/Melissa/Project Sue/Pae/ITCMA/AutoPersonas/Sawyer），再给 4 维+哈希链+检索消融的工程方案与 M0–M3 |
 | [docs/plan-sediment-layer-v1.md](docs/plan-sediment-layer-v1.md) | **原创方案：沉积层**（4 维偏置 + 哈希链只追加轨迹 + 检索消融判据）；含与 Pae/ITCMA/yogacara 的差异对照 |
 | [docs/upgrade-plan-persona-phenomenology.md](docs/upgrade-plan-persona-phenomenology.md) | **人格：现象学偏置层**（含材料真伪甄别：ITCMA/Pae/AutoPersonas/yogacara 为真，Sawyer/ARPM/Melissa/Sue 查无记录）+ 单文件原型与影子期方案 |
