@@ -121,3 +121,38 @@ checkpoint C（第 100 条）→ 选 Z ≠ Y
 3. *AutoPersonas: A Multi-Timescale Loop Engine for Open-Ended Persona Evolution.* arXiv:2607.08252. <https://arxiv.org/abs/2607.08252>
 4. `tancheng33/dsh-yogacara`（开源，唯识自我模型插件）。<https://github.com/tancheng33/dsh-yogacara>
 5. `WindDreamboat/dsh_laap`（开源，"意识工程最小实现"）。<https://github.com/WindDreamboat/dsh_laap>
+
+---
+
+## 九、补充：现象学 × 人格工程化的真实清单（2026-11-10 核实）
+
+> 用户要求「查相关论文和真实落地项目」。下面每条都点开核实过；标 ✅ 的能给出论文页/GitHub 仓库，
+> 标 ⚠️ 的只检索到摘要或二手引用。**没核实的，一条都不写。**
+
+### A. 理论 / 架构论文（可直接引用）
+
+| 论文 | 出处 | 与我们的关系 |
+|---|---|---|
+| **ITCMA: A Generative Agent Based on a Computational Consciousness Structure** ✅ | [arXiv:2403.20097](https://arxiv.org/abs/2403.20097)（2024-03） | 把"当下/滞留/前提"做成时间场并驱动行动；有真机实验。我们借"前提参与当前" |
+| **ITCMA-S / 生成式多智能体社会** ✅ | [arXiv:2409.06750](https://arxiv.org/abs/2409.06750)（UIST 2025 Adjunct） | ITCMA 的多体扩展，说明该架构能被别人复用 |
+| **Minimal Computational Preconditions for Subjective Perspective in Artificial Agents** ✅ | [arXiv:2602.02902](https://arxiv.org/abs/2602.02902)（2026-02） | 慢变量与快策略解耦、方向依赖滞后 → 我们偏置层的数学骨架 |
+| **AutoPersonas: A Multi-Timescale Loop Engine for Open-Ended Persona Evolution** ✅ | [arXiv:2607.08252](https://arxiv.org/abs/2607.08252)（2026-07） | Occurrence/Observation/State 三分；针对 "self-locking" 失效 |
+| **Toward Enactive Artificial Intelligence** ✅ | [arXiv:2605.24238](https://arxiv.org/abs/2605.24238)（2026-05，Sutton 参与） | 明确说主流 AI/LLM 忽略了"体验、行动-知觉不可分、自主、具身"；给"生成式 AI 缺什么"的合法性 |
+| **Enactive Cognitive Architectures for LLMs: A Homeostatic Approach…** ⚠️ | TechRxiv 预印本（2026-01） | 直接讨论 LLM 的生成式认知架构；0 引用，只作参考不作依据 |
+| **Varela's Legacy for ALIFE: from Enactive to Enlightened AI** ✅ | ISAL 2018，[doi:10.1162/isal_a_00007](https://doi.org/10.1162/isal_a_00007) | 神经现象学（Varela 1996）到 ALIFE 的谱系，说明"现象学→工程"不是新噱头 |
+| **Shared Protentions in Multi-Agent Active Inference** ⚠️ | *Entropy* 26(4):303，[doi:10.3390/e26040303](https://doi.org/10.3390/e26040303) | 用胡塞尔"共同前提"形式化多智能体共同目标；页面反爬，只见到摘要 |
+
+### B. 现在就能跑的开源项目（真实落地）
+
+| 项目 | 是什么 | 可用性 |
+|---|---|---|
+| `tancheng33/dsh-yogacara` ✅ | 唯识自我模型插件：八识、51 心所、种子藏、写回提示词 | DSH 插件，可直接装；我们方案里的**因果骨架来源** |
+| `WindDreamboat/dsh_laap` ✅ | 自称"dsh 意识工程最小实现" | 可读可跑；"五维状态/微分方程"需自行核对 README |
+| `woshishadowhunter/dsh-seed-society` ✅ | 种子社会运行时：MCP 桥 + 六个唯识种子技能 | 可装；说明"种子—熏习"这套在 DSH 生态里已有人做 |
+
+### C. 结论：真实落地的现状
+
+- **论文层面**：有真东西，但集中在"内时间意识 / 生成式认知 / 人格演化"三条线上，数量不多（这次核实到 6 篇硬的）。
+- **工程层面**：**能跑的项目只有 DSH 生态里那三个小插件**；其余（ITCMA、AutoPersonas、Pae）都是论文+实验，没有可直接复用的生产级代码。
+- **"现象学人格"这个说法本身**：没有现成项目用它。贴近的表述是"内时间意识计算模型""生成式认知架构""persona evolution"。
+- 因此我们的路线是对的：**先单文件原型 + 影子期**，不指望抄一个现成系统。
