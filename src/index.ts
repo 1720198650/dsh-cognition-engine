@@ -29,6 +29,7 @@ import { RegisterLog, judgeRegister, isRuntimeContext, THRESHOLD, AMBIGUITY_THRE
 import { SuperagentClient } from './superagent.ts';
 import { AssumptionLedger } from './assumptions.ts';
 import { runDreaming } from './dreaming.ts';
+import { SedimentStore } from './sediment.ts';
 import { AgentsFileSync, defaultAgentsFilePath } from './agents_file.ts';
 import type { StyleBucket } from './style.ts';
 import { TemporalMemoryStore, textSimilarity } from './memory.ts';
@@ -305,6 +306,10 @@ export interface CognitionConfig {
   injectTopicScoped?: boolean;
   /** 注入只给索引（id+摘要），正文靠 recall 取。默认 false。 */
   injectIndexOnly?: boolean;
+  /** 沉积层数据文件；默认 ~/.dsh/cognition-engine/cognition-sediment.jsonl。 */
+  sedimentFile?: string;
+  /** 沉积层单次位移系数 η，默认 0.02。 */
+  sedimentEta?: number;
 }
 
 type ResolvedConfig = Required<
@@ -437,6 +442,11 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     injectBoundaryNotice: config.injectBoundaryNotice !== false,
     injectTopicScoped: config.injectTopicScoped !== false,
     injectIndexOnly: config.injectIndexOnly === true,
+    sedimentFile:
+      typeof config.sedimentFile === 'string' && config.sedimentFile.trim().length > 0
+        ? expandHome(config.sedimentFile.trim())
+        : join(dataDir(), 'cognition-sediment.jsonl'),
+    sedimentEta: Math.min(0.1, Math.max(0.001, numberOr(config.sedimentEta, 0.02))),
     agentsFilePath:
       typeof config.agentsFilePath === 'string' && config.agentsFilePath.trim().length > 0
         ? expandHome(config.agentsFilePath.trim())
@@ -2616,6 +2626,34 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         };
       },
       { method: 'POST', requireAuth: explicitLock },
+    );
+    // —— 沉积层（Step 1）：只追加哈希链，只读日志/校验 ——
+    const sediment = new SedimentStore({ filePath: config.sedimentFile, eta: config.sedimentEta });
+    route('/cognition-engine/sediment/log', (url) => {
+      const raw = Number(url.searchParams.get('limit') ?? '50');
+      const limit = Number.isFinite(raw) ? Math.max(1, Math.min(500, raw)) : 50;
+      return { events: sediment.log(limit), filePath: sediment.filePath };
+    });
+    route('/cognition-engine/sediment/verify', () => sediment.verify());
+    route(
+      '/cognition-engine/sediment/event',
+      (url) => {
+        const subject = url.searchParams.get('subject') ?? '';
+        const oldText = url.searchParams.get('old') ?? '';
+        const newText = url.searchParams.get('new') ?? '';
+        if (subject.length === 0 || oldText.length === 0 || newText.length === 0) {
+          throw new Error('需要 subject / old / new 三个参数');
+        }
+        return sediment.observe({
+          subject,
+          from: url.searchParams.get('from'),
+          to: url.searchParams.get('to'),
+          oldText,
+          newText,
+          personRelated: url.searchParams.get('person') === 'true',
+        });
+      },
+      { method: 'POST' },
     );
     // —— 离线整合（dreaming）：只出报告，不改数据 ——
     const dreamFile = (): string => join(dataDir(), 'cognition-dream.json');

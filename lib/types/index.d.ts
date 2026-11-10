@@ -187,6 +187,10 @@ export interface CognitionConfig {
     injectTopicScoped?: boolean;
     /** 注入只给索引（id+摘要），正文靠 recall 取。默认 false。 */
     injectIndexOnly?: boolean;
+    /** 沉积层数据文件；默认 ~/.dsh/cognition-engine/cognition-sediment.jsonl。 */
+    sedimentFile?: string;
+    /** 沉积层单次位移系数 η，默认 0.02。 */
+    sedimentEta?: number;
 }
 export declare const name = "cognition-engine";
 /** 需要 tools 服务才能注册工具。 */
