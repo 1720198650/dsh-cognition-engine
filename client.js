@@ -89,6 +89,13 @@ window.__ModuleLoader__.load({
         applyToken: '保存口令',
         cleared: '已清空',
         playbookTab: '准则',
+        sedimentTab: '沉积',
+        sedimentHint: '这里只显示事件日志：哪一次翻案让她的方向偏了一点。不显示参数值，也不提供任何修改入口。',
+        sedimentEmpty: '还没有事件。只有真的推翻旧结论（不是补充细节）时才会记一条。',
+        sedimentEnough: '已积累 {n} 条，够做观察了。',
+        sedimentNotEnough: '目前 {n} 条，还没到 20 条；不到 20 条不做结论。',
+        sedimentVerifyOk: '哈希链校验通过（{n} 条，未被改动）。',
+        sedimentVerifyBad: '哈希链在 seq={n} 处断开——文件被改动过。',
         personaTab: '人格',
         learnTab: '学习',
         superagentTab: '超级代理',
@@ -173,6 +180,13 @@ window.__ModuleLoader__.load({
         memories: 'Memories',
         schemas: 'Topics',
         playbookTab: 'Rules',
+        sedimentTab: 'Sediment',
+        sedimentHint: 'Event log only: which reversal nudged her direction. No parameter values, no editing here.',
+        sedimentEmpty: 'No events yet. A record appears only when an old conclusion is overturned (not when details are added).',
+        sedimentEnough: '{n} events so far — enough to look at.',
+        sedimentNotEnough: '{n} events — below 20; no conclusion yet.',
+        sedimentVerifyOk: 'Hash chain verified ({n} events, untouched).',
+        sedimentVerifyBad: 'Hash chain broken at seq={n} — the file was modified.',
         personaTab: 'Persona',
         learnTab: 'Learning',
         superagentTab: 'Super-agent',
@@ -483,6 +497,25 @@ window.__ModuleLoader__.load({
           );
         };
         const [detail, setDetail] = React.useState(null);
+        const [sedimentData, setSedimentData] = React.useState(null);
+        React.useEffect(() => {
+          if (tab !== 'sediment') return undefined;
+          let alive = true;
+          (async () => {
+            try {
+              const [logRes, verifyRes] = await Promise.all([
+                call('/cognition-engine/sediment/log?limit=50', { cache: 'no-store' }),
+                call('/cognition-engine/sediment/verify', { cache: 'no-store' }),
+              ]);
+              const log = await logRes.json();
+              const verify = await verifyRes.json();
+              if (alive) setSedimentData({ events: log.events ?? [], verify });
+            } catch {
+              if (alive) setSedimentData({ events: [], verify: null });
+            }
+          })();
+          return () => { alive = false; };
+        }, [tab, tick]);
         const [playbookData, setPlaybookData] = React.useState(null);
         const [pbFlagsFor, setPbFlagsFor] = React.useState(null);
         const [topicsData, setTopicsData] = React.useState(null);
@@ -906,6 +939,7 @@ window.__ModuleLoader__.load({
           ['playbook', dict.playbookTab],
           ['persona', dict.personaTab],
           ['superagent', dict.superagentTab],
+          ['sediment', dict.sedimentTab],
           ['learning', dict.learnTab],
           ['settings', dict.settings],
         ];
@@ -1154,6 +1188,47 @@ window.__ModuleLoader__.load({
           );
         } else if (tab === 'persona') {
           body = h(PersonaEmbedded, { variant: 'embedded' });
+        } else if (tab === 'sediment') {
+          const events = sedimentData === null ? [] : sedimentData.events;
+          const verify = sedimentData === null ? null : sedimentData.verify;
+          // 只给方向，不给数值（宪章第十节：参数不外显）
+          const dirPhrase = (d) => {
+            const rows = [
+              ['caution', d.caution || 0, '更谨慎'],
+              ['retention', d.retention || 0, '更不肯改口'],
+              ['openness', -(d.openness || 0), '更少找反例'],
+              ['attachment', d.attachment || 0, '更看重具体的人'],
+            ];
+            rows.sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+            return Math.abs(rows[0][1]) > 0 ? rows[0][2] : '没有位移';
+          };
+          const kindLabel = (k) => (k === 'tension' ? '翻案' : k === 'settle' ? '巩固' : k === 'protentionError' ? '预期落空' : '手工');
+          body = h(
+            'div',
+            { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+            h('div', { style: S.explain }, dict.sedimentHint),
+            verify === null
+              ? null
+              : h('div', {
+                  style: {
+                    fontSize: 11,
+                    color: verify.ok
+                      ? 'var(--dsw-alias-state-success-primary)'
+                      : 'var(--dsw-alias-state-error-primary)',
+                  },
+                }, verify.ok
+                  ? dict.sedimentVerifyOk.replace('{n}', String(verify.total))
+                  : dict.sedimentVerifyBad.replace('{n}', String(verify.brokenAt))),
+            h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+              (events.length >= 20 ? dict.sedimentEnough : dict.sedimentNotEnough).replace('{n}', String(events.length))),
+            events.length === 0
+              ? h('div', { style: S.explain }, dict.sedimentEmpty)
+              : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                  events.slice().reverse().map((e) => h('div', { key: e.seq, style: S.item },
+                    h('div', { style: { fontSize: 12 } }, new Date(e.at).toLocaleString() + ' · ' + kindLabel(e.kind) + ' · ' + e.subject),
+                    h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, '方向：' + dirPhrase(e.delta)),
+                  ))),
+          );
         } else if (tab === 'learning') {
           body = h(LearningEmbedded, { variant: 'embedded' });
         } else if (tab === 'superagent') {

@@ -191,6 +191,8 @@ export interface CognitionConfig {
     sedimentFile?: string;
     /** 沉积层单次位移系数 η，默认 0.02。 */
     sedimentEta?: number;
+    /** 影子模式：只记录不生效，默认 true（Step 3）。 */
+    sedimentShadow?: boolean;
 }
 export declare const name = "cognition-engine";
 /** 需要 tools 服务才能注册工具。 */

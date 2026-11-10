@@ -3447,6 +3447,34 @@ async function main(): Promise<void> {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  section('[33] 沉积层 Step 3：影子模式（只记录，不生效）');
+
+  await test('影子模式：状态会变，但 biasFor 一律中性；关掉影子才给偏置', () => {
+    const dir = join(TEST_TMP, 'sediment-shadow');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'chain.jsonl');
+    const shadow = new SedimentStore({ filePath: file, now: () => 4000 });
+    shadow.observe({
+      subject: '部署区域',
+      from: 'mem-x',
+      to: 'mem-y',
+      oldText: '部署区域在上海机房，主用',
+      newText: '不对，部署区域改成北京机房，主用',
+    });
+    // 状态确实动了
+    assert.notDeepEqual(shadow.state(), { retention: 0.5, caution: 0.5, openness: 0.5, attachment: 0.5 });
+    // 但影子期不外泄
+    assert.deepEqual(shadow.biasFor('部署区域'), { strictThresholdDelta: 0, cautionWeight: 0, relateBoost: 0 });
+
+    // 非影子：同一份数据应给出非中性值
+    const live = new SedimentStore({ filePath: file, shadow: false });
+    const bias = live.biasFor('部署区域');
+    assert.ok(bias.cautionWeight > 0, `cautionWeight 应 > 0，实得 ${bias.cautionWeight}`);
+    assert.equal(live.biasFor('从没出现过的主题').cautionWeight, 0, '未出现过的主题必须中性');
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   /* ---------------------------------------------------------------- */
   console.log('');
   if (failures.length === 0) {

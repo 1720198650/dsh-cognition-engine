@@ -310,6 +310,8 @@ export interface CognitionConfig {
   sedimentFile?: string;
   /** 沉积层单次位移系数 η，默认 0.02。 */
   sedimentEta?: number;
+  /** 影子模式：只记录不生效，默认 true（Step 3）。 */
+  sedimentShadow?: boolean;
 }
 
 type ResolvedConfig = Required<
@@ -447,6 +449,7 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
         ? expandHome(config.sedimentFile.trim())
         : join(dataDir(), 'cognition-sediment.jsonl'),
     sedimentEta: Math.min(0.1, Math.max(0.001, numberOr(config.sedimentEta, 0.02))),
+    sedimentShadow: config.sedimentShadow !== false,
     agentsFilePath:
       typeof config.agentsFilePath === 'string' && config.agentsFilePath.trim().length > 0
         ? expandHome(config.agentsFilePath.trim())
@@ -2631,7 +2634,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       { method: 'POST', requireAuth: explicitLock },
     );
     // —— 沉积层（Step 1）：只追加哈希链，只读日志/校验 ——
-    const sediment = new SedimentStore({ filePath: config.sedimentFile, eta: config.sedimentEta });
+    const sediment = new SedimentStore({ filePath: config.sedimentFile, eta: config.sedimentEta, shadow: config.sedimentShadow });
     /** 一次真实取代 → 沉积层（单向：事实 → 偏置）。任何异常都不许冒到调用方。 */
     const observeSupersede = (oldId: string, newId: string, reason?: string): void => {
       try {

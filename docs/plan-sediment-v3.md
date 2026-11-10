@@ -148,7 +148,7 @@ sedimentMaxDim: 4           # 硬上限，写死不可配
 两个写入口：`cognition_remember(supersedes)` 与 `POST /memory/supersede` 成功后调用 `sediment.observe`。
 **验收**：真实数据里做一次取代 → 日志多一条，`from/to` 是真实 id；做纯补充 → 日志不增加。
 
-### Step 3：影子期（3 天 + 观察 2 周）
+### Step 3：影子期（3 天 + 观察 2 周）— ✅ 2026-11-10 已装（`sedimentShadow` 默认开；面板「沉积」页签只显示日志；196 测试全绿），**观察期从今天开始计**
 `sedimentShadow: true`：只记录，`biasFor` 一律返回中性；面板「沉积」页签显示日志。
 **验收**：连续两周日志里有 ≥20 条 tension 且无异常；**少于 20 条就放弃这个模块**。
 

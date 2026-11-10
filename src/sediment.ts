@@ -69,6 +69,8 @@ export interface SedimentOptions {
   now?: () => number;
   /** 幂律/指数衰减的开关先留位，Step 1 不参与计算。 */
   eta?: number;
+  /** 影子模式：只记录，**biasFor 一律返回中性**（Step 3）。默认 true。 */
+  shadow?: boolean;
   threshold?: number;
 }
 
@@ -148,6 +150,7 @@ export class SedimentStore {
   readonly filePath: string;
   private readonly clock: () => number;
   private readonly eta: number;
+  private readonly shadow: boolean;
   private readonly threshold: number;
   private events: SedimentEvent[] = [];
   private dims: SedimentState = { retention: 0.5, caution: 0.5, openness: 0.5, attachment: 0.5 };
@@ -161,6 +164,7 @@ export class SedimentStore {
     this.filePath = options.filePath;
     this.clock = options.now ?? (() => Date.now());
     this.eta = options.eta ?? DEFAULT_ETA;
+    this.shadow = options.shadow !== false;
     this.threshold = options.threshold ?? DEFAULT_THRESHOLD;
   }
 
@@ -324,6 +328,8 @@ export class SedimentStore {
    */
   biasFor(subject: string, scopeTurns = 20): { strictThresholdDelta: number; cautionWeight: number; relateBoost: number } {
     this.loadSync();
+    // 影子期：只记录不生效——这是 Step 3 的全部含义。
+    if (this.shadow) return { strictThresholdDelta: 0, cautionWeight: 0, relateBoost: 0 };
     const last = this.lastSeen.get(subject);
     const neutral = { strictThresholdDelta: 0, cautionWeight: 0, relateBoost: 0 };
     if (last === undefined) return neutral;

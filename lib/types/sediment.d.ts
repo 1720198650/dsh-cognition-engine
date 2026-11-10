@@ -45,6 +45,8 @@ export interface SedimentOptions {
     now?: () => number;
     /** 幂律/指数衰减的开关先留位，Step 1 不参与计算。 */
     eta?: number;
+    /** 影子模式：只记录，**biasFor 一律返回中性**（Step 3）。默认 true。 */
+    shadow?: boolean;
     threshold?: number;
 }
 export declare function detectFlip(_oldText: string, newText: string, reason?: string): {
@@ -67,6 +69,7 @@ export declare class SedimentStore {
     readonly filePath: string;
     private readonly clock;
     private readonly eta;
+    private readonly shadow;
     private readonly threshold;
     private events;
     private dims;
