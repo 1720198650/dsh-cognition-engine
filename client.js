@@ -498,24 +498,6 @@ window.__ModuleLoader__.load({
         };
         const [detail, setDetail] = React.useState(null);
         const [sedimentData, setSedimentData] = React.useState(null);
-        React.useEffect(() => {
-          if (tab !== 'sediment') return undefined;
-          let alive = true;
-          (async () => {
-            try {
-              const [logRes, verifyRes] = await Promise.all([
-                call('/cognition-engine/sediment/log?limit=50', { cache: 'no-store' }),
-                call('/cognition-engine/sediment/verify', { cache: 'no-store' }),
-              ]);
-              const log = await logRes.json();
-              const verify = await verifyRes.json();
-              if (alive) setSedimentData({ events: log.events ?? [], verify });
-            } catch {
-              if (alive) setSedimentData({ events: [], verify: null });
-            }
-          })();
-          return () => { alive = false; };
-        }, [tab, tick]);
         const [playbookData, setPlaybookData] = React.useState(null);
         const [pbFlagsFor, setPbFlagsFor] = React.useState(null);
         const [topicsData, setTopicsData] = React.useState(null);
@@ -544,6 +526,26 @@ window.__ModuleLoader__.load({
               ...(token ? { 'x-cognition-token': token } : {}),
             },
           });
+
+        // 沉积页签数据：放在 call/tick 之后，否则 deps 里引用 tick 会触发 TDZ（实测导致整个面板白屏）
+        React.useEffect(() => {
+          if (tab !== 'sediment') return undefined;
+          let alive = true;
+          (async () => {
+            try {
+              const [logRes, verifyRes] = await Promise.all([
+                call('/cognition-engine/sediment/log?limit=50', { cache: 'no-store' }),
+                call('/cognition-engine/sediment/verify', { cache: 'no-store' }),
+              ]);
+              const log = await logRes.json();
+              const verify = await verifyRes.json();
+              if (alive) setSedimentData({ events: log.events ?? [], verify });
+            } catch {
+              if (alive) setSedimentData({ events: [], verify: null });
+            }
+          })();
+          return () => { alive = false; };
+        }, [tab, tick]);
 
         const rememberToken = (value) => {
           setToken(value);
