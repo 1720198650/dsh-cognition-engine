@@ -110,3 +110,26 @@
 3. Zheng et al. *Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena.* arXiv:2306.05685, 2023.
 4. Park et al. *Generative Agents: Interactive Simulacra of Human Behavior.* UIST 2023.
 5. ssamurias/dsh-fish（源码核实：`derive.js` 纯函数、`persona.js` 数值→中文、无哈希链）。
+
+---
+
+## 八、M0 已跑：真实数据上正则召回 0/3（v4.1 修订）
+
+详见 [m0-findings.md](m0-findings.md)。三组真实取代，正则一个都没识别：
+
+| # | 主题 | 相似度 | 正则 | LLM 判定 |
+|---|---|---|---|---|
+| 1 | 发布流程规则 | 0.489 | 漏 | 扩展 |
+| 2 | 发布流程 | 0.117 | 漏 | 重写 |
+| 3 | 数据库选型 | 0.491 | 漏 | **翻案** |
+
+两条硬结论：
+1. **正则召回 0/3** —— 词表追不上人话（漏在「改用」「不引入」，以及重写后字面几乎不重叠）。
+2. **「取代」≠「翻案」** —— 3 次取代里真翻案只有 1 次（1/3）。照原设计会有 2/3 误记，而误记的正是「扩展/补充」，直接破坏不对称判据本身。
+
+因此 v4.1 改三条：
+- **准入**：同 subject + 取代关系即视为「同一事改写」，相似度不再作门槛，只作幅度参考；
+- **分类**：改五类 `reversal / narrowing / extension / supplement / reframe`，各有幅度系数；
+- **证据**：判定结果冻结 `{class, confidence, evidenceFrom, evidenceTo, model}`，置信 <0.6 记 `uncertain` 不进状态层。
+
+样本量诚实交代：正例 3 组、负例 0 组 —— 结论是方向性的，不是统计性的。
