@@ -29,7 +29,8 @@ import { RegisterLog, judgeRegister, isRuntimeContext, THRESHOLD, AMBIGUITY_THRE
 import { SuperagentClient } from './superagent.ts';
 import { AssumptionLedger } from './assumptions.ts';
 import { runDreaming } from './dreaming.ts';
-import { SedimentStore, observeSupersedeFrom } from './sediment.ts';
+import { SedimentStore, observeSupersedeFrom, type SedimentJudge } from './sediment.ts';
+import { buildJudgePrompt, parseJudgeResponse } from './sediment_judge.ts';
 import { AgentsFileSync, defaultAgentsFilePath } from './agents_file.ts';
 import type { StyleBucket } from './style.ts';
 import { TemporalMemoryStore, textSimilarity } from './memory.ts';
@@ -312,6 +313,8 @@ export interface CognitionConfig {
   sedimentEta?: number;
   /** 影子模式：只记录不生效，默认 true（Step 3）。 */
   sedimentShadow?: boolean;
+  /** 语义判定通道：'rules' 规则兜底（默认）/ 'llm' 走真实模型五分类。 */
+  sedimentJudge?: 'rules' | 'llm';
 }
 
 type ResolvedConfig = Required<
@@ -450,6 +453,7 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
         : join(dataDir(), 'cognition-sediment.jsonl'),
     sedimentEta: Math.min(0.1, Math.max(0.001, numberOr(config.sedimentEta, 0.02))),
     sedimentShadow: config.sedimentShadow !== false,
+    sedimentJudge: config.sedimentJudge === 'llm' ? 'llm' : 'rules',
     agentsFilePath:
       typeof config.agentsFilePath === 'string' && config.agentsFilePath.trim().length > 0
         ? expandHome(config.agentsFilePath.trim())
@@ -2636,12 +2640,46 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     // —— 沉积层（Step 1）：只追加哈希链，只读日志/校验 ——
     const sediment = new SedimentStore({ filePath: config.sedimentFile, eta: config.sedimentEta, shadow: config.sedimentShadow });
     /** 一次真实取代 → 沉积层（单向：事实 → 偏置）。任何异常都不许冒到调用方。 */
-    const observeSupersede = (oldId: string, newId: string, reason?: string): void => {
+    /** 判定串行队列：判定是异步的，落盘必须按顺序，否则哈希链会交错。 */
+    let judgeChain: Promise<void> = Promise.resolve();
+
+    /**
+     * 语义判定（LLM 通道）。
+     * 未开启 / 模型不可用 / 调用失败 → 返回 confidence=0 的判定，
+     * 让状态层按 uncertain 拒收（fail-closed），**不偷偷退回正则猜**。
+     */
+    const judgeSupersede = async (
+      subject: string,
+      oldText: string,
+      newText: string,
+      reason?: string,
+    ): Promise<SedimentJudge | undefined> => {
+      if (config.sedimentJudge !== 'llm') return undefined;
+      const input = { subject, oldText, newText, ...(reason === undefined ? {} : { reason }) };
       try {
-        observeSupersedeFrom(sediment, (id) => memory.get(id), oldId, newId, reason);
+        const raw = await callRealModel(buildJudgePrompt(input), 700);
+        const parsed = parseJudgeResponse(raw, `${config.llmProvider || 'llm'}:${config.llmModel || 'default'}`, input);
+        if (parsed !== null) return parsed;
       } catch {
-        /* 沉积层故障不影响记忆写入 */
+        /* 落到下面的 fail-closed */
       }
+      return { class: 'supplement', confidence: 0, evidenceFrom: '', evidenceTo: '', model: 'llm-unavailable' };
+    };
+
+    const observeSupersede = (oldId: string, newId: string, reason?: string): void => {
+      const oldFact = memory.get(oldId);
+      const newFact = memory.get(newId);
+      if (oldFact === undefined || newFact === undefined) return;
+      judgeChain = judgeChain
+        .then(async () => {
+          const judge = await judgeSupersede(newFact.subject, oldFact.content, newFact.content, reason);
+          try {
+            observeSupersedeFrom(sediment, (id) => memory.get(id), oldId, newId, reason, judge);
+          } catch {
+            /* 沉积层故障不影响记忆写入 */
+          }
+        })
+        .catch(() => undefined);
     };
     observeSupersedeRef = observeSupersede;
     route('/cognition-engine/sediment/log', (url) => {

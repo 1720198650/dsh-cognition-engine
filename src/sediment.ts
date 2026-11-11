@@ -27,6 +27,45 @@ export interface SedimentState {
   attachment: number;
 }
 
+/**
+ * 判定的五类（v4.1，依据 docs/m0-findings.md 的实测）：
+ * 「取代」≠「翻案」——3 次真实取代里真翻案只有 1 次，照旧设计会 2/3 误记。
+ */
+export type SedimentClass = 'reversal' | 'narrowing' | 'reframe' | 'extension' | 'supplement';
+
+/** 一次取代的语义判定。**必须冻结进事件**，否则重放结果不同、哈希链会断。 */
+export interface SedimentJudge {
+  class: SedimentClass;
+  /** 0..1；低于 minimumJudgeConfidence 视为 uncertain，不写状态事件 */
+  confidence: number;
+  /** 原文片段（不是编号），人能一眼看出"它凭什么这么判" */
+  evidenceFrom: string;
+  evidenceTo: string;
+  /** 'rules' 或具体模型名 —— 换模型后判定风格会变，统计要分层 */
+  model: string;
+}
+
+/** 各类别的幅度系数（不是 0/1 二分，这是 M0 实测的直接产物）。 */
+export const CLASS_WEIGHT: Record<SedimentClass, number> = {
+  reversal: 1,
+  narrowing: 0.6,
+  reframe: 0.5,
+  extension: 0.25,
+  supplement: 0,
+};
+
+/** 各类别推动哪些维度（方向）。supplement 不动。 */
+const CLASS_POLARITY: Record<SedimentClass, SedimentState> = {
+  reversal: { retention: 1, caution: 1, openness: -1, attachment: 0 },
+  narrowing: { retention: 1, caution: 1, openness: -1, attachment: 0 },
+  reframe: { retention: 1, caution: 1, openness: -1, attachment: 0 },
+  extension: { retention: 1, caution: 0, openness: 0, attachment: 0 },
+  supplement: { retention: 0, caution: 0, openness: 0, attachment: 0 },
+};
+
+/** 低于这个置信度：不写状态事件，只留日志等人看（fail-closed）。 */
+export const DEFAULT_MIN_JUDGE_CONFIDENCE = 0.6;
+
 export interface SedimentEvent {
   seq: number;
   at: number;
@@ -38,6 +77,8 @@ export interface SedimentEvent {
   flip: number;
   tension: number;
   delta: SedimentState;
+  /** 冻结的语义判定（v2 起必有；v1 旧行没有，校验会报断链） */
+  judge?: SedimentJudge;
   prevHash: string;
   hash: string;
   note?: string;
@@ -53,6 +94,8 @@ export interface ObserveInput {
   protention?: boolean;
   /** 取代理由（人话），常用于判断是不是翻案。 */
   reason?: string;
+  /** 预先算好的语义判定（LLM 或规则）；不传则用规则兜底 */
+  judge?: SedimentJudge;
   at?: number;
 }
 
@@ -76,35 +119,64 @@ export interface SedimentOptions {
 
 const ZERO_HASH = '0'.repeat(64);
 const DEFAULT_ETA = 0.02;
+/** v2 起相似度不再作准入门槛（只作参考），阈值参数保留但仅用于张力校准提示。 */
 const DEFAULT_THRESHOLD = 0.45;
 
-/** 翻转强度：否定/反义命中 = 1；语气弱化 = 0.5；纯补充 = 0。 */
-const HARD_FLIP = /(不对|不是|取消|作废|推翻|改成|换成|改为|不再|停止|撤销)/;
-const SOFT_FLIP = /(其实|更准确|严格讲|准确说|补充一下)/;
+/**
+ * 规则兜底判定（没有 LLM 时用）。
+ *
+ * **它的置信度故意不高**：词表永远追不上人话——实测在真实语料上召回 0/3
+ * （漏在「改用」「不引入」，以及重写后字面几乎不重叠）。所以它只用来兜底，
+ * 真正该用的是 LLM 判定；两者都记 model，统计分开算。
+ */
+const HARD_FLIP = /(不对|不是|取消|作废|推翻|改成|改用|换成|改为|不再|不引入|停止|撤销|禁止)/;
+const NARROW_FLIP = /(只用于|仅限于|仅|只|必须|不得|统一|一律)/;
+const EXTEND_FLIP = /(扩展到|扩展为|增加到|新增一步|补充说明|从[一二三四五六七八九\d]+步变)/;
+const SOFT_FLIP = /(其实|更准确|严格讲|准确说|重写|重新)/;
 
+function clip150(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > 150 ? `${flat.slice(0, 150)}…` : flat;
+}
+
+export function classifyByRules(oldText: string, newText: string, reason = ''): SedimentJudge {
+  const signal = `${newText} ${reason}`;
+  const base = { evidenceFrom: clip150(oldText), evidenceTo: clip150(newText), model: 'rules' as const };
+  if (HARD_FLIP.test(signal)) return { ...base, class: 'reversal', confidence: 0.72 };
+  if (EXTEND_FLIP.test(signal)) return { ...base, class: 'extension', confidence: 0.62 };
+  if (NARROW_FLIP.test(signal)) return { ...base, class: 'narrowing', confidence: 0.61 };
+  if (SOFT_FLIP.test(signal)) return { ...base, class: 'reframe', confidence: 0.58 };
+  // 没有翻转词：倾向判"补充"，但置信度低——因为实测这种人话经常是重写。
+  return { ...base, class: 'supplement', confidence: 0.4 };
+}
+
+/** 兼容旧调用：把判定折算成 flip（0/0.5/1）。新代码请直接用 classifyByRules / LLM 判定。 */
 export function detectFlip(
   _oldText: string,
   newText: string,
   reason = '',
 ): { flip: number; kind: 'reversal' | 'softening' | 'supplement' } {
-  // 只看「新的说法」和「取代理由」——绝不能把旧文本里的翻转词算进来，
-  // 否则一次翻案之后的每一条补充都会被误判成翻案（实测踩过）。
-  const signal = `${newText} ${reason}`;
-  if (HARD_FLIP.test(signal)) return { flip: 1, kind: 'reversal' };
-  if (SOFT_FLIP.test(signal)) return { flip: 0.5, kind: 'softening' };
-  return { flip: 0, kind: 'supplement' };
+  const judge = classifyByRules(_oldText, newText, reason);
+  if (judge.class === 'supplement') return { flip: 0, kind: 'supplement' };
+  if (judge.class === 'extension') return { flip: 0.25, kind: 'softening' };
+  if (judge.class === 'reframe' || judge.class === 'narrowing') return { flip: 0.5, kind: 'softening' };
+  return { flip: 1, kind: 'reversal' };
 }
 
-const POLARITY: Record<'reversal' | 'softening' | 'supplement', SedimentState> = {
-  reversal: { retention: 1, caution: 1, openness: -1, attachment: 0 },
-  softening: { retention: 1, caution: -1, openness: 1, attachment: 0 },
-  supplement: { retention: 0, caution: 0, openness: 0, attachment: 0 },
+/** 向后兼容：旧代码引用 POLARITY 的地方（v4.1 起内部走 CLASS_POLARITY）。 */
+export const POLARITY: Record<'reversal' | 'softening' | 'supplement', SedimentState> = {
+  reversal: CLASS_POLARITY.reversal,
+  softening: CLASS_POLARITY.reframe,
+  supplement: CLASS_POLARITY.supplement,
 };
 
 /** 规范化序列化：字段顺序固定、数字 6 位，保证同一事件永远同一哈希。 */
 export function canonicalEvent(event: Omit<SedimentEvent, 'hash'>): string {
   const d = event.delta;
+  const j = event.judge;
+  const esc = (text: string): string => clip150(text).replace(/\|/g, '¦');
   return [
+    'v2',
     event.prevHash,
     String(event.seq),
     String(event.at),
@@ -114,6 +186,10 @@ export function canonicalEvent(event: Omit<SedimentEvent, 'hash'>): string {
     event.to ?? '',
     event.tension.toFixed(6),
     [d.retention, d.caution, d.openness, d.attachment].map((x) => x.toFixed(6)).join(','),
+    // 判定结果进哈希：改了判定就是改了历史，链必须断
+    j === undefined ? '' : `${j.class}:${j.confidence.toFixed(4)}:${j.model}`,
+    j === undefined ? '' : esc(j.evidenceFrom),
+    j === undefined ? '' : esc(j.evidenceTo),
   ].join('|');
 }
 
@@ -132,6 +208,7 @@ export function observeSupersedeFrom(
   oldId: string,
   newId: string,
   reason?: string,
+  judge?: SedimentJudge,
 ): void {
   const oldFact = lookup(oldId);
   const newFact = lookup(newId);
@@ -143,6 +220,7 @@ export function observeSupersedeFrom(
     oldText: oldFact.content,
     newText: newFact.content,
     ...(reason === undefined ? {} : { reason }),
+    ...(judge === undefined ? {} : { judge }),
   });
 }
 
@@ -224,19 +302,35 @@ export class SedimentStore {
    */
   observe(input: ObserveInput): ObserveResult {
     this.loadSync();
-    const { flip, kind } = detectFlip(input.oldText, input.newText, input.reason ?? '');
-    if (flip === 0) return { skipped: true, reason: '纯补充（flip=0）不触发位移' };
+    // 语义判定：优先用传进来的（LLM 结果），否则规则兜底。两者都记 model，统计分开算。
+    const judge = input.judge ?? classifyByRules(input.oldText, input.newText, input.reason ?? '');
+    // 先看置信度再看类别：判定不出来（uncertain）与"确定是补充"是两件事，不能混成一句话
+    if (judge.confidence < DEFAULT_MIN_JUDGE_CONFIDENCE) {
+      return {
+        skipped: true,
+        reason: `判定 ${judge.class} 置信 ${judge.confidence} 低于 ${DEFAULT_MIN_JUDGE_CONFIDENCE}（uncertain），不写状态事件`,
+      };
+    }
+    const weight = CLASS_WEIGHT[judge.class];
+    if (weight === 0) return { skipped: true, reason: `判定为 ${judge.class}，不触发位移` };
     const similarity = textSimilarity(input.oldText, input.newText);
-    const tension = Number((similarity * flip).toFixed(6));
-    if (tension < this.threshold) {
-      return { skipped: true, reason: `张力 ${tension} 未达阈值 ${this.threshold}` };
+    const tension = Number((weight * judge.confidence).toFixed(6));
+    // 相似度不再作准入门槛（v4.1：同 subject + 取代关系即"同一事被改写"），
+    // 只按类别给一个相对下限，防止"判成翻案但幅度算出花"。
+    const floor = Number((this.threshold * weight).toFixed(6));
+    if (tension < floor) {
+      return { skipped: true, reason: `张力 ${tension} 低于 ${judge.class} 的下限 ${floor}` };
     }
     // 证据绑定：没有双 id 的张力事件拒绝写入（ARPM 的教训）
     if (input.from === null || input.to === null) {
       return { skipped: true, reason: '缺少 from/to 事实 id，拒绝写入（证据绑定）' };
     }
+    // 判定证据必须是原文片段，空证据不接受（否则"凭什么这么判"无从追问）
+    if (judge.evidenceFrom.trim().length === 0 || judge.evidenceTo.trim().length === 0) {
+      return { skipped: true, reason: '判定缺少原文证据片段，拒绝写入' };
+    }
 
-    const polarity: SedimentState = { ...POLARITY[kind] };
+    const polarity: SedimentState = { ...CLASS_POLARITY[judge.class] };
     if (input.personRelated === true) polarity.attachment = 1;
 
     const delta: SedimentState = { retention: 0, caution: 0, openness: 0, attachment: 0 };
@@ -261,9 +355,10 @@ export class SedimentStore {
       from: input.from,
       to: input.to,
       similarity: Number(similarity.toFixed(6)),
-      flip,
+      flip: weight,
       tension,
       delta,
+      judge,
       prevHash: seq === 0 ? ZERO_HASH : this.events[seq - 1]!.hash,
     };
     const event: SedimentEvent = { ...draft, hash: hashEvent(draft) };

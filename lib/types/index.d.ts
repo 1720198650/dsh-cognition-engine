@@ -193,6 +193,8 @@ export interface CognitionConfig {
     sedimentEta?: number;
     /** 影子模式：只记录不生效，默认 true（Step 3）。 */
     sedimentShadow?: boolean;
+    /** 语义判定通道：'rules' 规则兜底（默认）/ 'llm' 走真实模型五分类。 */
+    sedimentJudge?: 'rules' | 'llm';
 }
 export declare const name = "cognition-engine";
 /** 需要 tools 服务才能注册工具。 */

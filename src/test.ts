@@ -42,6 +42,7 @@ import { extractAssumptions, AssumptionLedger } from './assumptions.ts';
 import { memoryConfidence } from './views.ts';
 import { runDreaming } from './dreaming.ts';
 import { SedimentStore, observeSupersedeFrom, computePerspective } from './sediment.ts';
+import { buildJudgePrompt, parseJudgeResponse } from './sediment_judge.ts';
 import { inspectRequirement } from './ambiguity.ts';
 import { completionNeedsEvidence } from './task_manager.ts';
 import { TopicStore } from './topics.ts';
@@ -3530,6 +3531,91 @@ async function main(): Promise<void> {
     assert.equal(broken.verdict, 'broken');
     assert.equal(broken.brokenAt, 0);
     rmSync(dir, { recursive: true, force: true });
+  });
+  section('[36] M1：LLM 五分类判定进状态层');
+
+  await test('判定：五类各有幅度；uncertain 不写事件；证据为空拒绝', () => {
+    const dir = join(TEST_TMP, 'sediment-m1');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'chain.jsonl');
+    const store = new SedimentStore({ filePath: file, shadow: false, now: () => 6000 });
+    const base = {
+      subject: '部署区域',
+      from: 'mem-a',
+      to: 'mem-b',
+      oldText: '部署区域在上海机房，主用',
+      newText: '部署区域在北京机房，主用',
+      judge: { class: 'reversal' as const, confidence: 0.9, evidenceFrom: '上海机房', evidenceTo: '北京机房', model: 'test' },
+    };
+    const ok = store.observe(base);
+    assert.equal(ok.skipped, false, JSON.stringify(ok));
+    assert.equal(store.log()[0]!.judge!.class, 'reversal');
+    assert.ok(store.log()[0]!.judge!.confidence === 0.9);
+
+    // supplement → 不动
+    const sup = store.observe({ ...base, judge: { ...base.judge, class: 'supplement' } });
+    assert.equal(sup.skipped, true);
+    assert.equal(store.log().length, 1);
+
+    // extension → 动，但幅度只有 reversal 的 1/4
+    const ext = store.observe({ ...base, judge: { ...base.judge, class: 'extension' } });
+    assert.equal(ext.skipped, false);
+    const revDelta = Math.abs(store.log()[0]!.delta.retention);
+    const extDelta = Math.abs(store.log()[1]!.delta.retention);
+    assert.ok(extDelta < revDelta / 3, `extension(${extDelta}) 应远小于 reversal(${revDelta})`);
+
+    // 低置信 → uncertain，不写
+    const before = store.log().length;
+    const low = store.observe({ ...base, judge: { ...base.judge, confidence: 0.42 } });
+    assert.equal(low.skipped, true);
+    assert.equal(store.log().length, before);
+
+    // 空证据 → 拒绝
+    const noEv = store.observe({ ...base, judge: { ...base.judge, evidenceFrom: '  ' } });
+    assert.equal(noEv.skipped, true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  await test('判定进哈希：改判定 → 链断；重放不重算判定', () => {
+    const dir = join(TEST_TMP, 'sediment-m1-hash');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'chain.jsonl');
+    const store = new SedimentStore({ filePath: file, now: () => 7000 });
+    store.observe({
+      subject: '数据库选型',
+      from: 'mem-x',
+      to: 'mem-y',
+      oldText: '项目的记忆存储用 SQLite，方便做事务和查询',
+      newText: '项目的记忆存储改用纯 JSON 文件，不引入 SQLite',
+      judge: { class: 'reversal', confidence: 0.92, evidenceFrom: '用 SQLite', evidenceTo: '不引入 SQLite', model: 'test' },
+    });
+    assert.equal(store.verify().ok, true);
+
+    // 只改判定，不改别的 → 必须断
+    const lines = readFileSync(file, 'utf8').trim().split('\n');
+    const target = JSON.parse(lines[0]!);
+    target.judge.class = 'supplement';
+    writeFileSync(file, JSON.stringify(target) + '\n', 'utf8');
+    const broken = new SedimentStore({ filePath: file }).verify();
+    assert.equal(broken.ok, false);
+    assert.equal(broken.brokenAt, 0);
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  await test('判定提示词与解析：非法类别/坏 JSON 一律 null；证据缺失降置信', () => {
+    const prompt = buildJudgePrompt({ subject: '数据库选型', oldText: '用 SQLite', newText: '不用 SQLite' });
+    assert.ok(prompt.includes('reversal') && prompt.includes('JSON'));
+    assert.ok(prompt.includes('用 SQLite'));
+
+    const fallback = { subject: 'x', oldText: '旧原文', newText: '新原文' };
+    const good = parseJudgeResponse('```json\n{"class":"reversal","confidence":1.4,"evidenceFrom":"旧","evidenceTo":"新"}\n```', 'm', fallback);
+    assert.equal(good!.class, 'reversal');
+    assert.equal(good!.confidence, 1, '置信度应夹到 1');
+    assert.equal(parseJudgeResponse('{"class":"nonsense","confidence":0.9}', 'm', fallback), null);
+    assert.equal(parseJudgeResponse('不是 JSON', 'm', fallback), null);
+    const noEvidence = parseJudgeResponse('{"class":"reversal","confidence":0.95}', 'm', fallback);
+    assert.equal(noEvidence!.confidence <= 0.5, true, '证据缺失必须降置信');
   });
   /* ---------------------------------------------------------------- */
   console.log('');
