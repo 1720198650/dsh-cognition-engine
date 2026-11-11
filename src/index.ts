@@ -2658,7 +2658,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       const input = { subject, oldText, newText, ...(reason === undefined ? {} : { reason }) };
       try {
         const raw = await callRealModel(buildJudgePrompt(input), 700);
-        const parsed = parseJudgeResponse(raw, `${config.llmProvider || 'llm'}:${config.llmModel || 'default'}`, input);
+        // 记真实 provider:model —— 换模型后判定风格会变，统计必须能分层
+        const route = resolveModel();
+        const parsed = parseJudgeResponse(raw, `${route.provider}:${route.model}`, input);
         if (parsed !== null) return parsed;
       } catch {
         /* 落到下面的 fail-closed */
