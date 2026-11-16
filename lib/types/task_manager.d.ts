@@ -5,7 +5,7 @@
  * 落盘用「临时文件 + rename」的原子写，避免进程被杀时留下半个 JSON。
  */
 import { readFile, writeFile } from 'node:fs/promises';
-export type LongTaskStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
+export type LongTaskStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'EXPIRED';
 /**
  * 标 COMPLETED 是否缺证据。
  *
@@ -33,6 +33,11 @@ export interface LongTask {
     order?: number;
     /** 是否与相邻任务并行推进。 */
     parallel?: boolean;
+    /**
+     * 到期时间（毫秒）。到期仍未完成 → 转 EXPIRED，并下沉成一条普通记忆。
+     * 依据：Hy-Memory 的 L7 INTENTION「带有效期，过期转普通事实」。
+     */
+    expiresAt?: number;
     /**
      * 归属主题（多对多）。空 = 未归类。
      *
@@ -90,6 +95,7 @@ export declare class LongHorizonTaskManager {
         order?: number;
         parallel?: boolean;
         topicIds?: string[];
+        expiresAt?: number;
     }): Promise<LongTask>;
     /** 调整排序号或并行标记（不改状态）。 */
     set_meta(id: string, meta: {
@@ -101,6 +107,11 @@ export declare class LongHorizonTaskManager {
     update_task_progress(id: string, newStatus: LongTaskStatus, newContext?: string | readonly string[]): Promise<LongTask>;
     /** 删除任务并落盘，返回是否真的删掉了。 */
     delete_task(id: string): Promise<boolean>;
+    /**
+     * 到期下沉：过期的未完成任务标成 EXPIRED 并返回。
+     * **不删除**——任务变成历史，同时由调用方写一条普通记忆，让这件事以"记忆"身份继续存在。
+     */
+    expireDue(now?: number): Promise<LongTask[]>;
     /** 未完成的任务（PENDING / IN_PROGRESS），按创建时间升序。 */
     get_pending_tasks(): LongTask[];
     /** 全部任务，按创建时间升序。 */

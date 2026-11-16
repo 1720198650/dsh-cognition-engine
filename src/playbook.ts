@@ -111,6 +111,18 @@ export interface PlaybookEntry {
   harmful: number;
   /** 来自哪几条记忆（证据链）；手动条目为空。 */
   sourceIds: string[];
+  /**
+   * 适用边界：什么情况下**不**适用（如「仅限本地 profile」「仅限单仓库」）。
+   *
+   * 空数组 = 未声明。**新条目没有边界不允许生效**——没有边界的准则等于口号，
+   * 会被到处套用。依据：Hy-Memory 的 Working 经验层 `boundary_envs`。
+   */
+  boundaryEnvs?: string[];
+  /**
+   * 置信度 0..1，人工或模型给出的**展示用**估计。
+   * 注意：冲突裁决仍用 helpful/harmful 推导出的强度，不读这个字段。
+   */
+  confidence?: number;
   /** 何时生效；null 表示不限。 */
   validFrom: number | null;
   /** 何时失效；null 表示长期有效。P3 才会自动生成。 */
@@ -219,6 +231,10 @@ export interface PlaybookCandidate {
   when?: string;
   sourceIds?: string[];
   validTo?: number | null;
+  /** 适用边界；空 = 未声明，准入时会被打回。 */
+  boundaryEnvs?: string[];
+  /** 展示用置信度 0..1。 */
+  confidence?: number;
 }
 
 export interface MergeOutcome {
@@ -253,6 +269,10 @@ export interface PlaybookOptions {
   dedupeThreshold?: number;
   /** 校验来源 id 是否真实存在；不提供则跳过校验。 */
   validateSourceIds?: (ids: readonly string[]) => string[];
+  /**
+   * 是否强制要求「适用边界」（P3-1）。插件运行时开 true；库测试默认 false，避免旧夹具全部要改。
+   */
+  requireBoundary?: boolean;
 }
 
 export interface PlaybookStats {
@@ -505,6 +525,7 @@ export class PlaybookStore {
   private readonly maxPerSection: number;
   private readonly dedupeThreshold: number;
   private readonly validateSourceIds: ((ids: readonly string[]) => string[]) | undefined;
+  private readonly requireBoundary: boolean;
   private readonly isSourceAlive: ((id: string) => boolean) | undefined;
   private data: PlaybookFile = emptyFile();
   private seq = 0;
@@ -521,6 +542,7 @@ export class PlaybookStore {
     // 默认 0.85：分档后这一档代表「自动合并」，不可逆，要比原来的 0.70 更保守
     this.dedupeThreshold = Math.min(0.99, Math.max(0.5, options.dedupeThreshold ?? 0.85));
     this.validateSourceIds = options.validateSourceIds;
+    this.requireBoundary = options.requireBoundary === true;
     this.isSourceAlive = options.isSourceAlive;
   }
 
@@ -695,6 +717,9 @@ export class PlaybookStore {
     if (isCliche(content)) return { accepted: false, reason: '通用套话：换成任何项目都成立，按 DC-∅ 结论增益为零' };
 
     const sourceIds = Array.isArray(candidate.sourceIds) ? candidate.sourceIds.map(String) : [];
+    const boundary = Array.isArray(candidate.boundaryEnvs)
+      ? candidate.boundaryEnvs.map((value) => String(value).trim()).filter((value) => value.length > 0)
+      : [];
     const validSourceIds = this.validateSourceIds === undefined ? sourceIds : this.validateSourceIds(sourceIds);
     // 明确给了来源却全部无效 → 说明是臆造，丢弃；没给来源则视为手动条目
     if (sourceIds.length > 0 && validSourceIds.length === 0) {
@@ -753,6 +778,8 @@ export class PlaybookStore {
       helpful: 0,
       harmful: 0,
       sourceIds: sourceIds.length === 0 ? [] : validSourceIds,
+      ...(boundary.length === 0 ? {} : { boundaryEnvs: boundary }),
+      ...(candidate.confidence === undefined ? {} : { confidence: Math.min(1, Math.max(0, Number(candidate.confidence))) }),
       validFrom: null,
       validTo: candidate.validTo === undefined ? null : candidate.validTo,
       status: 'pending',
@@ -826,8 +853,21 @@ export class PlaybookStore {
 
   /** 人工直接新增（跳过审核，直接 active）。 */
   /** 用户手写/确认的条目，来源直接记 human。 */
-  addManual(input: { section?: string; content: string; validTo?: number | null; when?: string }): MergeOutcome {
-    const outcome = this.submit({ ...input, origin: 'human' });
+  addManual(input: {
+    section?: string;
+    content: string;
+    validTo?: number | null;
+    when?: string;
+    boundaryEnvs?: string[];
+    confidence?: number;
+  }): MergeOutcome {
+    const boundary = Array.isArray(input.boundaryEnvs)
+      ? input.boundaryEnvs.map((value) => String(value).trim()).filter((value) => value.length > 0)
+      : [];
+    if (this.requireBoundary && boundary.length === 0) {
+      return { accepted: false, reason: '准则必须写明适用边界（boundaryEnvs）：没有边界的准则会被到处套用' };
+    }
+    const outcome = this.submit({ ...input, boundaryEnvs: boundary, origin: 'human' });
     if (!outcome.accepted || outcome.entry === undefined) return outcome;
     this.markActive(outcome.entry.id);
     return { accepted: true, entry: this.get(outcome.entry.id) };
@@ -850,6 +890,13 @@ export class PlaybookStore {
   accept(id: string): boolean {
     const entry = this.entryRef(id);
     if (entry === undefined || entry.status !== 'pending') return false;
+
+    // 没有适用边界的准则不允许生效：会被无条件套用到所有场景（P3-1）
+    if (this.requireBoundary && (entry.boundaryEnvs ?? []).length === 0) {
+      entry.note = '缺少适用边界（boundaryEnvs），不能生效；请补边界后再接受';
+      entry.updatedAt = this.clock();
+      return false;
+    }
 
     if (entry.conflictWith !== undefined) {
       const other = this.entryRef(entry.conflictWith);
@@ -1384,14 +1431,17 @@ export class PlaybookStore {
         // 准入标注：只标非「可复用」的——大多数条目没有标记本身就是信息，
         // 「没标记 = 可放心用」，这样也更省预算。
         const hint = this.usageHint(entry);
+        // 适用边界：有就带上，让人知道这条不该被到处套用
+        const boundaryMark =
+          (entry.boundaryEnvs ?? []).length > 0 ? `（不适用于：${entry.boundaryEnvs!.join('、')}）` : '';
         const hintMark = hint === 'doubtful' ? '[存疑]' : hint === 'reference' ? '[仅参考]' : '';
         // 未决冲突必须让模型看见——静默选一条等于丢掉分歧
         const conflictMark =
           entry.conflictGroupId === undefined ? '' : `（与同组条目存在未决分歧，${entry.conflictGroupId}）`;
         const line =
           entry.when.length > 0
-            ? `- [${entry.id}] helpful=${entry.helpful} harmful=${entry.harmful} :: ${entry.when}：${entry.content}${hintMark}${originMark}${evidenceMark}${conflictMark}`
-            : `- [${entry.id}] helpful=${entry.helpful} harmful=${entry.harmful} :: ${entry.content}${hintMark}${originMark}${evidenceMark}${conflictMark}`;
+            ? `- [${entry.id}] helpful=${entry.helpful} harmful=${entry.harmful} :: ${entry.when}：${entry.content}${boundaryMark}${hintMark}${originMark}${evidenceMark}${conflictMark}`
+            : `- [${entry.id}] helpful=${entry.helpful} harmful=${entry.harmful} :: ${entry.content}${boundaryMark}${hintMark}${originMark}${evidenceMark}${conflictMark}`;
         if (used + blockChars + line.length + 1 > maxChars) {
           // 预算不够时，至少保证每组有一条
           if (lines.length === 0) {

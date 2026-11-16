@@ -175,6 +175,7 @@ window.__ModuleLoader__.load({
         playbookHint: '准则本 = 从记忆里蒸馏出的一页工作准则，常驻在每个会话的上下文里。它不存事实（那属于记忆），只存能改变下一步动作的约定、坑和当前状态。条目带 helpful/harmful 计数，长期没被用到的会自动退场。页签上的数字是「已生效条数」。',
         playbookAdd: '＋ 手动新增',
         playbookAddTitle: '新增准则',
+        playbookBoundary: '适用边界（必填）：什么情况下不适用，如「仅限本地 profile」',
         playbookContent: '内容（12–80 字，祈使句，写只有这个项目才知道的事）',
         playbookSection: '分节',
         playbookSave: '保存',
@@ -913,6 +914,11 @@ window.__ModuleLoader__.load({
               { style: S.item },
               h('div', { style: S.itemTitle }, dict.playbookAddTitle),
               h('input', { id: 'pbContent', placeholder: dict.playbookContent, style: S.input }),
+              h('input', {
+                id: 'pbBoundary',
+                placeholder: dict.playbookBoundary,
+                style: S.input,
+              }),
               h(
                 'div',
                 { style: S.meta },
@@ -929,12 +935,20 @@ window.__ModuleLoader__.load({
                 onClick: async () => {
                   const content = document.getElementById('pbContent').value.trim();
                   const section = document.getElementById('pbSection').value;
+                  const boundaryEl = document.getElementById('pbBoundary');
+                  const boundary = boundaryEl ? boundaryEl.value.trim() : '';
                   if (content.length === 0) return;
+                  if (boundary.length === 0) {
+                    setNotice('准则必须写明适用边界（什么情况下不适用）');
+                    return;
+                  }
                   await post(
                     '/cognition-engine/playbook/add?content=' +
                       encodeURIComponent(content) +
                       '&section=' +
-                      encodeURIComponent(section),
+                      encodeURIComponent(section) +
+                      '&boundary=' +
+                      encodeURIComponent(boundary),
                   );
                   setFormOpen(null);
                   setTick((value) => value + 1);

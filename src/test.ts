@@ -3617,6 +3617,67 @@ async function main(): Promise<void> {
     const noEvidence = parseJudgeResponse('{"class":"reversal","confidence":0.95}', 'm', fallback);
     assert.equal(noEvidence!.confidence <= 0.5, true, '证据缺失必须降置信');
   });
+  section('[37] P3-1 准则必须写明适用边界');
+
+  await test('运行时开启后：无边界的手工准则被拒；有边界可写且渲染带「不适用于」', async () => {
+    const dir = join(TEST_TMP, 'p31');
+    mkdirSync(dir, { recursive: true });
+    const pb = new PlaybookStore({
+      filePath: join(dir, 'pb.json'),
+      requireBoundary: true,
+      now: () => 1_700_000_000_000,
+    });
+    const rejected = pb.addManual({ content: '发版前必须跑完整流程再发布不要跳步', section: '约定' });
+    assert.equal(rejected.accepted, false);
+    assert.ok((rejected.reason ?? '').includes('适用边界'), rejected.reason);
+
+    const ok = pb.addManual({
+      content: '发版前必须跑完整流程再发布不要跳步',
+      section: '约定',
+      boundaryEnvs: ['仅限本地 profile', '仅限有真实入口可点的改动'],
+    });
+    assert.equal(ok.accepted, true, JSON.stringify(ok));
+    const text = pb.renderSection();
+    assert.ok(text.includes('不适用于'), text.slice(0, 300));
+    assert.ok(text.includes('仅限本地 profile'));
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  await test('候选（AI 产出）没有边界时不能 accept，状态仍是 pending', () => {
+    const dir = join(TEST_TMP, 'p31b');
+    mkdirSync(dir, { recursive: true });
+    const pb = new PlaybookStore({ filePath: join(dir, 'pb.json'), requireBoundary: true });
+    const submitted = pb.submit({ content: '自动化脚本里不要用 PowerShell 处理中文路径', section: '坑', origin: 'agent' });
+    assert.equal(submitted.accepted, true);
+    const id = submitted.entry!.id;
+    assert.equal(pb.accept(id), false, '无边界不该允许生效');
+    assert.equal(pb.get(id)!.status, 'pending');
+    assert.ok((pb.get(id)!.note ?? '').includes('边界'));
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  section('[38] P3-2 长任务到期下沉');
+
+  await test('到期未完成 → EXPIRED + 从待办消失 + 重复调用不重复下沉', async () => {
+    const dir = join(TEST_TMP, 'p32');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'tasks.json');
+    let now = 1_700_000_000_000;
+    const manager = new LongHorizonTaskManager({ filePath: file, now: () => now });
+    const task = await manager.create_task('把升级报告补完', { expiresAt: now + 1000 });
+    assert.equal(task.expiresAt, now + 1000);
+
+    now += 2000;
+    const expired = await manager.expireDue(now);
+    assert.equal(expired.length, 1);
+    assert.equal(expired[0]!.status, 'EXPIRED');
+    assert.ok(expired[0]!.context.join(' ').includes('下沉'));
+    assert.equal(manager.get_pending_tasks().length, 0, '过期任务不该出现在待办里');
+
+    const again = await manager.expireDue(now);
+    assert.equal(again.length, 0, '不能重复下沉');
+    rmSync(dir, { recursive: true, force: true });
+  });
   /* ---------------------------------------------------------------- */
   console.log('');
   if (failures.length === 0) {

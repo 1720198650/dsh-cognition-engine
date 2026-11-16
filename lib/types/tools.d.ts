@@ -370,6 +370,10 @@ export declare function createTools(deps: ToolDeps): readonly [{
                 type: string;
                 description: string;
             };
+            expiresAt: {
+                type: string;
+                description: string;
+            };
         };
     };
     output: {

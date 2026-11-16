@@ -9,7 +9,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { resolveDataFile, resolveUserPath } from './util.ts';
 
-export type LongTaskStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
+export type LongTaskStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'EXPIRED';
 
 /**
  * 标 COMPLETED 是否缺证据。
@@ -23,6 +23,11 @@ export type LongTaskStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
 export function completionNeedsEvidence(status: LongTaskStatus, evidence: string | undefined): boolean {
   if (status !== 'COMPLETED') return false;
   return (evidence ?? '').trim().length < 8;
+}
+
+/** 还活着的任务：既没完成，也没过期。 */
+function isOpen(task: LongTask): boolean {
+  return task.status === 'PENDING' || task.status === 'IN_PROGRESS';
 }
 
 export interface LongTask {
@@ -42,6 +47,11 @@ export interface LongTask {
   order?: number;
   /** 是否与相邻任务并行推进。 */
   parallel?: boolean;
+  /**
+   * 到期时间（毫秒）。到期仍未完成 → 转 EXPIRED，并下沉成一条普通记忆。
+   * 依据：Hy-Memory 的 L7 INTENTION「带有效期，过期转普通事实」。
+   */
+  expiresAt?: number;
   /**
    * 归属主题（多对多）。空 = 未归类。
    *
@@ -86,7 +96,7 @@ interface TaskFile {
   tasks: LongTask[];
 }
 
-const STATUSES: readonly LongTaskStatus[] = ['PENDING', 'IN_PROGRESS', 'COMPLETED'];
+const STATUSES: readonly LongTaskStatus[] = ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'EXPIRED'];
 
 function isStatus(value: unknown): value is LongTaskStatus {
   return typeof value === 'string' && (STATUSES as readonly string[]).includes(value);
@@ -158,7 +168,7 @@ export class LongHorizonTaskManager {
   /** 创建任务并落盘。 */
   async create_task(
     description: string,
-    span?: { startAt?: number; endAt?: number; order?: number; parallel?: boolean; topicIds?: string[] },
+    span?: { startAt?: number; endAt?: number; order?: number; parallel?: boolean; topicIds?: string[]; expiresAt?: number },
   ): Promise<LongTask> {
     const text = description.trim();
     if (text.length === 0) throw new Error('create_task: description 不能为空');
@@ -177,6 +187,7 @@ export class LongHorizonTaskManager {
       ...(span?.order === undefined ? {} : { order: span.order }),
       ...(span?.parallel === undefined ? {} : { parallel: span.parallel }),
       ...(span?.topicIds === undefined ? {} : { topicIds: [...new Set(span.topicIds.filter((x) => x.length > 0))] }),
+      ...(span?.expiresAt === undefined ? {} : { expiresAt: span.expiresAt }),
     };
     this.tasks.set(task.id, task);
     await this.persist();
@@ -236,9 +247,28 @@ export class LongHorizonTaskManager {
     return existed;
   }
 
+  /**
+   * 到期下沉：过期的未完成任务标成 EXPIRED 并返回。
+   * **不删除**——任务变成历史，同时由调用方写一条普通记忆，让这件事以"记忆"身份继续存在。
+   */
+  async expireDue(now: number = this.clock()): Promise<LongTask[]> {
+    await this.load();
+    const expired: LongTask[] = [];
+    for (const task of this.sorted()) {
+      if (!isOpen(task)) continue;
+      if (task.expiresAt === undefined || task.expiresAt > now) continue;
+      task.status = 'EXPIRED';
+      task.lastUpdatedAt = now;
+      task.context.push(`到期未完成（原定 ${new Date(task.expiresAt).toISOString().slice(0, 10)}），已下沉为记忆`);
+      expired.push(cloneTask(task));
+    }
+    if (expired.length > 0) await this.persist();
+    return expired;
+  }
+
   /** 未完成的任务（PENDING / IN_PROGRESS），按创建时间升序。 */
   get_pending_tasks(): LongTask[] {
-    return this.sorted().filter((task) => task.status !== 'COMPLETED').map(cloneTask);
+    return this.sorted().filter(isOpen).map(cloneTask);
   }
 
   /** 全部任务，按创建时间升序。 */
@@ -260,7 +290,7 @@ export class LongHorizonTaskManager {
   withAge(now: number = this.clock()): TaskWithAge[] {
     return this.sorted().map((task) => {
       const ageMs = Math.max(0, now - task.lastUpdatedAt);
-      return { ...cloneTask(task), ageMs, overdue: task.status !== 'COMPLETED' && ageMs >= this.heartbeatMs };
+      return { ...cloneTask(task), ageMs, overdue: isOpen(task) && ageMs >= this.heartbeatMs };
     });
   }
 
@@ -270,7 +300,7 @@ export class LongHorizonTaskManager {
    */
   check_due_tasks(now: number = this.clock()): DueTask[] {
     return this.sorted()
-      .filter((task) => task.status !== 'COMPLETED')
+      .filter(isOpen)
       .map((task) => ({ ...cloneTask(task), overdueMs: Math.max(0, now - task.lastUpdatedAt) }))
       .filter((task) => task.overdueMs >= this.heartbeatMs);
   }

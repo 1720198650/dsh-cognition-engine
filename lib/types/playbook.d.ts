@@ -82,6 +82,18 @@ export interface PlaybookEntry {
     harmful: number;
     /** 来自哪几条记忆（证据链）；手动条目为空。 */
     sourceIds: string[];
+    /**
+     * 适用边界：什么情况下**不**适用（如「仅限本地 profile」「仅限单仓库」）。
+     *
+     * 空数组 = 未声明。**新条目没有边界不允许生效**——没有边界的准则等于口号，
+     * 会被到处套用。依据：Hy-Memory 的 Working 经验层 `boundary_envs`。
+     */
+    boundaryEnvs?: string[];
+    /**
+     * 置信度 0..1，人工或模型给出的**展示用**估计。
+     * 注意：冲突裁决仍用 helpful/harmful 推导出的强度，不读这个字段。
+     */
+    confidence?: number;
     /** 何时生效；null 表示不限。 */
     validFrom: number | null;
     /** 何时失效；null 表示长期有效。P3 才会自动生成。 */
@@ -189,6 +201,10 @@ export interface PlaybookCandidate {
     when?: string;
     sourceIds?: string[];
     validTo?: number | null;
+    /** 适用边界；空 = 未声明，准入时会被打回。 */
+    boundaryEnvs?: string[];
+    /** 展示用置信度 0..1。 */
+    confidence?: number;
 }
 export interface MergeOutcome {
     accepted: boolean;
@@ -221,6 +237,10 @@ export interface PlaybookOptions {
     dedupeThreshold?: number;
     /** 校验来源 id 是否真实存在；不提供则跳过校验。 */
     validateSourceIds?: (ids: readonly string[]) => string[];
+    /**
+     * 是否强制要求「适用边界」（P3-1）。插件运行时开 true；库测试默认 false，避免旧夹具全部要改。
+     */
+    requireBoundary?: boolean;
 }
 export interface PlaybookStats {
     active: number;
@@ -248,6 +268,7 @@ export declare class PlaybookStore {
     private readonly maxPerSection;
     private readonly dedupeThreshold;
     private readonly validateSourceIds;
+    private readonly requireBoundary;
     private readonly isSourceAlive;
     private data;
     private seq;
@@ -291,6 +312,8 @@ export declare class PlaybookStore {
         content: string;
         validTo?: number | null;
         when?: string;
+        boundaryEnvs?: string[];
+        confidence?: number;
     }): MergeOutcome;
     /**
      * 接受一条待审准则。

@@ -528,6 +528,10 @@ export function createTools(deps: ToolDeps) {
         startAt: { type: 'number', description: 'create：任务开始时间（毫秒）。' },
         order: { type: 'number', description: 'create：排序号，小的在前。' },
         parallel: { type: 'boolean', description: 'create：是否与相邻任务并行推进。' },
+        expiresAt: {
+          type: 'number',
+          description: 'create：到期时间（毫秒）。到期未完成会自动转 EXPIRED 并下沉为一条普通记忆，不删除。',
+        },
       },
     },
     output: textOutput,
@@ -543,6 +547,7 @@ export function createTools(deps: ToolDeps) {
         ...(typeof input.endAt === 'number' ? { endAt: input.endAt } : {}),
         ...(typeof input.order === 'number' ? { order: input.order } : {}),
         ...(typeof input.parallel === 'boolean' ? { parallel: input.parallel } : {}),
+        ...(typeof input.expiresAt === 'number' ? { expiresAt: input.expiresAt } : {}),
         ...(Array.isArray(input.topicIds)
           ? { topicIds: (input.topicIds as unknown[]).map(String).filter((x) => x.length > 0) }
           : {}),
