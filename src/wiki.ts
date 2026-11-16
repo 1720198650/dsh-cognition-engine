@@ -9,7 +9,7 @@
  * 依据：arXiv:2611.05306 附录 A——好的压缩不是"忠实摘要历史"，而是"为下一步执行挑的简报"。
  * 零依赖：只用 node:fs / node:path。
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface WikiSourceFact {
@@ -53,6 +53,10 @@ export interface WikiPage {
   sourceBytes: number;
   /** 是否因超预算被裁剪过 */
   trimmed: boolean;
+  /** 增量维护用：来源事实指纹（factId → 内容哈希）。 */
+  digest?: Record<string, string>;
+  /** 被人工改过的小节名；自动更新不许碰。 */
+  editedSections?: string[];
 }
 
 const clip = (text: string, limit: number): string => {
@@ -165,7 +169,17 @@ export class WikiStore {
 
   save(page: WikiPage): WikiPage {
     mkdirSync(this.dir, { recursive: true });
-    writeFileSync(this.file(page.topicId), page.markdown, 'utf8');
+    const target = this.file(page.topicId);
+    // 覆盖前留一份 .bak-时间戳：自动更新出错时可回退（不删数据）
+    if (existsSync(target)) {
+      try {
+        writeFileSync(target.replace(/\.md$/, `.bak-${Date.now()}.md`), readFileSync(target, 'utf8'), 'utf8');
+        this.pruneBackups(page.topicId);
+      } catch {
+        /* 备份失败不阻断主写入 */
+      }
+    }
+    writeFileSync(target, page.markdown, 'utf8');
     writeFileSync(this.metaFile(page.topicId), JSON.stringify(page, null, 2), 'utf8');
     return page;
   }
@@ -193,6 +207,22 @@ export class WikiStore {
       })
       .filter((page): page is WikiPage => page !== undefined)
       .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /** 只保留最近 3 份备份，避免目录越堆越大。 */
+  private pruneBackups(topicId: string): void {
+    try {
+      const base = topicId.replace(/[^\w.-]/g, '_');
+      const files = readdirSync(this.dir)
+        .filter((name) => name.startsWith(base + '.bak-') && name.endsWith('.md'))
+        .sort();
+      while (files.length > 3) {
+        const victim = files.shift();
+        if (victim !== undefined) unlinkSync(join(this.dir, victim));
+      }
+    } catch {
+      /* 清理失败无所谓 */
+    }
   }
 
   /** 供注入用的短摘录：只取前几行，绝不把整页塞进上下文。 */

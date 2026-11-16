@@ -31,6 +31,7 @@ import { AssumptionLedger } from './assumptions.ts';
 import { runDreaming } from './dreaming.ts';
 import { SedimentStore, observeSupersedeFrom, type SedimentJudge } from './sediment.ts';
 import { WikiStore, buildWiki } from './wiki.ts';
+import { updateWikiIncrementally, type WikiSectionKey } from './wiki_incremental.ts';
 import { buildJudgePrompt, parseJudgeResponse } from './sediment_judge.ts';
 import { AgentsFileSync, defaultAgentsFilePath } from './agents_file.ts';
 import type { StyleBucket } from './style.ts';
@@ -314,6 +315,10 @@ export interface CognitionConfig {
   sedimentEta?: number;
   /** 主题 wiki 目录；默认 ~/.dsh/cognition-engine/wiki。 */
   wikiDir?: string;
+  /** 增量维护开关：默认关（空数据上自动刷只会制造噪声）。 */
+  wikiIncremental?: boolean;
+  /** 一个主题变化多少条事实才值得增量刷新，默认 3。 */
+  wikiIncrementalMinChanges?: number;
   /** 影子模式：只记录不生效，默认 true（Step 3）。 */
   sedimentShadow?: boolean;
   /** 语义判定通道：'rules' 规则兜底（默认）/ 'llm' 走真实模型五分类。 */
@@ -455,6 +460,8 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
         ? expandHome(config.sedimentFile.trim())
         : join(dataDir(), 'cognition-sediment.jsonl'),
     sedimentEta: Math.min(0.1, Math.max(0.001, numberOr(config.sedimentEta, 0.02))),
+    wikiIncremental: config.wikiIncremental === true,
+    wikiIncrementalMinChanges: Math.max(1, numberOr(config.wikiIncrementalMinChanges, 3)),
     wikiDir:
       typeof config.wikiDir === 'string' && config.wikiDir.trim().length > 0
         ? expandHome(config.wikiDir.trim())
@@ -1181,6 +1188,15 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   let observeSupersedeRef: ((oldId: string, newId: string, reason?: string) => void) | undefined;
   /** 由 setupRoutes 内赋值；注入渲染在前，实例在后，所以用引用。 */
   let wikiRef: WikiStore | undefined;
+  /** 由 setupRoutes 内赋值；巡检在 setupRoutes 之外，需要间接拿到来源组装器。 */
+  let wikiSourcesRef:
+    | ((topicId: string) => {
+        topic?: { name: string } | undefined;
+        facts: unknown[];
+        tasks: unknown[];
+        rules: unknown[];
+      })
+    | undefined;
 
   /** 单轮参与统计的最大字符数：防止超长轮把内存和统计都拖歪。 */
   const MAX_STYLE_CHARS = 12000;
@@ -2768,6 +2784,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         .map((entry) => ({ id: entry.id, content: entry.content, boundaryEnvs: entry.boundaryEnvs ?? [] }));
       return { topic, facts, tasks, rules };
     };
+    wikiSourcesRef = wikiSourcesFor as unknown as typeof wikiSourcesRef;
     route('/cognition-engine/wiki/list', () => ({
       dir: wiki.dir,
       pages: wiki.list().map((page) => ({
@@ -2780,6 +2797,33 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         excerpt: page.markdown.slice(0, 240),
       })),
     }));
+    route(
+      '/cognition-engine/wiki/incremental',
+      (url) => {
+        const topicId = (url.searchParams.get('topic') ?? '').trim();
+        if (topicId.length === 0) throw new Error('需要 topic 参数');
+        const force = url.searchParams.get('force') === 'true';
+        const sources = wikiSourcesFor(topicId);
+        const result = updateWikiIncrementally({
+          prev: wiki.read(topicId),
+          topicId,
+          topicName: sources.topic?.name ?? topicId,
+          facts: sources.facts as never,
+          tasks: sources.tasks as never,
+          rules: sources.rules as never,
+        });
+        if (!result.changed) return { changed: false, reason: '来源没有变化', diff: result.diff };
+        if (!force && result.diff.total < config.wikiIncrementalMinChanges) {
+          return {
+            changed: false,
+            reason: '变化 ' + result.diff.total + ' 条，未达阈值 ' + config.wikiIncrementalMinChanges,
+            diff: result.diff,
+          };
+        }
+        return { changed: true, page: wiki.save(result.page), diff: result.diff, suggestions: result.suggestions };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
     route('/cognition-engine/wiki', (url) => {
       const topicId = (url.searchParams.get('topic') ?? '').trim();
       if (topicId.length === 0) throw new Error('需要 topic 参数');
@@ -2810,7 +2854,28 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         if (topicId.length === 0) throw new Error('需要 topic 参数');
         const existing = wiki.read(topicId);
         if (existing === undefined) throw new Error('这个主题还没有 wiki，请先 rebuild');
-        const page = { ...existing, markdown: md, bytes: md.length, updatedAt: Date.now() };
+        // 手工保存要把"哪几节被人改过"记下来——以后自动更新不许覆盖这些节
+        const titles: Record<WikiSectionKey, string> = {
+          stance: '现行口径',
+          avoid: '该避开',
+          done: '完成判定',
+          open: '未决问题',
+        };
+        const edited = new Set<WikiSectionKey>((existing.editedSections ?? []) as WikiSectionKey[]);
+        const blockOf = (text: string, title: string): string => {
+          const match = text.split('## ').find((chunk) => chunk.startsWith(title));
+          return match === undefined ? '' : match.slice(title.length).trim();
+        };
+        for (const key of ['stance', 'avoid', 'done', 'open'] as WikiSectionKey[]) {
+          if (blockOf(md, titles[key]) !== blockOf(existing.markdown, titles[key])) edited.add(key);
+        }
+        const page = {
+          ...existing,
+          markdown: md,
+          bytes: md.length,
+          updatedAt: Date.now(),
+          editedSections: [...edited],
+        };
         return wiki.save(page);
       },
       { method: 'POST', requireAuth: explicitLock },
@@ -3283,6 +3348,28 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         refreshEvidence();
         touch();
         ctx.logger?.info?.(`cognition-engine: ${expiredTasks.length} 个任务到期，已下沉为记忆`);
+      }
+
+      // wiki 增量巡检（默认关）：只刷"变化条数达到阈值"的主题；没有变化不写盘
+      if (config.wikiIncremental && wikiRef !== undefined && wikiSourcesRef !== undefined) {
+        for (const topic of topics.all()) {
+          try {
+            const sources = wikiSourcesRef(topic.id);
+            const result = updateWikiIncrementally({
+              prev: wikiRef.read(topic.id),
+              topicId: topic.id,
+              topicName: topic.name,
+              facts: sources.facts as never,
+              tasks: sources.tasks as never,
+              rules: sources.rules as never,
+            });
+            if (result.changed && result.diff.total >= config.wikiIncrementalMinChanges) {
+              wikiRef.save(result.page);
+            }
+          } catch (error) {
+            ctx.logger?.warn?.(`cognition-engine: wiki 增量失败 ${messageOf(error)}`);
+          }
+        }
       }
 
       const due = taskManager.check_due_tasks();

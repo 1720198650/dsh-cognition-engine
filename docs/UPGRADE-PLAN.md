@@ -32,7 +32,7 @@
 |---|---|---|---|---|
 | **P1-wiki** 主题 wiki（**附注版**） | ✅ **2026-11-16 完成**：`src/wiki.ts`（buildWiki/WikiStore）、路由 `/wiki/list|/wiki|/wiki/rebuild|/wiki/save`、注入追加「【主题附注】」、主题页显示摘录+重建按钮；四节结构；1.0× 上限（<300 字给地板）；实测 767/774 字 trimmed | 1 天 | 无 | 207 测试全绿；实测两页：发布流程 767/774、插件架构 453/582 |
 | **P2** 注入渲染缓存 | ✅ **2026-11-16 完成**：`renderSectionCached()`，指纹覆盖 id/内容/计数/origin/evidence/冲突组/边界/updatedAt + maxChars + indexOnly；按 cacheKey（主题+索引模式）分桶；只缓存渲染、不缓存结论 | 0.5 天 | 无 | 实测 11.1ms → 1.5ms（7.6×）；单测断言改准则立刻失效 |
-| **P1-shadow** wiki 增量维护 | 由 dreaming 增量更新 wiki（非重写） | 1 天 | P1-wiki + dreaming 有样本 | 有实质条目才跑；<0 条不许空跑 |
+| **P1-shadow** wiki 增量维护 | ✅ **2026-11-16 完成**（默认关 `wikiIncremental:false`）：指纹 diff 只 patch 变化的主题；无变化不写盘（mtime 不变）；人工改过的节不覆盖只给建议；覆盖前留 .bak（最多 3 份）；阈值默认 3 条 | 1 天 | P1-wiki + dreaming 有样本 | 实测 t_001：首次 6 条 added、二次 changed=false 且 mtime 未变；210 测试全绿 |
 
 ### P2 —— 差异化能力（别人没有的）
 

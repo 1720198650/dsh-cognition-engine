@@ -193,6 +193,10 @@ export interface CognitionConfig {
     sedimentEta?: number;
     /** 主题 wiki 目录；默认 ~/.dsh/cognition-engine/wiki。 */
     wikiDir?: string;
+    /** 增量维护开关：默认关（空数据上自动刷只会制造噪声）。 */
+    wikiIncremental?: boolean;
+    /** 一个主题变化多少条事实才值得增量刷新，默认 3。 */
+    wikiIncrementalMinChanges?: number;
     /** 影子模式：只记录不生效，默认 true（Step 3）。 */
     sedimentShadow?: boolean;
     /** 语义判定通道：'rules' 规则兜底（默认）/ 'llm' 走真实模型五分类。 */

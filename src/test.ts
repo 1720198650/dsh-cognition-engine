@@ -43,7 +43,9 @@ import { memoryConfidence } from './views.ts';
 import { runDreaming } from './dreaming.ts';
 import { SedimentStore, observeSupersedeFrom, computePerspective } from './sediment.ts';
 import { buildJudgePrompt, parseJudgeResponse } from './sediment_judge.ts';
+import { readdirSync } from 'node:fs';
 import { WikiStore, buildWiki } from './wiki.ts';
+import { updateWikiIncrementally } from './wiki_incremental.ts';
 import { inspectRequirement } from './ambiguity.ts';
 import { completionNeedsEvidence } from './task_manager.ts';
 import { TopicStore } from './topics.ts';
@@ -3739,6 +3741,52 @@ async function main(): Promise<void> {
     const idxKey = pb.renderSectionCached({ cacheKey: 'all|index', indexOnly: true });
     assert.equal(idxKey.cached, false);
     assert.equal(pb.renderSectionCached({ cacheKey: 'all|full' }).cached, true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+  section('[41] P1-shadow wiki 增量维护');
+
+  await test('无变化不写；新增事实才 patch；人工改过的节不被覆盖', () => {
+    const facts1 = [{ id: 'f1', content: '发版必须六步走完不可跳步', importance: 0.9, supersededBy: null }];
+    const first = updateWikiIncrementally({ prev: undefined, topicId: 't', topicName: '发布流程', facts: facts1, now: 1 });
+    assert.equal(first.changed, true);
+    assert.ok(first.page.markdown.includes('六步'));
+
+    // 同一批事实再来一次 → 无变化
+    const second = updateWikiIncrementally({ prev: first.page, topicId: 't', topicName: '发布流程', facts: facts1, now: 2 });
+    assert.equal(second.changed, false, '没有变化不该重写');
+    assert.equal(second.diff.total, 0);
+
+    // 新增一条 → changed，diff.added 命中
+    const facts2 = [...facts1, { id: 'f2', content: '纯文档改动不升版本号', importance: 0.7, supersededBy: null }];
+    const third = updateWikiIncrementally({ prev: first.page, topicId: 't', topicName: '发布流程', facts: facts2, now: 3 });
+    assert.equal(third.changed, true);
+    assert.deepEqual(third.diff.added, ['f2']);
+    assert.ok(third.page.sections.stance.length >= 2);
+
+    // 人工改过 stance：自动更新必须保留人工内容，并给出建议
+    const humanPage = {
+      ...first.page,
+      sections: { ...first.page.sections, stance: ['- 我手写的口径：发版七步（人工）'] },
+      editedSections: ['stance'],
+    };
+    const fourth = updateWikiIncrementally({ prev: humanPage as never, topicId: 't', topicName: '发布流程', facts: facts2, now: 4 });
+    assert.equal(fourth.changed, true);
+    assert.ok((fourth.page.sections.stance[0] ?? '').includes('我手写的口径'), '人工内容不能被覆盖');
+    assert.ok(fourth.suggestions.includes('stance'), '应提示这一节有新内容待确认');
+  });
+
+  await test('覆盖保存会留 .bak 备份，且最多留 3 份', () => {
+    const dir = join(TEST_TMP, 'wiki-shadow');
+    mkdirSync(dir, { recursive: true });
+    const store = new WikiStore(dir);
+    const page = buildWiki({ topicId: 't', topicName: '发布流程', facts: [{ id: 'f1', content: '六步走完', importance: 1, supersededBy: null }], now: 1 });
+    store.save(page);
+    store.save({ ...page, markdown: page.markdown + '\n改一次', bytes: page.bytes + 5, updatedAt: 2 });
+    store.save({ ...page, markdown: page.markdown + '\n改两次', bytes: page.bytes + 5, updatedAt: 3 });
+    store.save({ ...page, markdown: page.markdown + '\n改三次', bytes: page.bytes + 5, updatedAt: 4 });
+    store.save({ ...page, markdown: page.markdown + '\n改四次', bytes: page.bytes + 5, updatedAt: 5 });
+    const backups = readdirSync(dir).filter((name: string) => name.includes('.bak-'));
+    assert.ok(backups.length >= 1 && backups.length <= 3, '备份数量应在 1..3，实际 ' + backups.length);
     rmSync(dir, { recursive: true, force: true });
   });
   /* ---------------------------------------------------------------- */

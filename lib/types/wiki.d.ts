@@ -35,6 +35,10 @@ export interface WikiPage {
     sourceBytes: number;
     /** 是否因超预算被裁剪过 */
     trimmed: boolean;
+    /** 增量维护用：来源事实指纹（factId → 内容哈希）。 */
+    digest?: Record<string, string>;
+    /** 被人工改过的小节名；自动更新不许碰。 */
+    editedSections?: string[];
 }
 /**
  * 生成 wiki 正文。
@@ -58,6 +62,8 @@ export declare class WikiStore {
     save(page: WikiPage): WikiPage;
     read(topicId: string): WikiPage | undefined;
     list(): WikiPage[];
+    /** 只保留最近 3 份备份，避免目录越堆越大。 */
+    private pruneBackups;
     /** 供注入用的短摘录：只取前几行，绝不把整页塞进上下文。 */
     excerpt(topicId: string, limit?: number): string;
 }
