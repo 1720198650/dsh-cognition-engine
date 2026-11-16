@@ -45,6 +45,7 @@ import { SedimentStore, observeSupersedeFrom, computePerspective } from './sedim
 import { buildJudgePrompt, parseJudgeResponse } from './sediment_judge.ts';
 import { readdirSync } from 'node:fs';
 import { WikiStore, buildWiki } from './wiki.ts';
+import { CandidateInbox } from './inbox.ts';
 import { updateWikiIncrementally } from './wiki_incremental.ts';
 import { inspectRequirement } from './ambiguity.ts';
 import { completionNeedsEvidence } from './task_manager.ts';
@@ -3823,6 +3824,58 @@ async function main(): Promise<void> {
     // 只读：目录内容没变（没有新增锚点/临时文件）
     const after = readdirSync(dir).sort();
     assert.deepEqual(after, before, '观察器不能往对方目录写文件');
+    rmSync(dir, { recursive: true, force: true });
+  });
+  section('[43] L0 候选收件箱');
+
+  await test('判重三级：精确 / 近似 / 与现有事实重复；采用才写事实', () => {
+    const dir = join(TEST_TMP, 'inbox');
+    mkdirSync(dir, { recursive: true });
+    const box = new CandidateInbox({ filePath: join(dir, 'inbox.json'), now: () => 1_700_000_000_000 });
+    const facts = [{ id: 'mem-1', content: '发版必须六步走完不可跳步' }];
+
+    const first = box.add({ content: '客户资料：站内设备台账要按季度复核，复核记录留档两年', subject: '设备台账' }, { facts });
+    assert.equal(first.status, 'pending');
+
+    const exact = box.add({ content: '客户资料：站内设备台账要按季度复核，复核记录留档两年' }, { facts });
+    assert.equal(exact.status, 'duplicate');
+
+    const near = box.add({ content: '客户资料：站内设备台账要按季度复核，记录留档两年。' }, { facts });
+    assert.equal(near.status, 'duplicate', '近似重复也要拦住');
+
+    const vsFact = box.add({ content: '发版必须六步走完不可跳步' }, { facts });
+    assert.equal(vsFact.status, 'duplicate', '与现有事实重复应判 duplicate');
+    assert.ok(['pending', 'duplicate'].includes(vsFact.status));
+
+    const calls: string[] = [];
+    const accepted = box.accept(first.id, (input) => {
+      calls.push(input.content);
+      assert.ok(input.tags.includes('inbox'));
+      return 'mem-99';
+    });
+    assert.equal(accepted.status, 'accepted');
+    assert.equal(accepted.acceptedFactId, 'mem-99');
+    assert.equal(calls.length, 1, '采用只能写一次事实');
+    assert.throws(() => box.accept(first.id, () => 'x'), /不能再采用/);
+
+    const stats = box.stats();
+    assert.equal(stats.accepted, 1);
+    assert.ok(stats.duplicate >= 2);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  await test('丢弃只改状态，不写事实；重要度按内容排序', () => {
+    const dir = join(TEST_TMP, 'inbox2');
+    mkdirSync(dir, { recursive: true });
+    const box = new CandidateInbox({ filePath: join(dir, 'inbox.json'), now: () => 1 });
+    const low = box.add({ content: '随便一句没什么信息量的话' });
+    const high = box.add({ content: '2026-11-16 实测：发版必须先跑真实入口，因为 0.9.0 漏了按钮导致补发 0.9.1' });
+    assert.ok(high.importance > low.importance, '含数字/原因的要更高');
+    const list = box.list();
+    assert.equal(list[0]!.id, high.id, '待审列表按重要度降序');
+    const rejected = box.reject(low.id, '没用');
+    assert.equal(rejected.status, 'rejected');
+    assert.equal(box.stats().accepted, 0);
     rmSync(dir, { recursive: true, force: true });
   });
   /* ---------------------------------------------------------------- */

@@ -31,6 +31,7 @@ import { AssumptionLedger } from './assumptions.ts';
 import { runDreaming } from './dreaming.ts';
 import { SedimentStore, observeSupersedeFrom, type SedimentJudge } from './sediment.ts';
 import { WikiStore, buildWiki } from './wiki.ts';
+import { CandidateInbox } from './inbox.ts';
 import { updateWikiIncrementally, type WikiSectionKey } from './wiki_incremental.ts';
 import { buildJudgePrompt, parseJudgeResponse } from './sediment_judge.ts';
 import { AgentsFileSync, defaultAgentsFilePath } from './agents_file.ts';
@@ -315,6 +316,8 @@ export interface CognitionConfig {
   sedimentEta?: number;
   /** 主题 wiki 目录；默认 ~/.dsh/cognition-engine/wiki。 */
   wikiDir?: string;
+  /** 候选收件箱文件；默认 ~/.dsh/cognition-engine/cognition-inbox.json。 */
+  inboxFile?: string;
   /** 增量维护开关：默认关（空数据上自动刷只会制造噪声）。 */
   wikiIncremental?: boolean;
   /** 一个主题变化多少条事实才值得增量刷新，默认 3。 */
@@ -462,6 +465,10 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     sedimentEta: Math.min(0.1, Math.max(0.001, numberOr(config.sedimentEta, 0.02))),
     wikiIncremental: config.wikiIncremental === true,
     wikiIncrementalMinChanges: Math.max(1, numberOr(config.wikiIncrementalMinChanges, 3)),
+    inboxFile:
+      typeof config.inboxFile === 'string' && config.inboxFile.trim().length > 0
+        ? expandHome(config.inboxFile.trim())
+        : join(dataDir(), 'cognition-inbox.json'),
     wikiDir:
       typeof config.wikiDir === 'string' && config.wikiDir.trim().length > 0
         ? expandHome(config.wikiDir.trim())
@@ -592,6 +599,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const topics = new TopicStore({
     ...(config.topicsFile === undefined ? {} : { filePath: config.topicsFile }),
   });
+  // 候选收件箱（L0，不联网）：外部材料先落候选，人工采用后才进记忆
+  const inbox = new CandidateInbox({ filePath: config.inboxFile });
 
   // 知识缺口：模型卡壳时登记，下次针对性补（P6 学习闭环）
   const gaps = new GapStore();
@@ -1674,6 +1683,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       () => ({
         ...detail(),
         // 主题 wiki 摘要（附注用；不含全文，避免把面板撑爆）
+        inbox: { stats: inbox.stats(), pending: inbox.list('pending').slice(0, 20) },
         wiki: (wikiRef?.list() ?? []).map((page) => ({
           topicId: page.topicId,
           topicName: page.topicName,
@@ -2785,6 +2795,68 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       return { topic, facts, tasks, rules };
     };
     wikiSourcesRef = wikiSourcesFor as unknown as typeof wikiSourcesRef;
+    // —— 候选收件箱（L0）——
+    route('/cognition-engine/inbox/list', (url) => {
+      const status = url.searchParams.get('status');
+      const allowed = ['pending', 'accepted', 'rejected', 'duplicate'];
+      const filter = status !== null && allowed.includes(status) ? (status as never) : undefined;
+      return { stats: inbox.stats(), items: inbox.list(filter), filePath: inbox.filePath };
+    });
+    route(
+      '/cognition-engine/inbox/add',
+      (url) => {
+        const content = url.searchParams.get('content') ?? '';
+        const facts = memory
+          .all()
+          .filter((fact) => fact.deletedAt === undefined && fact.supersededAt === null && fact.archived !== true)
+          .map((fact) => ({ id: fact.id, content: fact.content }));
+        const cand = inbox.add(
+          {
+            content,
+            ...(url.searchParams.get('title') === null ? {} : { title: url.searchParams.get('title') as string }),
+            ...(url.searchParams.get('url') === null ? {} : { url: url.searchParams.get('url') as string }),
+            ...(url.searchParams.get('subject') === null ? {} : { subject: url.searchParams.get('subject') as string }),
+            ...(url.searchParams.get('summary') === null ? {} : { summary: url.searchParams.get('summary') as string }),
+            source: 'paste',
+          },
+          { facts },
+        );
+        return cand;
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+    route(
+      '/cognition-engine/inbox/accept',
+      (url) => {
+        const id = (url.searchParams.get('id') ?? '').trim();
+        if (id.length === 0) throw new Error('需要 id');
+        const cand = inbox.accept(id, (input) => {
+          const fact = memory.ingest({
+            content: input.content,
+            subject: input.subject,
+            tags: input.tags,
+            importance: input.importance,
+            source: 'imported',
+            origin: 'ui',
+          });
+          return fact.id;
+        });
+        refreshEvidence();
+        touch();
+        void stateStore.flush();
+        return cand;
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+    route(
+      '/cognition-engine/inbox/reject',
+      (url) => {
+        const id = (url.searchParams.get('id') ?? '').trim();
+        if (id.length === 0) throw new Error('需要 id');
+        return inbox.reject(id, url.searchParams.get('reason') ?? undefined);
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
     route('/cognition-engine/wiki/list', () => ({
       dir: wiki.dir,
       pages: wiki.list().map((page) => ({

@@ -89,6 +89,14 @@ window.__ModuleLoader__.load({
         applyToken: '保存口令',
         cleared: '已清空',
         playbookTab: '准则',
+        inboxTab: '收件',
+        inboxHint: '外部材料先落这里，你点头才进记忆。没采用的不会影响她，也不会进检索。',
+        inboxEmpty: '收件箱是空的。',
+        inboxAddPlaceholder: '粘贴一段内容（链接、摘录、说明书片段都行）',
+        inboxAddBtn: '放进收件箱',
+        inboxAccept: '采用',
+        inboxReject: '丢弃',
+        inboxSubject: '主题（可空）',
         sedimentTab: '沉积',
         sedimentHint: '这里只显示事件日志：哪一次翻案让她的方向偏了一点。不显示参数值，也不提供任何修改入口。',
         sedimentEmpty: '还没有事件。只有真的推翻旧结论（不是补充细节）时才会记一条。',
@@ -1034,6 +1042,7 @@ window.__ModuleLoader__.load({
           ['playbook', dict.playbookTab],
           ['persona', dict.personaTab],
           ['superagent', dict.superagentTab],
+          ['inbox', dict.inboxTab],
           ['sediment', dict.sedimentTab],
           ['learning', dict.learnTab],
           ['settings', dict.settings],
@@ -1283,6 +1292,57 @@ window.__ModuleLoader__.load({
           );
         } else if (tab === 'persona') {
           body = h(PersonaEmbedded, { variant: 'embedded' });
+        } else if (tab === 'inbox') {
+          const ib = detail && detail.inbox ? detail.inbox : { stats: { pending: 0 }, pending: [] };
+          const pending = Array.isArray(ib.pending) ? ib.pending : [];
+          body = h(
+            'div',
+            { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+            h('div', { style: S.explain }, dict.inboxHint),
+            h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+              '待审 ' + ib.stats.pending + ' 条'),
+            h('input', { id: 'ibContent', placeholder: dict.inboxAddPlaceholder, style: S.input }),
+            h('input', { id: 'ibSubject', placeholder: dict.inboxSubject, style: S.input }),
+            h('div', { style: S.meta },
+              h('button', {
+                type: 'button',
+                style: S.tab,
+                onClick: async () => {
+                  const content = document.getElementById('ibContent').value.trim();
+                  const subject = document.getElementById('ibSubject').value.trim();
+                  if (content.length === 0) return;
+                  await post('/cognition-engine/inbox/add?content=' + encodeURIComponent(content) +
+                    (subject.length === 0 ? '' : '&subject=' + encodeURIComponent(subject)));
+                  setTick((v) => v + 1);
+                },
+              }, dict.inboxAddBtn),
+            ),
+            pending.length === 0
+              ? h('div', { style: S.explain }, dict.inboxEmpty)
+              : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                  pending.map((cand) => h('div', { key: cand.id, style: S.item },
+                    h('div', { style: { fontSize: 12 } }, cand.title + '（重要度 ' + cand.importance + '）'),
+                    h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, cand.content.slice(0, 120)),
+                    h('div', { style: S.meta },
+                      h('button', {
+                        type: 'button',
+                        style: S.tab,
+                        onClick: async () => {
+                          await post('/cognition-engine/inbox/accept?id=' + encodeURIComponent(cand.id));
+                          setTick((v) => v + 1);
+                        },
+                      }, dict.inboxAccept),
+                      h('button', {
+                        type: 'button',
+                        style: { ...S.tab, color: '#f85149' },
+                        onClick: async () => {
+                          await post('/cognition-engine/inbox/reject?id=' + encodeURIComponent(cand.id));
+                          setTick((v) => v + 1);
+                        },
+                      }, dict.inboxReject),
+                    ),
+                  ))),
+          );
         } else if (tab === 'sediment') {
           const events = sedimentData === null ? [] : sedimentData.events;
           const verify = sedimentData === null ? null : sedimentData.verify;
