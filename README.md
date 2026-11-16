@@ -698,6 +698,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/charter-phenomenological-persona.md](docs/charter-phenomenological-persona.md) | **理念与方向（宪章）**：三条不可让渡承诺、五个"不是"、四维操作定义、术语翻译表、跑偏自查清单 |
 | [docs/decision-reuse-vs-build.md](docs/decision-reuse-vs-build.md) | **要不要原创？** 三条判据 × 7 个候选的对照矩阵；结论：机制不必原创，只剩「哈希链不可逆 + 检索消融验收」这一处薄增量；给出 A/B/C 三条路线 |
 | [docs/m0-findings.md](docs/m0-findings.md) | **M0 实测**：真实语料上正则召回 0/3；「取代」≠「翻案」比例 1/3；据此改准入/分类/证据三条 |
+| [docs/notes-hy-memory.md](docs/notes-hy-memory.md) | **学习笔记：腾讯混元 Hy-Memory**（Apache-2.0，2067★，EMNLP 2026）——8 层记忆/三档模式/事实与经验双层/diff 链"装饰器而非检索器"；可借 4 条、不借 3 条、差异化只剩"可验证性" |
 | [docs/plan-autonomy-v1.md](docs/plan-autonomy-v1.md) | **自动采集/自动学习升级方案**：三件事划界（采集可做、学习需人批、自动改自己不做）；注入回归、去重、限速、外部锚；L0–L3 |
 | [docs/plan-hybrid-v4.md](docs/plan-hybrid-v4.md) | **融合方案 v4（现行）**：LLM 判语义、确定性算状态的分工依据（LLM-Modulo / 自我验证失效 / judge 偏差）；与 dsh-fish 的四层对接；哈希锚/消融报告/视角窗三件差异化；M0 闸门 |
 | [docs/plan-sediment-v3.md](docs/plan-sediment-v3.md) | **实施方案 v3（怎么做）**：接口/哈希链规范/四个公式/三处钩子/Step 0–5 与五条验收；最短 3 周含两段观察期 |
