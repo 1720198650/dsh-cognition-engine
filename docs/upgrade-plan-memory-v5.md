@@ -199,3 +199,44 @@ wiki 不是"这个主题发生过什么"的叙述，而是**"下次做这个主�
 Belcak, P., Muralidharan, S., Jiang, J., Fu, Y., Byeon, W., Ye, H., Angilly, R., Taghibakhshi, A.,
 Liu, S.-Y., Ouyang, S., Heinrich, G., Molchanov, P. *You don't need long context.* arXiv:2611.05306, 2026.
 <https://arxiv.org/abs/2611.05306>
+---
+
+## 九、从 Hy-Memory（腾讯混元）采纳的四条升级项
+
+来源：[notes-hy-memory.md](notes-hy-memory.md)（Apache-2.0，2067★，EMNLP 2026 / arXiv:2606.09483）。
+它整体是重依赖方案（Chroma/Kuzu/Qdrant/Neo4j/SQLite），**代码不采用**，只采纳四条设计。
+
+### P3-1 准则候选补「适用边界 + 置信度」
+**做什么**：`playbook` 候选新增两个字段
+- `boundaryEnvs: string[]` —— 什么情况下**不**适用（例：仅限本地 profile / 仅限单仓库）
+- `confidence: number` —— 0..1，来自被引用次数与用户反馈
+
+准入时若 `boundaryEnvs` 为空 → 打回，提示"没有边界的准则等于口号"。
+**依据**：Hy-Memory Working 经验层字段 `boundary_envs` / `confidence`；它认为经验必须过"价值门槛"。
+**验收**：候选缺边界无法提交（单测）；已有 4 条准则补边界后，注入时按边界过滤生效。
+
+### P3-2 长任务补「有效期」，过期下沉
+**做什么**：`manage_long_task` 的 pending 项加 `expiresAt?`。到期未完成 → 自动转成一条普通记忆
+（`subject=未完成事项`，`importance` 降档），任务本身上标记 `EXPIRED`，不删除。
+**依据**：Hy-Memory 的 L7 `INTENTION`「带有效期，过期后转为普通事实」。
+**验收**：造一条过期任务 → 跑一次巡检 → 生成一条记忆且任务状态为 EXPIRED（单测）。
+
+### P3-3 明确「事实必记、经验过门槛」
+**做什么**：写进方案与 README 的一行原则——
+- 记忆（事实层）：**不设准入**，写进来就记，靠双时态管真假；
+- 准则（经验层）：**必须过人批 + 过边界检查**，宁缺毋滥。
+**依据**：Hy-Memory「事实层每次恰好 1 条、无门槛；经验层 0–N 条、需过价值门槛」。
+**验收**：文档级约束；面板两处文案分别标注"记忆：随手记"／"准则：需审批"。
+
+### P3-4 「装饰器而非检索器」落到 wiki
+**做什么**：与 §8 修订 1 合并执行——wiki **不进检索排序**，只在命中事实后作为附注挂上去。
+实现上就是渲染阶段按 `fact.subject` 查 wiki 页，命中则追加"相关口径"一节。
+**依据**：Hy-Memory Coding 的 diff 链设计——向量层选事实，链只负责在事实下面挂版本。
+**验收**：关掉 wiki 后检索顺序与分数完全不变（消融）；开启只增加附注文本。
+
+### 明确不采用
+- 多后端（Chroma/Qdrant/Neo4j/Kuzu/SQLite/PostgreSQL）——违反零依赖纯 JSON 硬约束；
+- `ultra` 的图投影与跨域 sweeper——我们的主题只有一层，不需要图数据库；
+- 自研 30B 记忆写入模型——不可行也不必要。
+
+**工作量**：P3-1 / P3-2 各 0.5 天，P3-3 文档级（0.1 天），P3-4 随 P1 一起做。
