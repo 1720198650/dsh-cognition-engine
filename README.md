@@ -701,6 +701,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/m0-findings.md](docs/m0-findings.md) | **M0 实测**：真实语料上正则召回 0/3；「取代」≠「翻案」比例 1/3；据此改准入/分类/证据三条 |
 | [docs/UPGRADE-PLAN.md](docs/UPGRADE-PLAN.md) | **⬅ 升级总表（唯一事实来源）**：现状/待做 P0–P3/观察期裁决/发版节奏/不做清单 |
 | [docs/upgrade-plan-memory-v5.md](docs/upgrade-plan-memory-v5.md) | **记忆 v5 方案（含 §8 新证据）**：Anthropic 四层 + dreaming；§7 ARPM；**§8 arXiv:2611.05306「You don't need long context」→ 推翻 wiki 前置检索、改"事实→wiki 附注"、wiki 写执行简报而非编年史** |
+| [docs/m2-fish-observer.md](docs/m2-fish-observer.md) | **M2 只读观察器**：给 dsh-fish（或任意事件流 agent）算独立哈希锚 + 沉默率/重复率；只读不写 |
 | [docs/notes-hy-memory.md](docs/notes-hy-memory.md) | **学习笔记：腾讯混元 Hy-Memory**（Apache-2.0，2067★，EMNLP 2026）——8 层记忆/三档模式/事实与经验双层/diff 链"装饰器而非检索器"；可借 4 条、不借 3 条、差异化只剩"可验证性" |
 | [docs/plan-autonomy-v1.md](docs/plan-autonomy-v1.md) | **自动采集/自动学习升级方案**：三件事划界（采集可做、学习需人批、自动改自己不做）；注入回归、去重、限速、外部锚；L0–L3 |
 | [docs/plan-hybrid-v4.md](docs/plan-hybrid-v4.md) | **融合方案 v4（现行）**：LLM 判语义、确定性算状态的分工依据（LLM-Modulo / 自我验证失效 / judge 偏差）；与 dsh-fish 的四层对接；哈希锚/消融报告/视角窗三件差异化；M0 闸门 |

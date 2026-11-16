@@ -3789,6 +3789,42 @@ async function main(): Promise<void> {
     assert.ok(backups.length >= 1 && backups.length <= 3, '备份数量应在 1..3，实际 ' + backups.length);
     rmSync(dir, { recursive: true, force: true });
   });
+  section('[42] M2 只读观察器（fish-observe）');
+
+  await test('对合成事件流：算出哈希锚、沉默天数、重复率，且不写对方目录', () => {
+    const dir = join(TEST_TMP, 'fish-fixture');
+    mkdirSync(dir, { recursive: true });
+    const lines = [
+      '{"ts":"2026-11-10T10:00:00Z","kind":"wake","content":"醒来看了一圈，没什么可说的"}',
+      '{"ts":"2026-11-10T11:00:00Z","kind":"judgement","content":"任务到期未完成应该记下来，不要装作没发生"}',
+      '{"ts":"2026-11-11T09:00:00Z","kind":"wake","content":"醒来看了一圈，没什么可说的"}',
+      '{"ts":"2026-11-13T20:00:00Z","kind":"refuse","content":"这件事我不想做，因为和之前说好的不一样"}',
+    ];
+    writeFileSync(join(dir, 'events.jsonl'), lines.join('\n') + '\n', 'utf8');
+    const before = readdirSync(dir).sort();
+
+    const out = execFileSync(process.execPath, ['scripts/fish-observe.mjs', '--dir', dir, '--json'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    });
+    const report = JSON.parse(out) as {
+      events: number;
+      chain: { head: string; length: number };
+      span: { silenceDays: number; spanDays: number };
+      repetition: { extraRepeats: number };
+    };
+    assert.equal(report.events, 4);
+    assert.equal(report.chain.length, 4);
+    assert.ok(report.chain.head.length === 64);
+    assert.equal(report.span.spanDays, 4);
+    assert.equal(report.span.silenceDays, 1);
+    assert.equal(report.repetition.extraRepeats, 1);
+
+    // 只读：目录内容没变（没有新增锚点/临时文件）
+    const after = readdirSync(dir).sort();
+    assert.deepEqual(after, before, '观察器不能往对方目录写文件');
+    rmSync(dir, { recursive: true, force: true });
+  });
   /* ---------------------------------------------------------------- */
   console.log('');
   if (failures.length === 0) {
