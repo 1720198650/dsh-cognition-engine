@@ -691,6 +691,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/research-humanlike-agents-and-autonomy.md](docs/research-humanlike-agents-and-autonomy.md) | 拟人化机制拆解（人设/记忆/时机/风格）、B 站自动化真实流水线、QQ bot 可控记忆四层、LLM 自主行动与学习论文清单 |
 | [docs/research-super-agent-and-persona.md](docs/research-super-agent-and-persona.md) | Super-agent 项目清单 + 人格块设计 + 「自我学习」四层辨析（L1 上下文 / L2 记忆 / L3 工具自造 / L4 权重更新） |
 | [docs/research-frozen-weight-learning.md](docs/research-frozen-weight-learning.md) | 冻结权重下的学习与遗忘：ExpeL / Voyager / AWM / Reflexion / ReasoningBank / ACE / PATH-Bench / Oblivion |
+| [docs/UPGRADE-PLAN.md](docs/UPGRADE-PLAN.md) | **⬅ 升级总表（唯一事实来源）**：现状/待做 P0–P3/观察期裁决/发版节奏/不做清单 |
 | [docs/upgrade-plan-memory-v5.md](docs/upgrade-plan-memory-v5.md) | **记忆 v5**：Anthropic 记忆四层 + dreaming 离线整合 + HarnessMM 的 token 经济；开源对照（Mem0/Zep/Letta/A-MEM）+ P0/P1/P2 |
 | [docs/analytic-mind-sourcebook.md](docs/analytic-mind-sourcebook.md) | **分析心灵哲学：只选不拖累实现的**（功能主义/BDI/GWT/CTM/HOT/自我模型/IIT 逐流派取舍；ACT-R 幂律衰减、pyphi、pymdp、Soar/SPADE 工程对照） |
 | [docs/phenomenology-sourcebook.md](docs/phenomenology-sourcebook.md) | **现象学清单（10 条，逐条标注取/不取）**：Husserl 滞留/前提/被动综合、Merleau-Ponty 习性、Zahavi 最小自我、Gallagher 自我模式、Heidegger 在世、Dreyfus 技能应对、Seth 具身自我、Varela 神经现象学 + 概念→计算翻译表 |
@@ -698,6 +699,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/charter-phenomenological-persona.md](docs/charter-phenomenological-persona.md) | **理念与方向（宪章）**：三条不可让渡承诺、五个"不是"、四维操作定义、术语翻译表、跑偏自查清单 |
 | [docs/decision-reuse-vs-build.md](docs/decision-reuse-vs-build.md) | **要不要原创？** 三条判据 × 7 个候选的对照矩阵；结论：机制不必原创，只剩「哈希链不可逆 + 检索消融验收」这一处薄增量；给出 A/B/C 三条路线 |
 | [docs/m0-findings.md](docs/m0-findings.md) | **M0 实测**：真实语料上正则召回 0/3；「取代」≠「翻案」比例 1/3；据此改准入/分类/证据三条 |
+| [docs/UPGRADE-PLAN.md](docs/UPGRADE-PLAN.md) | **⬅ 升级总表（唯一事实来源）**：现状/待做 P0–P3/观察期裁决/发版节奏/不做清单 |
 | [docs/upgrade-plan-memory-v5.md](docs/upgrade-plan-memory-v5.md) | **记忆 v5 方案（含 §8 新证据）**：Anthropic 四层 + dreaming；§7 ARPM；**§8 arXiv:2611.05306「You don't need long context」→ 推翻 wiki 前置检索、改"事实→wiki 附注"、wiki 写执行简报而非编年史** |
 | [docs/notes-hy-memory.md](docs/notes-hy-memory.md) | **学习笔记：腾讯混元 Hy-Memory**（Apache-2.0，2067★，EMNLP 2026）——8 层记忆/三档模式/事实与经验双层/diff 链"装饰器而非检索器"；可借 4 条、不借 3 条、差异化只剩"可验证性" |
 | [docs/plan-autonomy-v1.md](docs/plan-autonomy-v1.md) | **自动采集/自动学习升级方案**：三件事划界（采集可做、学习需人批、自动改自己不做）；注入回归、去重、限速、外部锚；L0–L3 |
