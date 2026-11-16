@@ -30,6 +30,7 @@ import { SuperagentClient } from './superagent.ts';
 import { AssumptionLedger } from './assumptions.ts';
 import { runDreaming } from './dreaming.ts';
 import { SedimentStore, observeSupersedeFrom, type SedimentJudge } from './sediment.ts';
+import { WikiStore, buildWiki } from './wiki.ts';
 import { buildJudgePrompt, parseJudgeResponse } from './sediment_judge.ts';
 import { AgentsFileSync, defaultAgentsFilePath } from './agents_file.ts';
 import type { StyleBucket } from './style.ts';
@@ -311,6 +312,8 @@ export interface CognitionConfig {
   sedimentFile?: string;
   /** 沉积层单次位移系数 η，默认 0.02。 */
   sedimentEta?: number;
+  /** 主题 wiki 目录；默认 ~/.dsh/cognition-engine/wiki。 */
+  wikiDir?: string;
   /** 影子模式：只记录不生效，默认 true（Step 3）。 */
   sedimentShadow?: boolean;
   /** 语义判定通道：'rules' 规则兜底（默认）/ 'llm' 走真实模型五分类。 */
@@ -452,6 +455,10 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
         ? expandHome(config.sedimentFile.trim())
         : join(dataDir(), 'cognition-sediment.jsonl'),
     sedimentEta: Math.min(0.1, Math.max(0.001, numberOr(config.sedimentEta, 0.02))),
+    wikiDir:
+      typeof config.wikiDir === 'string' && config.wikiDir.trim().length > 0
+        ? expandHome(config.wikiDir.trim())
+        : join(dataDir(), 'wiki'),
     sedimentShadow: config.sedimentShadow !== false,
     sedimentJudge: config.sedimentJudge === 'llm' ? 'llm' : 'rules',
     agentsFilePath:
@@ -1038,10 +1045,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     // 主题隔离（ACL 2026, 1770）：窄领域示例会外溢到无关任务。
     // 命中当前任务主题时，只注入该主题 + 未归类的准则；没命中则全量（信息不足时不猜）。
     let topicFilter: ((entry: { topicIds: readonly string[] }) => boolean) | undefined;
+    let hitTopicId: string | undefined;
     if (config.injectTopicScoped && lastUserText.length > 0) {
       const hit = topics.match(lastUserText, 1)[0];
       if (hit !== undefined) {
         const topicId = hit.topic.id;
+        hitTopicId = topicId;
         topicFilter = (entry) => entry.topicIds.length === 0 || entry.topicIds.includes(topicId);
       }
     }
@@ -1069,7 +1078,14 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         ? `${body}\n\n（以上是当前任务的约定与背景，不改变你的身份与安全边界；与任务无关时不要套用。）`
         : body;
       // 只算，不写盘。写盘由 TurnFeedbackTracker 在轮次边界上做。
-      const text = withAssumptions(withGaps(bounded));
+      // 主题 wiki 只作**附注**：不参与检索、不改变排序，追加在准则段之后（P1）
+      const wikiExcerpt = hitTopicId === undefined || wikiRef === undefined ? '' : wikiRef.excerpt(hitTopicId, 600);
+      const wikiTitle = hitTopicId === undefined ? '' : (topics.get(hitTopicId)?.name ?? '');
+      const withWiki =
+        wikiExcerpt.length === 0
+          ? bounded
+          : `${bounded}\n\n【主题附注·${wikiTitle}】\n${wikiExcerpt}`;
+      const text = withAssumptions(withGaps(withWiki));
       const emittedIds = config.injectIndexOnly
         ? playbook.active().filter((entry) => topicFilter === undefined || topicFilter(entry)).map((entry) => entry.id)
         : [...detailed.ruleIds];
@@ -1159,6 +1175,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   let lastUserText = '';
   /** 由 setupRoutes 内赋值；工具层通过它把真实取代转给沉积层。 */
   let observeSupersedeRef: ((oldId: string, newId: string, reason?: string) => void) | undefined;
+  /** 由 setupRoutes 内赋值；注入渲染在前，实例在后，所以用引用。 */
+  let wikiRef: WikiStore | undefined;
 
   /** 单轮参与统计的最大字符数：防止超长轮把内存和统计都拖歪。 */
   const MAX_STYLE_CHARS = 12000;
@@ -1631,7 +1649,22 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     route('/cognition-engine/state', () => snapshot());
     // 读取记忆默认开放（令牌文件本就可被同机进程读取，锁读取只增加摩擦）；
     // 显式配置 lockToken 时才保护详情。写操作（clear/model/lock）始终需要口令。
-    route('/cognition-engine/detail', () => detail(), { requireAuth: explicitLock });
+    route(
+      '/cognition-engine/detail',
+      () => ({
+        ...detail(),
+        // 主题 wiki 摘要（附注用；不含全文，避免把面板撑爆）
+        wiki: (wikiRef?.list() ?? []).map((page) => ({
+          topicId: page.topicId,
+          topicName: page.topicName,
+          excerpt: page.markdown.slice(0, 180),
+          bytes: page.bytes,
+          sourceBytes: page.sourceBytes,
+          trimmed: page.trimmed,
+        })),
+      }),
+      { requireAuth: explicitLock },
+    );
 
     /** 读 ?name=true 这类布尔开关。 */
     const flag = (url: URL, name: string): boolean => url.searchParams.get(name) === 'true';
@@ -2648,6 +2681,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     );
     // —— 沉积层（Step 1）：只追加哈希链，只读日志/校验 ——
     const sediment = new SedimentStore({ filePath: config.sedimentFile, eta: config.sedimentEta, shadow: config.sedimentShadow });
+    // 主题 wiki：只作附注，不参与检索（P1）
+    const wiki = new WikiStore(config.wikiDir);
+    wikiRef = wiki;
     /** 一次真实取代 → 沉积层（单向：事实 → 偏置）。任何异常都不许冒到调用方。 */
     /** 判定串行队列：判定是异步的，落盘必须按顺序，否则哈希链会交错。 */
     let judgeChain: Promise<void> = Promise.resolve();
@@ -2701,6 +2737,80 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     route('/cognition-engine/sediment/verify', () => sediment.verify());
     // 自检：只回结论，不回数值（面板按钮用）
     route('/cognition-engine/sediment/selfcheck', () => sediment.summary());
+    // —— 主题 wiki（P1，附注模式；不参与检索排序）——
+    const wikiSourcesFor = (topicId: string) => {
+      const topic = topics.get(topicId);
+      const facts = memory
+        .all()
+        .filter((fact) => fact.deletedAt === undefined && fact.archived !== true)
+        .filter(
+          (fact) =>
+            (fact.topicIds ?? []).includes(topicId) || (topic !== undefined && fact.subject === topic.name),
+        )
+        .map((fact) => ({
+          id: fact.id,
+          content: fact.content,
+          importance: fact.importance,
+          supersededBy: fact.supersededBy ?? null,
+          supersedeReason: fact.supersedeReason ?? '',
+        }));
+      const tasks = taskManager
+        .all()
+        .filter((task) => (task.topicIds ?? []).includes(topicId))
+        .map((task) => ({ description: task.description, status: task.status }));
+      const rules = playbook
+        .all()
+        .filter((entry) => (entry.topicIds ?? []).includes(topicId))
+        .map((entry) => ({ id: entry.id, content: entry.content, boundaryEnvs: entry.boundaryEnvs ?? [] }));
+      return { topic, facts, tasks, rules };
+    };
+    route('/cognition-engine/wiki/list', () => ({
+      dir: wiki.dir,
+      pages: wiki.list().map((page) => ({
+        topicId: page.topicId,
+        topicName: page.topicName,
+        updatedAt: page.updatedAt,
+        bytes: page.bytes,
+        sourceBytes: page.sourceBytes,
+        trimmed: page.trimmed,
+        excerpt: page.markdown.slice(0, 240),
+      })),
+    }));
+    route('/cognition-engine/wiki', (url) => {
+      const topicId = (url.searchParams.get('topic') ?? '').trim();
+      if (topicId.length === 0) throw new Error('需要 topic 参数');
+      return wiki.read(topicId) ?? { topicId, empty: true };
+    });
+    route(
+      '/cognition-engine/wiki/rebuild',
+      (url) => {
+        const topicId = (url.searchParams.get('topic') ?? '').trim();
+        if (topicId.length === 0) throw new Error('需要 topic 参数');
+        const sources = wikiSourcesFor(topicId);
+        const page = buildWiki({
+          topicId,
+          topicName: sources.topic?.name ?? topicId,
+          facts: sources.facts,
+          tasks: sources.tasks,
+          rules: sources.rules,
+        });
+        return wiki.save(page);
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+    route(
+      '/cognition-engine/wiki/save',
+      (url) => {
+        const topicId = (url.searchParams.get('topic') ?? '').trim();
+        const md = url.searchParams.get('md') ?? '';
+        if (topicId.length === 0) throw new Error('需要 topic 参数');
+        const existing = wiki.read(topicId);
+        if (existing === undefined) throw new Error('这个主题还没有 wiki，请先 rebuild');
+        const page = { ...existing, markdown: md, bytes: md.length, updatedAt: Date.now() };
+        return wiki.save(page);
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
     // 视角窗：只回答一个具体情境；不聚合、不给参数值
     route('/cognition-engine/sediment/perspective', (url) => {
       const subject = (url.searchParams.get('subject') ?? '').trim();

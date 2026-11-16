@@ -43,6 +43,7 @@ import { memoryConfidence } from './views.ts';
 import { runDreaming } from './dreaming.ts';
 import { SedimentStore, observeSupersedeFrom, computePerspective } from './sediment.ts';
 import { buildJudgePrompt, parseJudgeResponse } from './sediment_judge.ts';
+import { WikiStore, buildWiki } from './wiki.ts';
 import { inspectRequirement } from './ambiguity.ts';
 import { completionNeedsEvidence } from './task_manager.ts';
 import { TopicStore } from './topics.ts';
@@ -3676,6 +3677,42 @@ async function main(): Promise<void> {
 
     const again = await manager.expireDue(now);
     assert.equal(again.length, 0, '不能重复下沉');
+    rmSync(dir, { recursive: true, force: true });
+  });
+  section('[39] P1 主题 wiki（附注版）');
+
+  await test('wiki：四节齐全；体积不超来源 1.0×；不写编年史', () => {
+    const facts = [
+      { id: 'f1', content: '发版必须六步走完不可跳步', importance: 0.9, supersededBy: null },
+      { id: 'f2', content: '以前以为发版只要跑测试就行', importance: 0.4, supersededBy: 'f1', supersedeReason: '漏了真实入口验证' },
+    ];
+    const page = buildWiki({
+      topicId: 't1',
+      topicName: '发布流程',
+      facts,
+      tasks: [{ description: '补齐 README 覆盖检查', status: 'PENDING' }],
+      rules: [{ id: 'r1', content: '发版前跑真实入口', boundaryEnvs: ['仅限有 UI 的改动'] }],
+      now: 1,
+    });
+    assert.ok(page.sections.stance.length === 1);
+    assert.ok(page.sections.avoid.length === 1);
+    assert.ok(page.sections.open.length === 1);
+    assert.ok(page.markdown.includes('## 现行口径') && page.markdown.includes('## 该避开'));
+    assert.ok(page.bytes <= Math.max(page.sourceBytes, 1) + 200, `bytes=${page.bytes} source=${page.sourceBytes}`);
+    assert.ok(!page.markdown.includes('2026-'), '不应该写出时间编年史');
+  });
+
+  await test('wiki：存储读写与摘录封顶', () => {
+    const dir = join(TEST_TMP, 'wiki');
+    mkdirSync(dir, { recursive: true });
+    const store = new WikiStore(dir);
+    const page = buildWiki({ topicId: 't1', topicName: '发布流程', facts: [{ id: 'f1', content: '发版必须六步走完', importance: 1, supersededBy: null }], now: 1 });
+    store.save(page);
+    const back = store.read('t1');
+    assert.ok(back !== undefined && back.markdown.includes('发版必须六步走完'));
+    assert.equal(store.list().length, 1);
+    assert.ok(store.excerpt('t1', 10).length <= 11);
+    assert.equal(store.read('不存在'), undefined);
     rmSync(dir, { recursive: true, force: true });
   });
   /* ---------------------------------------------------------------- */

@@ -1683,9 +1683,11 @@ window.__ModuleLoader__.load({
             (topic) => topic.status === 'active',
           );
           const unclassified = (td && td.unclassified) || { memories: 0, rules: 0 };
+          const wikiPages = (detail && Array.isArray(detail.wiki) ? detail.wiki : []);
           const card = (topic) => {
             const memoryCount = topic.memoryCount || 0;
             const ruleCount = topic.ruleCount || 0;
+            const wikiPage = wikiPages.find((page) => page.topicId === topic.id);
             return h(
               'div',
               { key: topic.id, style: S.item },
@@ -1709,6 +1711,41 @@ window.__ModuleLoader__.load({
                 ),
               ),
               topic.description ? h('div', { style: S.explain }, topic.description) : null,
+              // 主题 wiki（附注）：只读摘录 + 重建。不参与检索，别指望它影响排序。
+              h(
+                'div',
+                { style: { ...S.meta, alignItems: 'flex-start' } },
+                h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                  wikiPage
+                    ? 'wiki ' + wikiPage.bytes + ' 字 / 来源 ' + wikiPage.sourceBytes + ' 字' + (wikiPage.trimmed ? '（已按 1.0× 裁剪）' : '')
+                    : '还没有 wiki'),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    style: S.tab,
+                    onClick: async () => {
+                      await post('/cognition-engine/wiki/rebuild?topic=' + encodeURIComponent(topic.id));
+                      setTick((v) => v + 1);
+                    },
+                  },
+                  '重建 wiki',
+                ),
+              ),
+              wikiPage
+                ? h('pre', {
+                    style: {
+                      margin: 0,
+                      padding: '6px 8px',
+                      background: 'var(--dsw-alias-bg-l2, rgba(127,127,127,0.08))',
+                      borderRadius: 4,
+                      fontSize: 11,
+                      whiteSpace: 'pre-wrap',
+                      maxHeight: 160,
+                      overflow: 'auto',
+                    },
+                  }, wikiPage.excerpt)
+                : null,
               topic.aliases.length > 0
                 ? h('div', { style: S.explain }, '也叫：' + topic.aliases.join('、'))
                 : null,
