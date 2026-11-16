@@ -269,6 +269,12 @@ export declare class PlaybookStore {
     private readonly dedupeThreshold;
     private readonly validateSourceIds;
     private readonly requireBoundary;
+    /**
+     * 注入渲染缓存（P2）。
+     * key = 调用方给的 cacheKey（如 topicId / 'all' + indexOnly）；
+     * 指纹由参与渲染的字段算出，任何一条准则变了就失效。
+     */
+    private readonly renderCache;
     private readonly isSourceAlive;
     private data;
     private seq;
@@ -510,6 +516,26 @@ export declare class PlaybookStore {
      */
     renderIndexOnly(now?: number, topicName?: (id: string) => string | undefined): string;
     renderSection(now?: number, topicName?: (id: string) => string | undefined, filter?: (entry: PlaybookEntry) => boolean): string;
+    /**
+     * 带指纹缓存的渲染（P2）。
+     *
+     * 为什么只缓存渲染、不缓存"结论"：HarnessesMM 的教训是别重复推理；
+     * 但我们没有等价推理链，能安全复用的只有**纯函数渲染结果**。
+     * 指纹覆盖所有影响输出的字段——漏一个就会返回过期文本。
+     */
+    renderSectionCached(input: {
+        cacheKey: string;
+        now?: number;
+        topicName?: (id: string) => string | undefined;
+        filter?: (entry: PlaybookEntry) => boolean;
+        indexOnly?: boolean;
+    }): {
+        section: string;
+        ruleIds: string[];
+        cached: boolean;
+    };
+    /** 清缓存（改文件/恢复/测试时用）。 */
+    clearRenderCache(): void;
     private entryRef;
     private nextId;
     private markActive;

@@ -526,6 +526,12 @@ export class PlaybookStore {
   private readonly dedupeThreshold: number;
   private readonly validateSourceIds: ((ids: readonly string[]) => string[]) | undefined;
   private readonly requireBoundary: boolean;
+  /**
+   * 注入渲染缓存（P2）。
+   * key = 调用方给的 cacheKey（如 topicId / 'all' + indexOnly）；
+   * 指纹由参与渲染的字段算出，任何一条准则变了就失效。
+   */
+  private readonly renderCache = new Map<string, { fp: string; section: string; ruleIds: string[] }>();
   private readonly isSourceAlive: ((id: string) => boolean) | undefined;
   private data: PlaybookFile = emptyFile();
   private seq = 0;
@@ -1528,6 +1534,66 @@ export class PlaybookStore {
     if (body.length > 0) parts.push(`${header}\n${body}${omittedHint === '' ? '' : `\n${omittedHint}`}`);
     parts.push(footer);
     return parts.join('\n\n');
+  }
+
+  /**
+   * 带指纹缓存的渲染（P2）。
+   *
+   * 为什么只缓存渲染、不缓存"结论"：HarnessesMM 的教训是别重复推理；
+   * 但我们没有等价推理链，能安全复用的只有**纯函数渲染结果**。
+   * 指纹覆盖所有影响输出的字段——漏一个就会返回过期文本。
+   */
+  renderSectionCached(input: {
+    cacheKey: string;
+    now?: number;
+    topicName?: (id: string) => string | undefined;
+    filter?: (entry: PlaybookEntry) => boolean;
+    indexOnly?: boolean;
+  }): { section: string; ruleIds: string[]; cached: boolean } {
+    const active = this.active(input.now).filter(
+      (entry) => input.filter === undefined || input.filter(entry),
+    );
+    const fp = [
+      String(input.indexOnly === true),
+      String(this.maxChars),
+      String(this.maxEntries),
+      ...active
+        .map((entry) =>
+          [
+            entry.id,
+            entry.status,
+            entry.content,
+            entry.helpful,
+            entry.harmful,
+            entry.origin,
+            entry.evidence?.status ?? '',
+            entry.conflictGroupId ?? '',
+            entry.when,
+            (entry.boundaryEnvs ?? []).join(','),
+            entry.updatedAt,
+          ].join('~'),
+        )
+        .sort(),
+    ].join('|');
+
+    const hit = this.renderCache.get(input.cacheKey);
+    if (hit !== undefined && hit.fp === fp) {
+      return { section: hit.section, ruleIds: [...hit.ruleIds], cached: true };
+    }
+
+    const detailed = this.renderDetailed(input.now, undefined, input.topicName, input.filter);
+    const section = input.indexOnly === true
+      ? this.renderIndexOnly(input.now, input.topicName)
+      : this.renderSection(input.now, input.topicName, input.filter);
+    const ruleIds = input.indexOnly === true ? active.map((entry) => entry.id) : [...detailed.ruleIds];
+
+    this.renderCache.set(input.cacheKey, { fp, section, ruleIds: [...ruleIds] });
+    return { section, ruleIds, cached: false };
+  }
+
+  /** 清缓存（改文件/恢复/测试时用）。 */
+  clearRenderCache(): void {
+    this.renderCache.clear();
   }
 
   /* ------------------------------ 内部 ------------------------------ */
