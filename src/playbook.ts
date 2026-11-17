@@ -1101,6 +1101,16 @@ export class PlaybookStore {
     return true;
   }
 
+  /** 设置适用边界（什么情况下不适用）。返回是否成功。 */
+  setBoundary(id: string, envs: readonly string[]): boolean {
+    const entry = this.entryRef(id);
+    if (entry === undefined) return false;
+    const clean = envs.map((value) => String(value).trim()).filter((value) => value.length > 0);
+    entry.boundaryEnvs = clean;
+    entry.updatedAt = this.clock();
+    return true;
+  }
+
   /** 记录一次使用反馈（ACE 的双向计数）。 */
   mark(id: string, kind: 'helpful' | 'harmful', amount = 1): boolean {
     const entry = this.entryRef(id);

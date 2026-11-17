@@ -386,6 +386,8 @@ export declare class PlaybookStore {
         diagnosis?: string;
         evidence?: string;
     }): boolean;
+    /** 设置适用边界（什么情况下不适用）。返回是否成功。 */
+    setBoundary(id: string, envs: readonly string[]): boolean;
     /** 记录一次使用反馈（ACE 的双向计数）。 */
     mark(id: string, kind: 'helpful' | 'harmful', amount?: number): boolean;
     /**

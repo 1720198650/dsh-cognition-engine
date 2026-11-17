@@ -4084,6 +4084,23 @@ async function main(): Promise<void> {
     assert.ok(squeezed.notes.some((note) => note.includes('截断')), JSON.stringify(squeezed.notes));
     assert.ok(squeezed.picked.facts.length <= 8);
   });
+  section('[51] 准则边界写入（setBoundary）');
+
+  await test('setBoundary 会写入并持久化；空串被过滤', async () => {
+    const dir = join(TEST_TMP, 'boundary');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'pb.json');
+    const pb = new PlaybookStore({ filePath: file });
+    const created = pb.addManual({ content: '发版前必须跑完整流程再发布不要跳步', section: '约定', boundaryEnvs: ['占位'] });
+    const id = created.entry!.id;
+    assert.equal(pb.setBoundary(id, ['纯文档改动', '  ', '本地调试']), true);
+    assert.deepEqual(pb.get(id)!.boundaryEnvs, ['纯文档改动', '本地调试']);
+    // 落盘校验：文件里能看到这两条边界（不依赖 load 的异步时序）
+    await pb.flush();
+    const raw = readFileSync(file, 'utf8');
+    assert.ok(raw.includes('纯文档改动') && raw.includes('本地调试'), '边界应已持久化');
+    rmSync(dir, { recursive: true, force: true });
+  });
   /* ---------------------------------------------------------------- */
   console.log('');
   if (failures.length === 0) {
