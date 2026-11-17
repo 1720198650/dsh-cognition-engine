@@ -781,7 +781,8 @@ export class PlaybookStore {
     }
 
     // 数量上限：满了就把打分最低的 retired 掉，而不是拒绝新条目
-    if (this.data.entries.filter((entry) => entry.status !== 'retired').length >= this.maxEntries) {
+    // 只有 **active** 才占名额：候选（pending）不该把生效的准则挤掉（2026-11-17 实测踩过）
+    if (this.data.entries.filter((entry) => entry.status === 'active').length >= this.maxEntries) {
       const victim = this.worstEntry();
       if (victim !== undefined) this.markRetired(victim.id, '条目数超限，按 helpful−harmful×2 淘汰');
     }
