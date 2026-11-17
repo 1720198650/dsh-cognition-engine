@@ -195,6 +195,8 @@ export interface CognitionConfig {
     wikiDir?: string;
     /** 候选收件箱文件；默认 ~/.dsh/cognition-engine/cognition-inbox.json。 */
     inboxFile?: string;
+    /** 估算用的模型单价（元 / 百万 tokens），默认 2。只影响看板，不影响实际计费。 */
+    pricePerMTokens?: number;
     /** 增量维护开关：默认关（空数据上自动刷只会制造噪声）。 */
     wikiIncremental?: boolean;
     /** 一个主题变化多少条事实才值得增量刷新，默认 3。 */

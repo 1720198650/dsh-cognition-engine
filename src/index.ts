@@ -32,6 +32,7 @@ import { runDreaming } from './dreaming.ts';
 import { SedimentStore, observeSupersedeFrom, type SedimentJudge } from './sediment.ts';
 import { WikiStore, buildWiki } from './wiki.ts';
 import { CandidateInbox } from './inbox.ts';
+import { recordUsage, summarizeUsage } from './usage.ts';
 import { updateWikiIncrementally, type WikiSectionKey } from './wiki_incremental.ts';
 import { buildJudgePrompt, parseJudgeResponse } from './sediment_judge.ts';
 import { AgentsFileSync, defaultAgentsFilePath } from './agents_file.ts';
@@ -318,6 +319,8 @@ export interface CognitionConfig {
   wikiDir?: string;
   /** 候选收件箱文件；默认 ~/.dsh/cognition-engine/cognition-inbox.json。 */
   inboxFile?: string;
+  /** 估算用的模型单价（元 / 百万 tokens），默认 2。只影响看板，不影响实际计费。 */
+  pricePerMTokens?: number;
   /** 增量维护开关：默认关（空数据上自动刷只会制造噪声）。 */
   wikiIncremental?: boolean;
   /** 一个主题变化多少条事实才值得增量刷新，默认 3。 */
@@ -457,7 +460,8 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     injectMaxInstances: Math.min(20, Math.max(1, Math.round(numberOr(config.injectMaxInstances, 8)))),
     injectBoundaryNotice: config.injectBoundaryNotice !== false,
     injectTopicScoped: config.injectTopicScoped !== false,
-    injectIndexOnly: config.injectIndexOnly === true,
+    // 默认索引模式：注入只给 id + 标题，省 60-70% 注入 token；细节走 recall（零模型成本）
+    injectIndexOnly: config.injectIndexOnly !== false,
     sedimentFile:
       typeof config.sedimentFile === 'string' && config.sedimentFile.trim().length > 0
         ? expandHome(config.sedimentFile.trim())
@@ -465,6 +469,7 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     sedimentEta: Math.min(0.1, Math.max(0.001, numberOr(config.sedimentEta, 0.02))),
     wikiIncremental: config.wikiIncremental === true,
     wikiIncrementalMinChanges: Math.max(1, numberOr(config.wikiIncrementalMinChanges, 3)),
+    pricePerMTokens: numberOr(config.pricePerMTokens, 2),
     inboxFile:
       typeof config.inboxFile === 'string' && config.inboxFile.trim().length > 0
         ? expandHome(config.inboxFile.trim())
@@ -474,7 +479,8 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
         ? expandHome(config.wikiDir.trim())
         : join(dataDir(), 'wiki'),
     sedimentShadow: config.sedimentShadow !== false,
-    sedimentJudge: config.sedimentJudge === 'llm' ? 'llm' : 'rules',
+    // 默认走 LLM 五分类（只在真实取代时触发，成本极低）；不可用时 fail-closed
+    sedimentJudge: config.sedimentJudge === 'rules' ? 'rules' : 'llm',
     agentsFilePath:
       typeof config.agentsFilePath === 'string' && config.agentsFilePath.trim().length > 0
         ? expandHome(config.agentsFilePath.trim())
@@ -782,7 +788,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     return efforts.find((id) => /minimal|none|off|low|fast|light/i.test(id)) ?? efforts[0];
   };
 
-  const callRealModel = async (prompt: string, maxTokens = 4000): Promise<string> => {
+  const usageFile = join(dataDir(), 'cognition-usage.jsonl');
+
+  const callRealModel = async (prompt: string, maxTokens = 4000, purpose = 'other'): Promise<string> => {
     const llm = ctx.get?.('llm') as LlmService | undefined;
     if (llm === undefined || typeof llm.stream !== 'function') throw new Error('llm 服务不可用');
     const { provider, model } = resolveModel();
@@ -828,6 +836,13 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       const shapes = [...seen.entries()].map(([type, count]) => `${type}×${count}`).join(', ');
       throw new Error(`模型返回空内容（收到 chunk：${shapes.length > 0 ? shapes : '无'}）`);
     }
+    recordUsage(usageFile, {
+      at: Date.now(),
+      purpose,
+      promptChars: prompt.length,
+      outputChars: text.length,
+      model: `${config.llmProvider ?? ''}:${config.llmModel ?? ''}`,
+    });
     return text;
   };
 
@@ -862,7 +877,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       gaps: gaps.open().map((g) => ({ id: g.id, text: g.text })),
     });
 
-    const raw = await callRealModel(prompt);
+    const raw = await callRealModel(prompt, 4000, 'distill');
     const parsed = parseDistillResult(raw);
 
     // 标记直接生效：helpful/harmful 可以再改，风险低
@@ -993,7 +1008,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const reflection = new DialecticalReflectionEngine(
     (prompt, phase) =>
       reflectionMode === 'real'
-        ? callRealModel(prompt)
+        ? callRealModel(prompt, 4000, 'reflect')
         : reflectionMode === 'local'
           // 不在中间产物上加警示：它会作为下一阶段的输入，会被模型当成正文引用。
           // 警示统一在工具层按模式补。
@@ -1684,6 +1699,11 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         ...detail(),
         // 主题 wiki 摘要（附注用；不含全文，避免把面板撑爆）
         inbox: { stats: inbox.stats(), pending: inbox.list('pending').slice(0, 20) },
+        usage: summarizeUsage({
+          injectionFile: join(dataDir(), 'cognition-injection.jsonl'),
+          usageFile: join(dataDir(), 'cognition-usage.jsonl'),
+          pricePerMTokens: config.pricePerMTokens,
+        }),
         wiki: (wikiRef?.list() ?? []).map((page) => ({
           topicId: page.topicId,
           topicName: page.topicName,
@@ -2732,7 +2752,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       if (config.sedimentJudge !== 'llm') return undefined;
       const input = { subject, oldText, newText, ...(reason === undefined ? {} : { reason }) };
       try {
-        const raw = await callRealModel(buildJudgePrompt(input), 700);
+        const raw = await callRealModel(buildJudgePrompt(input), 700, 'judge');
         // 记真实 provider:model —— 换模型后判定风格会变，统计必须能分层
         const route = resolveModel();
         const parsed = parseJudgeResponse(raw, `${route.provider}:${route.model}`, input);
@@ -2856,6 +2876,13 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         return inbox.reject(id, url.searchParams.get('reason') ?? undefined);
       },
       { method: 'POST', requireAuth: explicitLock },
+    );
+    route('/cognition-engine/usage', () =>
+      summarizeUsage({
+        injectionFile: join(dataDir(), 'cognition-injection.jsonl'),
+        usageFile: join(dataDir(), 'cognition-usage.jsonl'),
+        pricePerMTokens: config.pricePerMTokens,
+      }),
     );
     route('/cognition-engine/wiki/list', () => ({
       dir: wiki.dir,

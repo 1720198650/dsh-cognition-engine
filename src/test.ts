@@ -46,6 +46,7 @@ import { buildJudgePrompt, parseJudgeResponse } from './sediment_judge.ts';
 import { readdirSync } from 'node:fs';
 import { WikiStore, buildWiki } from './wiki.ts';
 import { CandidateInbox } from './inbox.ts';
+import { summarizeUsage } from './usage.ts';
 import { updateWikiIncrementally } from './wiki_incremental.ts';
 import { inspectRequirement } from './ambiguity.ts';
 import { completionNeedsEvidence } from './task_manager.ts';
@@ -3876,6 +3877,36 @@ async function main(): Promise<void> {
     const rejected = box.reject(low.id, '没用');
     assert.equal(rejected.status, 'rejected');
     assert.equal(box.stats().accepted, 0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+  section('[44] 用量账本（成本看板）');
+
+  await test('汇总：注入字符/模型调用/估算费用；坏行跳过', () => {
+    const dir = join(TEST_TMP, 'usage');
+    mkdirSync(dir, { recursive: true });
+    const now = new Date('2026-11-17T12:00:00Z').getTime();
+    const inj = join(dir, 'inj.jsonl');
+    writeFileSync(inj, [
+      JSON.stringify({ at: now, chars: 600 }),
+      JSON.stringify({ at: now - 86400000, chars: 400 }),
+      JSON.stringify({ at: now, chars: 200 }),
+      'bad-line',
+    ].join('\n') + '\n', 'utf8');
+    const use = join(dir, 'use.jsonl');
+    writeFileSync(use, [
+      JSON.stringify({ at: now, purpose: 'reflect', promptChars: 2000, outputChars: 800, model: 'm' }),
+      JSON.stringify({ at: now, purpose: 'judge', promptChars: 300, outputChars: 100, model: 'm' }),
+    ].join('\n') + '\n', 'utf8');
+
+    const s = summarizeUsage({ injectionFile: inj, usageFile: use, now, pricePerMTokens: 2 });
+    assert.equal(s.injection.turns, 3);
+    assert.equal(s.injection.totalChars, 1200);
+    assert.equal(s.injection.todayChars, 800);
+    assert.equal(s.model.calls, 2);
+    assert.equal(s.model.byPurpose.reflect, 1);
+    assert.equal(s.model.byPurpose.judge, 1);
+    assert.equal(s.model.estTokens, Math.round((2000 + 800 + 300 + 100) * 0.75));
+    assert.ok(s.estCostYuan > 0 && s.estCostYuan < 1);
     rmSync(dir, { recursive: true, force: true });
   });
   /* ---------------------------------------------------------------- */

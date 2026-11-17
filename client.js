@@ -1065,9 +1065,23 @@ window.__ModuleLoader__.load({
         if (tab === 'settings') {
           const button = (label, onClick) => h('button', { type: 'button', style: S.tab, onClick }, label);
           const model = state.model || {};
+          const usage = detail && detail.usage ? detail.usage : null;
           body = h(
             'div',
             null,
+            usage
+              ? section(
+                  '用量（估算）',
+                  h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                    '累计注入 ' + usage.injection.totalChars + ' 字（' + usage.injection.turns + ' 轮，约 ' +
+                    usage.injection.estTokens + ' tokens）；本月 ' + usage.injection.monthChars + ' 字；今日 ' + usage.injection.todayChars + ' 字'),
+                  h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                    '模型调用 ' + usage.model.calls + ' 次（本月 ' + usage.model.monthCalls + '）：' +
+                    Object.entries(usage.model.byPurpose || {}).map(([k, v]) => k + '=' + v).join(' / ')),
+                  h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                    '估算合计 ≈ ' + usage.model.estTokens + ' tokens ≈ ¥' + usage.estCostYuan + '（按 ¥' + usage.pricePerMTokens + '/百万 tokens）'),
+                )
+              : null,
             section(
               dict.backupTitle,
               button(dict.restoreLatest, async () => {
