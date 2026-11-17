@@ -919,7 +919,11 @@ export class TemporalMemoryStore {
    */
   conflicts(): Conflict[] {
     const out: Conflict[] = [];
+    // 桶不是主题：「待归类」「未完成事项」里任何两条都能凑成"同主题"，
+    // 但它们在语义上毫无关系（2026-11-17 实测：一条相片任务和一条 arXiv 链接被并排当冲突）。
+    const BUCKETS = new Set(['待归类', '未完成事项', '未分类', '—', '']);
     for (const [subject, ids] of this.bySubject) {
+      if (BUCKETS.has(subject.trim())) continue;
       const list = [...ids]
         .map((id) => this.facts.get(id))
         .filter(
@@ -938,6 +942,8 @@ export class TemporalMemoryStore {
           const rightEnd = right.validTo ?? Number.POSITIVE_INFINITY;
           const overlapTo = Math.min(leftEnd, rightEnd);
           if (overlapFrom >= overlapTo) continue;
+          // 同一主题但内容毫不相干 ≠ 冲突（冲突必须是"说同一件事、结论不同"）
+          if (textSimilarity(left.content, right.content) < 0.2) continue;
           out.push({
             subject,
             leftId: left.id,

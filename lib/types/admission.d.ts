@@ -65,11 +65,6 @@ export interface AdmissionInput {
     /** 当前活跃的记忆（已排除被取代与归档的）。 */
     existing: readonly ExistingFact[];
 }
-/**
- * 判定一条新记忆能否准入。
- *
- * 顺序与 memoripy 一致：噪声 → 敏感 → 注入 → 权威冲突。
- */
 export declare function evaluateAdmission(input: AdmissionInput, rules?: AdmissionRules): AdmissionDecision;
 /** 把拒绝原因转成给人看的一句话。 */
 export declare function describeRejection(decision: AdmissionDecision): string;
