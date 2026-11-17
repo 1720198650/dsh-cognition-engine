@@ -4101,6 +4101,21 @@ async function main(): Promise<void> {
     assert.ok(raw.includes('纯文档改动') && raw.includes('本地调试'), '边界应已持久化');
     rmSync(dir, { recursive: true, force: true });
   });
+  await test('重启后边界不能丢（restore 必须带 boundaryEnvs）', async () => {
+    const dir = join(TEST_TMP, 'boundary-reload');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'pb.json');
+    const pb = new PlaybookStore({ filePath: file });
+    const created = pb.addManual({ content: '发版前必须跑完整流程再发布不要跳步', section: '约定', boundaryEnvs: ['纯文档改动'] });
+    const id = created.entry!.id;
+    pb.setBoundary(id, ['纯文档改动', '本地调试']);
+    await pb.flush();
+
+    const reloaded = new PlaybookStore({ filePath: file });
+    await reloaded.load();
+    assert.deepEqual(reloaded.get(id)!.boundaryEnvs, ['纯文档改动', '本地调试'], '重启后边界必须还在');
+    rmSync(dir, { recursive: true, force: true });
+  });
   /* ---------------------------------------------------------------- */
   console.log('');
   if (failures.length === 0) {
