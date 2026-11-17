@@ -3478,7 +3478,7 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { style: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 } },
-              ...(((cpeInfo.caseList) || []).slice(0, 20).map((item) =>
+              ...((((cpeInfo.holdout && cpeInfo.holdout.caseList) || [])).slice(0, 20).map((item) =>
                 h(
                   'div',
                   { key: item.id, style: { ...LS.item, flexDirection: 'row', justifyContent: 'space-between' } },
