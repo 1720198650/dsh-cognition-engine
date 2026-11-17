@@ -693,6 +693,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/research-frozen-weight-learning.md](docs/research-frozen-weight-learning.md) | 冻结权重下的学习与遗忘：ExpeL / Voyager / AWM / Reflexion / ReasoningBank / ACE / PATH-Bench / Oblivion |
 | [docs/VISION.md](docs/VISION.md) | **愿景**：三本账（记忆/准则/倾向）、差异化只有"可验证"、对称的成功/失败判据、底线 |
 | [docs/plan-concept-layer-v1.md](docs/plan-concept-layer-v1.md) | **概念层可行性**：反思引擎不能当压缩器（漂移/不可复现/贵）；可行方案=确定性概念格(FCA)+指针+按需展开；含 rate-distortion 警告与 C0–C3 |
+| [docs/p4-3-subagent-redaction.md](docs/p4-3-subagent-redaction.md) | **子代理报告脱敏**：委派话术模板 + `scan-sensitive.mjs` 9 条规则；全仓 0 命中 |
 | [docs/research-skillhone-pybot.md](docs/research-skillhone-pybot.md) | **两份材料评估**：PyBot（agent swarm 写 63 万行）价值低仅作反例；**SkillHone（EMNLP 2026）值得抄"决策历史"与准入前试跑** → P4 三项 |
 | [docs/MANUAL.md](docs/MANUAL.md) | **小白版使用说明书**：九页签/八个工具/六件自动行为/数据与备份/常见问题/限制/速查表 |
 | [docs/UPGRADE-PLAN.md](docs/UPGRADE-PLAN.md) | **⬅ 升级总表（唯一事实来源）**：现状/待做 P0–P3/观察期裁决/发版节奏/不做清单 |
@@ -705,6 +706,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/m0-findings.md](docs/m0-findings.md) | **M0 实测**：真实语料上正则召回 0/3；「取代」≠「翻案」比例 1/3；据此改准入/分类/证据三条 |
 | [docs/VISION.md](docs/VISION.md) | **愿景**：三本账（记忆/准则/倾向）、差异化只有"可验证"、对称的成功/失败判据、底线 |
 | [docs/plan-concept-layer-v1.md](docs/plan-concept-layer-v1.md) | **概念层可行性**：反思引擎不能当压缩器（漂移/不可复现/贵）；可行方案=确定性概念格(FCA)+指针+按需展开；含 rate-distortion 警告与 C0–C3 |
+| [docs/p4-3-subagent-redaction.md](docs/p4-3-subagent-redaction.md) | **子代理报告脱敏**：委派话术模板 + `scan-sensitive.mjs` 9 条规则；全仓 0 命中 |
 | [docs/research-skillhone-pybot.md](docs/research-skillhone-pybot.md) | **两份材料评估**：PyBot（agent swarm 写 63 万行）价值低仅作反例；**SkillHone（EMNLP 2026）值得抄"决策历史"与准入前试跑** → P4 三项 |
 | [docs/MANUAL.md](docs/MANUAL.md) | **小白版使用说明书**：九页签/八个工具/六件自动行为/数据与备份/常见问题/限制/速查表 |
 | [docs/UPGRADE-PLAN.md](docs/UPGRADE-PLAN.md) | **⬅ 升级总表（唯一事实来源）**：现状/待做 P0–P3/观察期裁决/发版节奏/不做清单 |

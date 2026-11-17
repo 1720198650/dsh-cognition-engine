@@ -237,7 +237,7 @@
   {
     "id": "e01",
     "topic": "环境",
-    "text": "工作区从 D:\\minmaxgz 迁到 D:\\dshgz，旧目录留空壳防止会话 cwd 失效"
+    "text": "工作区从 D:\\ws-old 迁到 D:\\ws，旧目录留空壳防止会话 cwd 失效"
   },
   {
     "id": "e02",

@@ -111,7 +111,7 @@ npm 发布必须带 `--registry=https://registry.npmjs.org`。
 |---|---|---|---|
 | **P4-1** 准则历史四段化 | ✅ **2026-11-17 完成**：`history[]` 补 `diagnosis/evidence/outcome`（outcome 自动记成绩快照）；运行时强制诊断（<4 字拒绝，返回可读错误） | 0.5 天 | 实测 ctxt-00001 无诊断修订被拒、内容未变、history 未增；217 测试全绿 |
 | **P4-2** practice probes | ✅ **2026-11-17 完成**：`src/probes.ts`（bigram 重叠 → 命中"会触发"的回合 → 数纠正），`POST /playbook/probe` 预览，accept 前自动拦（≥2 条反证）；阈值可配 | 1 天 | 合成样本 2 条纠正 → reject；真实数据目前 **no-data**（还没有"纠正+原话"样本），此时不阻断但会明说 |
-| **P4-3** 子代理报告脱敏 | 委派任务明确"只写结论与可核对出处，不贴私人原文" | 0.2 天 | 正则黑名单 + 抽查无敏感串 |
+| **P4-3** 子代理报告脱敏 | ✅ **2026-11-17 完成**：`scripts/scan-sensitive.mjs` 9 条规则（站名/电压/期次/手机/身份证/邮箱/凭据/读数编号/本机路径）+ 委派话术模板；**全仓 docs 扫描 0 命中**；顺带修掉 bench 语料里的本机路径（重跑基准结果完全一致） | 0.2 天 | 合成敏感文本命中 5 类；干净文本 0；219 测试全绿 |
 
 依据：[research-skillhone-pybot.md](research-skillhone-pybot.md)。PyBot 不采纳（只作旁证与反例）。
 ---
