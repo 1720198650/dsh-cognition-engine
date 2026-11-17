@@ -2516,6 +2516,14 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           frozenAt: doc.holdout.frozenAt,
           neverUsedForGeneration: doc.holdout.neverUsedForGeneration,
           derivedFromRules: doc.holdout.cases.filter((item) => item.derivedFrom === 'rules').length,
+          // 面板要看见每一条，才能删（count 不够）
+          caseList: doc.holdout.cases.map((item) => ({
+            id: item.id,
+            question: item.question,
+            expectedRuleIds: item.expectedRuleIds,
+            derivedFrom: item.derivedFrom,
+            note: item.note ?? null,
+          })),
         },
         baseline: doc.baseline,
         lastCheck: doc.lastCheck,

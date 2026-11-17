@@ -3453,13 +3453,41 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { style: LS.kv },
-              h('span', null, `${dict.cases} ${(cpeInfo.holdout && cpeInfo.holdout.cases) || 0}`),
+              h('span', null, `${dict.cases} ${(cpeInfo.holdout && cpeInfo.holdout.cases.length) || 0}`),
               h('span', null, `${dict.baseline} ${cpeInfo.baseline ? cpeInfo.baseline.passRate : '-'}`),
               h('span', null, `${dict.lastCheck} ${statusWord(dict, (cpeInfo.lastCheck && cpeInfo.lastCheck.status) || 'insufficient')}`),
               h('span', { style: LS.badge((cpeInfo.lastCheck && cpeInfo.lastCheck.status) || 'insufficient') }, statusWord(dict, (cpeInfo.lastCheck && cpeInfo.lastCheck.status) || 'insufficient')),
+              h('span', null, '门槛 ' + ((cpeInfo.thresholds && cpeInfo.thresholds.minCases) || 20)),
+            ),
+            h(
+              'div',
+              { style: PS.rowFlex },
+              h('button', { type: 'button', style: PS.btn, disabled: busy, onClick: () => post('/cognition-engine/cpe/seed') }, '从准则派生用例'),
+              h('button', { type: 'button', style: PS.btn, disabled: busy, onClick: () => post('/cognition-engine/cpe/baseline') }, '打基线'),
+              h('button', { type: 'button', style: PS.btn, disabled: busy, onClick: () => post('/cognition-engine/cpe/check') }, '跑回归'),
+              h('input', { id: 'cpeMinCases', type: 'number', placeholder: '门槛', defaultValue: (cpeInfo.thresholds && cpeInfo.thresholds.minCases) || 20, style: Object.assign({}, PS.ta, { minHeight: 0, height: 28, padding: '4px 8px', width: 70 }) }),
+              h('button', { type: 'button', style: PS.btn, disabled: busy, onClick: () => post('/cognition-engine/cpe/thresholds?minCases=' + encodeURIComponent(document.getElementById('cpeMinCases').value)) }, '改门槛'),
+            ),
+            h(
+              'div',
+              { style: { display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 } },
+              h('input', { id: 'cpeQuestion', placeholder: '用例：一个问题（例：发版前要做什么）', style: Object.assign({}, PS.ta, { minHeight: 0, height: 28, padding: '4px 8px' }) }),
+              h('input', { id: 'cpeRules', placeholder: '期望命中的准则 id，逗号分隔（例：ctxt-00001,ctxt-00005）', style: Object.assign({}, PS.ta, { minHeight: 0, height: 28, padding: '4px 8px' }) }),
+              h('button', { type: 'button', style: PS.btn, disabled: busy, onClick: () => post('/cognition-engine/cpe/case?question=' + encodeURIComponent(document.getElementById('cpeQuestion').value.trim()) + '&rules=' + encodeURIComponent(document.getElementById('cpeRules').value.trim())) }, '添加用例'),
+            ),
+            h(
+              'div',
+              { style: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 } },
+              ...(((cpeInfo.caseList) || []).slice(0, 20).map((item) =>
+                h(
+                  'div',
+                  { key: item.id, style: { ...LS.item, flexDirection: 'row', justifyContent: 'space-between' } },
+                  h('span', null, item.question + ' → ' + (item.expectedRuleIds || []).join(',') + (item.derivedFrom === 'rules' ? '（派生）' : '')),
+                  h('button', { type: 'button', style: { ...PS.btn, padding: '0 6px' }, disabled: busy, onClick: () => post('/cognition-engine/cpe/case/remove?id=' + encodeURIComponent(item.id)) }, '删'),
+                ),
+              )),
             ),
           ),
-
           // —— shadow ——
           card(
             dict.shadow,
