@@ -46,6 +46,7 @@ import { buildJudgePrompt, parseJudgeResponse } from './sediment_judge.ts';
 import { readdirSync } from 'node:fs';
 import { WikiStore, buildWiki } from './wiki.ts';
 import { CandidateInbox } from './inbox.ts';
+import { SourceStore } from './sources.ts';
 import { summarizeUsage } from './usage.ts';
 import { resolveInjectMode } from './settings.ts';
 import { runPracticeProbes, overlapOf } from './probes.ts';
@@ -4179,6 +4180,31 @@ async function main(): Promise<void> {
     assert.ok((accepted.note ?? '').includes('采用时改写'));
     assert.equal(got[0]!.subject, '设备台账');
     assert.ok(got[0]!.content.includes('季度复核'));
+    rmSync(dir, { recursive: true, force: true });
+  });
+  section('[55] Source 账本（SoMem 的不可变来源层）');
+
+  await test('append 成链；改内容或改链任一都会断；候选带 sourceId', () => {
+    const dir = join(TEST_TMP, 'sources');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'sources.jsonl');
+    const store = new SourceStore({ filePath: file, now: () => 1000 });
+    const a = store.append({ kind: 'paste', title: '材料A', content: '台账按季度复核' });
+    const b = store.append({ kind: 'file', title: '材料B', content: '发版六步不可跳步', locator: 'D:/x.md' });
+    assert.equal(a.id, 'src-1');
+    assert.equal(b.id, 'src-2');
+    assert.equal(store.verify().ok, true);
+    assert.equal(store.get('src-1')!.contentHash.length, 64);
+
+    // 改内容
+    const lines = readFileSync(file, 'utf8').trim().split('\n');
+    const first = JSON.parse(lines[0]!);
+    first.content = '被篡改的内容';
+    lines[0] = JSON.stringify(first);
+    writeFileSync(file, lines.join('\n') + '\n', 'utf8');
+    const broken = new SourceStore({ filePath: file });
+    assert.equal(broken.verify().ok, false, '内容变了必须断');
+    assert.equal(broken.verify().brokenAt, 'src-1');
     rmSync(dir, { recursive: true, force: true });
   });
   /* ---------------------------------------------------------------- */

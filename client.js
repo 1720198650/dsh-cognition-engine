@@ -1345,7 +1345,7 @@ window.__ModuleLoader__.load({
             { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
             h('div', { style: S.explain }, dict.inboxHint),
             h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
-              '待审 ' + ib.stats.pending + ' 条 · 重复已丢 ' + (ib.stats.duplicate || 0) + ' 条'),
+              '待审 ' + ib.stats.pending + ' 条 · 重复已丢 ' + (ib.stats.duplicate || 0) + ' 条 · 来源账本 ' + ((ib.sources && ib.sources.total) || 0) + ' 条' + (ib.sources && ib.sources.chain && ib.sources.chain.ok === false ? '（链断！）' : '')),
             h('input', { id: 'ibContent', placeholder: dict.inboxAddPlaceholder, style: S.input }),
             h('input', { id: 'ibSubject', placeholder: dict.inboxSubject, style: S.input }),
             h('div', { style: S.meta },
@@ -1381,7 +1381,7 @@ window.__ModuleLoader__.load({
               ? h('div', { style: S.explain }, dict.inboxEmpty)
               : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
                   pending.map((cand) => h('div', { key: cand.id, style: S.item },
-                    h('div', { style: { fontSize: 12 } }, cand.title + '（重要度 ' + cand.importance + '）'),
+                    h('div', { style: { fontSize: 12 } }, cand.title + '（重要度 ' + cand.importance + (cand.sourceId ? ' · 来源 ' + cand.sourceId : '') + '）'),
                     h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, cand.summary || (cand.content || '').slice(0, 120)),
                     cand.note ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)' } }, cand.note) : null,
                     h('textarea', { id: 'ibC-' + cand.id, defaultValue: cand.content, style: Object.assign({}, S.input, { minHeight: 56, height: 56 }) }),

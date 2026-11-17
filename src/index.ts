@@ -32,6 +32,7 @@ import { runDreaming } from './dreaming.ts';
 import { SedimentStore, observeSupersedeFrom, type SedimentJudge } from './sediment.ts';
 import { WikiStore, buildWiki } from './wiki.ts';
 import { CandidateInbox } from './inbox.ts';
+import { SourceStore } from './sources.ts';
 import { recordUsage, summarizeUsage } from './usage.ts';
 import { SettingsStore, resolveInjectMode, isInjectMode, type InjectMode } from './settings.ts';
 import { runPracticeProbes, type ProbeTurn } from './probes.ts';
@@ -625,6 +626,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   });
   // 候选收件箱（L0，不联网）：外部材料先落候选，人工采用后才进记忆
   const inbox = new CandidateInbox({ filePath: config.inboxFile });
+  // 不可变来源账本（SoMem 的 Source 层）：只追加，内容哈希 + 链
+  const sources = new SourceStore({ filePath: join(dataDir(), 'cognition-sources.jsonl') });
   // 运行时设置（面板可改）：注入方式
   /**
    * 练习样本：把「用户纠正/确认」的回合和当时的原话拼起来。
@@ -1779,6 +1782,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           stats: inbox.stats(),
           pending: inbox.list('pending').slice(0, 20),
           duplicates: inbox.list('duplicate').slice(0, 8),
+          sources: { total: sources.list(200).length, chain: sources.verify() },
         },
         injectMode,
         usage: summarizeUsage({
@@ -2970,9 +2974,16 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           .map((fact) => ({ id: fact.id, content: fact.content }));
         // L1：外部材料一律先抽取（去脚本/注释/零宽 + 标记可疑句式），再进候选箱
         const extracted = extractText(content, { maxChars: 6000 });
+        // SoMem 的 Source 层：先落一条不可变来源（证据），候选只是指针
+        const source = sources.append({
+          kind: 'paste',
+          title: url.searchParams.get('title') ?? extracted.text.slice(0, 40),
+          content: extracted.text,
+        });
         const cand = inbox.add(
           {
             content: extracted.text,
+            sourceId: source.id,
             ...(extracted.flags.length === 0
               ? {}
               : { note: '含可疑指令句式（' + extracted.flags.join('、') + '），已按数据隔离' }),
@@ -3001,13 +3012,19 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           const hitTopic = topics.match(contentOverride ?? '', 1)[0];
           if (hitTopic !== undefined) autoSubject = hitTopic.topic.name;
         }
+        // SoMem 的证据链接：采用时必须能解析到不可变 Source
+        const pendingCand = inbox.get(id);
+        const sourceId = pendingCand?.sourceId;
+        if (sourceId !== undefined && sources.get(sourceId) === undefined) {
+          throw new Error('来源记录不存在（' + sourceId + '），拒绝采用：没有证据的内容不能进记忆');
+        }
         const cand = inbox.accept(
           id,
           (input) => {
             const fact = memory.ingest({
               content: input.content,
               subject: input.subject,
-              tags: input.tags,
+              tags: sourceId === undefined ? input.tags : [...input.tags, 'src:' + sourceId],
               importance: input.importance,
               source: 'imported',
               origin: 'ui',
@@ -3044,6 +3061,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         const buf = readFileSync(filePath);
         if (buf.includes(0)) throw new Error('看起来是二进制文件，只能导入纯文本');
         const text = extractText(buf.toString('utf8'), { maxChars: 6000 });
+        const source = sources.append({
+          kind: 'file',
+          title: filePath.split(/[\\/]/).pop() ?? filePath,
+          content: text.text,
+          locator: filePath,
+        });
         const facts = memory
           .all()
           .filter((fact) => fact.deletedAt === undefined && fact.supersededBy === null && fact.archived !== true)
@@ -3052,6 +3075,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         return inbox.add(
           {
             content: text.text,
+            sourceId: source.id,
             title: filePath.split(/[\\/]/).pop() ?? filePath,
             ...(subject === null ? {} : { subject }),
             note:
@@ -3064,6 +3088,48 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       },
       { method: 'POST', requireAuth: explicitLock },
     );
+    // 来源账本（SoMem 的 Source 层）：只读
+    route('/cognition-engine/sources/list', (url) => {
+      const raw = Number(url.searchParams.get('limit') ?? '50');
+      const limit = Number.isFinite(raw) ? Math.max(1, Math.min(200, raw)) : 50;
+      return {
+        total: sources.list(200).length,
+        chain: sources.verify(),
+        items: sources.list(limit).map((record) => ({
+          id: record.id,
+          at: record.at,
+          kind: record.kind,
+          title: record.title,
+          chars: record.content.length,
+          ...(record.locator === undefined ? {} : { locator: record.locator }),
+        })),
+      };
+    });
+    route('/cognition-engine/sources/verify', () => sources.verify());
+    // 三种视图（照 SoMem 的 Timeline / Recent 派生）：从现有数据推导，不额外维护
+    route('/cognition-engine/inbox/views', (url) => {
+      const by = url.searchParams.get('by') ?? 'recent';
+      const all = inbox.list();
+      if (by === 'time') {
+        const groups = new Map();
+        for (const item of all) {
+          const day = new Date(item.createdAt).toISOString().slice(0, 10);
+          groups.set(day, (groups.get(day) ?? 0) + 1);
+        }
+        return { by, groups: [...groups.entries()].sort().map(([day, count]) => ({ day, count })) };
+      }
+      if (by === 'status') return { by, status: inbox.stats() };
+      return {
+        by: 'recent',
+        items: all.slice(0, 20).map((item) => ({
+          id: item.id,
+          status: item.status,
+          title: item.title,
+          createdAt: item.createdAt,
+          ...(item.sourceId === undefined ? {} : { sourceId: item.sourceId }),
+        })),
+      };
+    });
     route(
       '/cognition-engine/inbox/reject',
       (url) => {

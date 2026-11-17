@@ -29,6 +29,8 @@ export interface Candidate {
   subject?: string;
   source: 'paste' | 'web' | 'file';
   status: CandidateStatus;
+  /** 指向不可变来源（SoMem 的 Source 层） */
+  sourceId?: string;
   /** 判重命中的对象（候选 id 或事实 id） */
   duplicateOf?: string;
   /** 采用后落到哪条事实 */
@@ -130,6 +132,8 @@ export class CandidateInbox {
       source?: 'paste' | 'web' | 'file';
       /** 抽取阶段留下的说明（含可疑句式等） */
       note?: string;
+      /** 不可变来源 id（由调用方先写入 Source 账本） */
+      sourceId?: string;
     },
     existing?: { facts: readonly { id: string; content: string }[] },
   ): Candidate {
@@ -148,6 +152,7 @@ export class CandidateInbox {
       ...(input.subject === undefined ? {} : { subject: input.subject }),
       source: input.source ?? 'paste',
       ...(input.note === undefined ? {} : { note: input.note }),
+      ...(input.sourceId === undefined ? {} : { sourceId: input.sourceId }),
       status: 'pending',
       importance: estimateImportance(content),
     };
