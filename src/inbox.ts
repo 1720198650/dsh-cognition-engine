@@ -128,6 +128,8 @@ export class CandidateInbox {
       summary?: string;
       subject?: string;
       source?: 'paste' | 'web' | 'file';
+      /** 抽取阶段留下的说明（含可疑句式等） */
+      note?: string;
     },
     existing?: { facts: readonly { id: string; content: string }[] },
   ): Candidate {
@@ -144,6 +146,7 @@ export class CandidateInbox {
       ...(input.summary === undefined ? {} : { summary: input.summary }),
       ...(input.subject === undefined ? {} : { subject: input.subject }),
       source: input.source ?? 'paste',
+      ...(input.note === undefined ? {} : { note: input.note }),
       status: 'pending',
       importance: estimateImportance(content),
     };

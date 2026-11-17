@@ -711,6 +711,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/MANUAL.md](docs/MANUAL.md) | **小白版使用说明书**：九页签/八个工具/六件自动行为/数据与备份/常见问题/限制/速查表 |
 | [docs/UPGRADE-PLAN.md](docs/UPGRADE-PLAN.md) | **⬅ 升级总表（唯一事实来源）**：现状/待做 P0–P3/观察期裁决/发版节奏/不做清单 |
 | [docs/upgrade-plan-memory-v5.md](docs/upgrade-plan-memory-v5.md) | **记忆 v5 方案（含 §8 新证据）**：Anthropic 四层 + dreaming；§7 ARPM；**§8 arXiv:2611.05306「You don't need long context」→ 推翻 wiki 前置检索、改"事实→wiki 附注"、wiki 写执行简报而非编年史** |
+| [docs/l1-injection-regression.md](docs/l1-injection-regression.md) | **L1 注入回归**：`extractText` 四步 + 7 类标记 + 12 样本；`npm run check:injection`；收件箱入库前自动抽取 |
 | [docs/l0-inbox.md](docs/l0-inbox.md) | **L0 候选收件箱**：Zettelkasten 三段流 + Mem0 显式写操作 + 分级审批；三级判重、重要度排序、采用才写事实 |
 | [docs/m2-fish-observer.md](docs/m2-fish-observer.md) | **M2 只读观察器**：给 dsh-fish（或任意事件流 agent）算独立哈希锚 + 沉默率/重复率；只读不写 |
 | [docs/notes-hy-memory.md](docs/notes-hy-memory.md) | **学习笔记：腾讯混元 Hy-Memory**（Apache-2.0，2067★，EMNLP 2026）——8 层记忆/三档模式/事实与经验双层/diff 链"装饰器而非检索器"；可借 4 条、不借 3 条、差异化只剩"可验证性" |

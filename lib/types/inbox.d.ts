@@ -58,6 +58,8 @@ export declare class CandidateInbox {
         summary?: string;
         subject?: string;
         source?: 'paste' | 'web' | 'file';
+        /** 抽取阶段留下的说明（含可疑句式等） */
+        note?: string;
     }, existing?: {
         facts: readonly {
             id: string;

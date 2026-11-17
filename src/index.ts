@@ -35,6 +35,7 @@ import { CandidateInbox } from './inbox.ts';
 import { recordUsage, summarizeUsage } from './usage.ts';
 import { SettingsStore, resolveInjectMode, isInjectMode, type InjectMode } from './settings.ts';
 import { runPracticeProbes, type ProbeTurn } from './probes.ts';
+import { extractText } from './extract.ts';
 import { updateWikiIncrementally, type WikiSectionKey } from './wiki_incremental.ts';
 import { buildJudgePrompt, parseJudgeResponse } from './sediment_judge.ts';
 import { AgentsFileSync, defaultAgentsFilePath } from './agents_file.ts';
@@ -2932,9 +2933,14 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           .all()
           .filter((fact) => fact.deletedAt === undefined && fact.supersededAt === null && fact.archived !== true)
           .map((fact) => ({ id: fact.id, content: fact.content }));
+        // L1：外部材料一律先抽取（去脚本/注释/零宽 + 标记可疑句式），再进候选箱
+        const extracted = extractText(content, { maxChars: 6000 });
         const cand = inbox.add(
           {
-            content,
+            content: extracted.text,
+            ...(extracted.flags.length === 0
+              ? {}
+              : { note: '含可疑指令句式（' + extracted.flags.join('、') + '），已按数据隔离' }),
             ...(url.searchParams.get('title') === null ? {} : { title: url.searchParams.get('title') as string }),
             ...(url.searchParams.get('url') === null ? {} : { url: url.searchParams.get('url') as string }),
             ...(url.searchParams.get('subject') === null ? {} : { subject: url.searchParams.get('subject') as string }),
