@@ -34,6 +34,7 @@ import { WikiStore, buildWiki } from './wiki.ts';
 import { CandidateInbox } from './inbox.ts';
 import { recordUsage, summarizeUsage } from './usage.ts';
 import { SettingsStore, resolveInjectMode, isInjectMode, type InjectMode } from './settings.ts';
+import { runPracticeProbes, type ProbeTurn } from './probes.ts';
 import { updateWikiIncrementally, type WikiSectionKey } from './wiki_incremental.ts';
 import { buildJudgePrompt, parseJudgeResponse } from './sediment_judge.ts';
 import { AgentsFileSync, defaultAgentsFilePath } from './agents_file.ts';
@@ -314,6 +315,12 @@ export interface CognitionConfig {
   injectIndexOnly?: boolean;
   /** 注入方式：off（不注入）/ index（只给 id+标题，默认）/ full（全文）。 */
   injectMode?: string;
+  /** P4-2 试跑：最多看多少个历史回合，默认 60。 */
+  probeMaxTurns?: number;
+  /** P4-2 试跑：文本重叠阈值，默认 0.3。 */
+  probeMinOverlap?: number;
+  /** P4-2 试跑：反证达到多少条就拒收，默认 2。 */
+  probeMaxCounter?: number;
   /** 沉积层数据文件；默认 ~/.dsh/cognition-engine/cognition-sediment.jsonl。 */
   sedimentFile?: string;
   /** 沉积层单次位移系数 η，默认 0.02。 */
@@ -474,6 +481,9 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     wikiIncremental: config.wikiIncremental === true,
     wikiIncrementalMinChanges: Math.max(1, numberOr(config.wikiIncrementalMinChanges, 3)),
     pricePerMTokens: numberOr(config.pricePerMTokens, 2),
+    probeMaxTurns: Math.max(10, Math.round(numberOr(config.probeMaxTurns, 60))),
+    probeMinOverlap: Math.min(0.9, Math.max(0.1, numberOr(config.probeMinOverlap, 0.3))),
+    probeMaxCounter: Math.max(1, Math.round(numberOr(config.probeMaxCounter, 2))),
     inboxFile:
       typeof config.inboxFile === 'string' && config.inboxFile.trim().length > 0
         ? expandHome(config.inboxFile.trim())
@@ -614,6 +624,54 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   // 候选收件箱（L0，不联网）：外部材料先落候选，人工采用后才进记忆
   const inbox = new CandidateInbox({ filePath: config.inboxFile });
   // 运行时设置（面板可改）：注入方式
+  /**
+   * 练习样本：把「用户纠正/确认」的回合和当时的原话拼起来。
+   * 原话只取 register 日志里的 excerpt（本来就只存片段），不额外保存对话正文。
+   */
+  const buildProbeTurns = (limit = 60): ProbeTurn[] => {
+    const readJsonl = (path: string): Record<string, unknown>[] => {
+      try {
+        return readFileSync(path, 'utf8')
+          .replace(/^\uFEFF/, '')
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0)
+          .map((line) => {
+            try {
+              return JSON.parse(line) as Record<string, unknown>;
+            } catch {
+              return undefined;
+            }
+          })
+          .filter((row): row is Record<string, unknown> => row !== undefined);
+      } catch {
+        return [];
+      }
+    };
+    const inject = readJsonl(join(dataDir(), 'cognition-injection.jsonl'));
+    const register = readJsonl(join(dataDir(), 'cognition-register.jsonl'));
+    const excerptOf = new Map<string, string>();
+    for (const row of register) {
+      const key = `${String(row.sessionId ?? '')}#${String(row.turn ?? '')}`;
+      if (typeof row.excerpt === 'string' && row.excerpt.trim().length > 0) excerptOf.set(key, row.excerpt.trim());
+    }
+    const turns: ProbeTurn[] = [];
+    for (const row of inject) {
+      const verdict = String(row.verdict ?? '');
+      if (verdict !== 'correction' && verdict !== 'confirmation') continue;
+      const key = `${String(row.sessionId ?? '')}#${String(row.turn ?? '')}`;
+      const excerpt = excerptOf.get(key);
+      if (excerpt === undefined) continue;
+      turns.push({
+        sessionId: String(row.sessionId ?? ''),
+        turn: Number(row.turn ?? 0),
+        excerpt,
+        verdict,
+        ...(typeof row.at === 'number' ? { at: row.at } : {}),
+      });
+    }
+    return turns.slice(-limit);
+  };
   const settings = new SettingsStore(join(dataDir(), 'cognition-settings.json'));
   let injectMode: InjectMode = resolveInjectMode({
     ...(config.injectMode === undefined ? {} : { configured: config.injectMode }),
@@ -2151,6 +2209,23 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         let softFail = false;
         switch (action) {
           case 'accept': {
+            // P4-2 practice probe：先看历史上会不会撞上用户纠正
+            try {
+              const target = playbook.get(id);
+              if (target !== undefined) {
+                const probe = runPracticeProbes({
+                  candidate: target.content,
+                  turns: buildProbeTurns(config.probeMaxTurns ?? 60),
+                  minOverlap: config.probeMinOverlap ?? 0.3,
+                  maxCounter: config.probeMaxCounter ?? 2,
+                });
+                if (probe.verdict === 'reject') {
+                  return { ok: false, error: 'practice probe 拒收：' + probe.reason, probe };
+                }
+              }
+            } catch {
+              /* 试跑本身失败不阻断（没有样本时本来也判不了） */
+            }
             // 学习预算（S6）：名额用尽时**转进 shadow 试运行**，而不是硬拒。
             // 这样「想学」和「别污染上下文」两件事都满足。
             budget.syncActiveRules(playbook.stats().active);
@@ -2911,6 +2986,19 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       injectMode = mode;
       settings.writeInjectMode(mode);
       return { mode: injectMode };
+    }, { method: 'POST', requireAuth: explicitLock });
+    route('/cognition-engine/playbook/probe', (url) => {
+      const id = (url.searchParams.get('id') ?? '').trim();
+      const content = (url.searchParams.get('content') ?? '').trim();
+      const entry = id.length === 0 ? undefined : playbook.get(id);
+      const candidate = content.length > 0 ? content : entry?.content ?? '';
+      if (candidate.length === 0) throw new Error('需要 id 或 content');
+      return runPracticeProbes({
+        candidate,
+        turns: buildProbeTurns(config.probeMaxTurns ?? 60),
+        minOverlap: config.probeMinOverlap ?? 0.3,
+        maxCounter: config.probeMaxCounter ?? 2,
+      });
     }, { method: 'POST', requireAuth: explicitLock });
     route('/cognition-engine/usage', () =>
       summarizeUsage({

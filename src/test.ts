@@ -48,6 +48,7 @@ import { WikiStore, buildWiki } from './wiki.ts';
 import { CandidateInbox } from './inbox.ts';
 import { summarizeUsage } from './usage.ts';
 import { resolveInjectMode } from './settings.ts';
+import { runPracticeProbes, overlapOf } from './probes.ts';
 import { updateWikiIncrementally } from './wiki_incremental.ts';
 import { inspectRequirement } from './ambiguity.ts';
 import { completionNeedsEvidence } from './task_manager.ts';
@@ -3956,6 +3957,28 @@ async function main(): Promise<void> {
     assert.equal(h.diagnosis, undefined);
     assert.ok((h.outcome ?? '').includes('helpful='));
     rmSync(dir, { recursive: true, force: true });
+  });
+  section('[47] P4-2 准入前试跑（practice probes）');
+
+  await test('两条纠正命中 → 拒收；一条 → 通过；无样本 → no-data', () => {
+    const candidate = '发版前必须先跑真实入口把按钮点一遍';
+    const turns = [
+      { sessionId: 's1', turn: 3, excerpt: '发版前不用跑真实入口，点测试就行', verdict: 'correction' as const },
+      { sessionId: 's1', turn: 5, excerpt: '别跑真实入口，按钮不用点', verdict: 'correction' as const },
+      { sessionId: 's2', turn: 1, excerpt: '今天天气不错', verdict: 'confirmation' as const },
+    ];
+    const reject = runPracticeProbes({ candidate, turns, minOverlap: 0.25, maxCounter: 2 });
+    assert.equal(reject.verdict, 'reject');
+    assert.ok(reject.counterEvidence >= 2, JSON.stringify(reject.triggable));
+
+    const pass = runPracticeProbes({ candidate, turns, minOverlap: 0.25, maxCounter: 9 });
+    assert.equal(pass.verdict, 'pass');
+
+    const empty = runPracticeProbes({ candidate, turns: [], minOverlap: 0.25 });
+    assert.equal(empty.verdict, 'no-data');
+
+    assert.ok(overlapOf('真实入口 点一遍', '真实入口点一遍') > 0.8);
+    assert.equal(overlapOf('完全不相干的内容', '今天天气不错'), 0);
   });
   /* ---------------------------------------------------------------- */
   console.log('');

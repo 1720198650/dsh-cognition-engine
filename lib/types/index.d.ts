@@ -189,6 +189,12 @@ export interface CognitionConfig {
     injectIndexOnly?: boolean;
     /** 注入方式：off（不注入）/ index（只给 id+标题，默认）/ full（全文）。 */
     injectMode?: string;
+    /** P4-2 试跑：最多看多少个历史回合，默认 60。 */
+    probeMaxTurns?: number;
+    /** P4-2 试跑：文本重叠阈值，默认 0.3。 */
+    probeMinOverlap?: number;
+    /** P4-2 试跑：反证达到多少条就拒收，默认 2。 */
+    probeMaxCounter?: number;
     /** 沉积层数据文件；默认 ~/.dsh/cognition-engine/cognition-sediment.jsonl。 */
     sedimentFile?: string;
     /** 沉积层单次位移系数 η，默认 0.02。 */
