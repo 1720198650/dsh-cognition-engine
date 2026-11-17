@@ -1358,8 +1358,47 @@ window.__ModuleLoader__.load({
                 setTick((v) => v + 1);
               } }, dict.inboxAddBtn),
             ),
+            // 首选：浏览器选文件（不用记路径，也不用管大小写/空格）
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-              h('input', { id: 'ibFilePath', placeholder: '或填本机文件路径（.txt/.md/.json/.js 等纯文本，≤256KB，只读不执行）', style: S.input }),
+              h('div', { style: S.meta },
+                h('button', { type: 'button', style: S.tab, onClick: () => { const el = document.getElementById('ibFileInput'); if (el) el.click(); } }, '选择文件…'),
+                h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, '支持 .txt/.md/.html/.json/.csv 等纯文本，最大 4MB'),
+              ),
+              h('input', {
+                id: 'ibFileInput',
+                type: 'file',
+                accept: '.txt,.md,.markdown,.html,.htm,.json,.jsonl,.csv,.log,.js,.mjs,.ts,.py,.yml,.yaml',
+                style: { display: 'none' },
+                onChange: async (event) => {
+                  const file = event.target.files && event.target.files[0];
+                  if (!file) return;
+                  try {
+                    const text = await file.text();
+                    if (text.trim().length === 0) { window.alert('文件是空的'); return; }
+                    const beginRes = await call('/cognition-engine/inbox/upload/begin?name=' + encodeURIComponent(file.name), { method: 'POST' });
+                    const beginData = await beginRes.json().catch(() => ({}));
+                    if (!beginRes.ok || !beginData.id) { window.alert('开始上传失败：' + (beginData.error || beginRes.status)); return; }
+                    const CHUNK = 1200;
+                    for (let i = 0; i < text.length; i += CHUNK) {
+                      const piece = text.slice(i, i + CHUNK);
+                      const res = await call('/cognition-engine/inbox/upload/chunk?id=' + encodeURIComponent(beginData.id) + '&text=' + encodeURIComponent(piece), { method: 'POST' });
+                      if (!res.ok) { const d = await res.json().catch(() => ({})); window.alert('分片上传失败：' + (d.error || res.status)); return; }
+                    }
+                    const commitRes = await call('/cognition-engine/inbox/upload/commit?id=' + encodeURIComponent(beginData.id), { method: 'POST' });
+                    const commitData = await commitRes.json().catch(() => ({}));
+                    if (!commitRes.ok || commitData.error) { window.alert('提交失败：' + (commitData.error || commitRes.status)); return; }
+                    window.alert('已导入为候选：' + (commitData.title || commitData.id) + '（待审里可以看到）');
+                    event.target.value = '';
+                    setTick((v) => v + 1);
+                  } catch (error) {
+                    window.alert('导入失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                },
+              }),
+            ),
+            // 备用：手填路径（跨设备/跨盘符时用；路径里有多余空格会读不到）
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+              h('input', { id: 'ibFilePath', placeholder: '或者填本机文件路径（备用，≤4MB，只读不执行）', style: S.input }),
               h('div', { style: S.meta },
                 h('button', { type: 'button', style: S.tab, onClick: async () => {
                   const el = document.getElementById('ibFilePath');
@@ -1374,7 +1413,7 @@ window.__ModuleLoader__.load({
                   } catch (error) {
                     window.alert('导入失败：' + (error instanceof Error ? error.message : String(error)));
                   }
-                } }, '从文件导入'),
+                } }, '按路径导入'),
               ),
             ),
             pending.length === 0
