@@ -3054,13 +3054,15 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         try {
           info = statSync(filePath);
         } catch {
-          throw new Error('读不到这个文件：' + filePath);
+          // 把收到的原串也打出来：路径里有多余字符（空格/引号/全角括号）时能一眼看出
+          throw new Error('读不到这个文件：' + JSON.stringify(filePath));
         }
         if (!info.isFile()) throw new Error('不是普通文件');
-        if (info.size > 256 * 1024) throw new Error('文件太大（>256KB）：先截取片段再放');
+        if (info.size > 4 * 1024 * 1024) throw new Error('文件太大（>4MB）：先截取片段再放');
         const buf = readFileSync(filePath);
         if (buf.includes(0)) throw new Error('看起来是二进制文件，只能导入纯文本');
-        const text = extractText(buf.toString('utf8'), { maxChars: 6000 });
+        // 文件导入给更大上限：论文 HTML 光导航就几千字，6000 会只截到菜单
+        const text = extractText(buf.toString('utf8'), { maxChars: 20000 });
         const source = sources.append({
           kind: 'file',
           title: filePath.split(/[\\/]/).pop() ?? filePath,
