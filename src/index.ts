@@ -33,6 +33,7 @@ import { SedimentStore, observeSupersedeFrom, type SedimentJudge } from './sedim
 import { WikiStore, buildWiki } from './wiki.ts';
 import { CandidateInbox } from './inbox.ts';
 import { recordUsage, summarizeUsage } from './usage.ts';
+import { SettingsStore, resolveInjectMode, isInjectMode, type InjectMode } from './settings.ts';
 import { updateWikiIncrementally, type WikiSectionKey } from './wiki_incremental.ts';
 import { buildJudgePrompt, parseJudgeResponse } from './sediment_judge.ts';
 import { AgentsFileSync, defaultAgentsFilePath } from './agents_file.ts';
@@ -311,6 +312,8 @@ export interface CognitionConfig {
   injectTopicScoped?: boolean;
   /** 注入只给索引（id+摘要），正文靠 recall 取。默认 false。 */
   injectIndexOnly?: boolean;
+  /** 注入方式：off（不注入）/ index（只给 id+标题，默认）/ full（全文）。 */
+  injectMode?: string;
   /** 沉积层数据文件；默认 ~/.dsh/cognition-engine/cognition-sediment.jsonl。 */
   sedimentFile?: string;
   /** 沉积层单次位移系数 η，默认 0.02。 */
@@ -334,7 +337,7 @@ export interface CognitionConfig {
 type ResolvedConfig = Required<
   Omit<
     CognitionConfig,
-    'tasksFile' | 'stateFile' | 'playbookFile' | 'topicsFile' | 'personaFile' | 'lockToken' | 'llmProvider' | 'llmModel'
+    'tasksFile' | 'stateFile' | 'playbookFile' | 'topicsFile' | 'personaFile' | 'lockToken' | 'llmProvider' | 'llmModel' | 'injectMode'
   >
 > & {
   tasksFile?: string;
@@ -345,6 +348,7 @@ type ResolvedConfig = Required<
   lockToken?: string;
   llmProvider?: string;
   llmModel?: string;
+  injectMode?: string;
   superagentBaseUrl: string;
   superagentTimeoutMs: number;
   superagentRepo: string;
@@ -607,6 +611,14 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   });
   // 候选收件箱（L0，不联网）：外部材料先落候选，人工采用后才进记忆
   const inbox = new CandidateInbox({ filePath: config.inboxFile });
+  // 运行时设置（面板可改）：注入方式
+  const settings = new SettingsStore(join(dataDir(), 'cognition-settings.json'));
+  let injectMode: InjectMode = resolveInjectMode({
+    ...(config.injectMode === undefined ? {} : { configured: config.injectMode }),
+    ...(settings.read().injectMode === undefined ? {} : { saved: settings.read().injectMode }),
+    injectMemory: config.injectMemory,
+    injectIndexOnly: config.injectIndexOnly,
+  });
 
   // 知识缺口：模型卡壳时登记，下次针对性补（P6 学习闭环）
   const gaps = new GapStore();
@@ -1064,6 +1076,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     /** 本轮注入的总字符数（含缺口段）。 */
     chars: number;
   } => {
+    // 面板可把注入关掉：此时什么都不塞（缺口/假设也不塞，避免"关了还有东西"）
+    if (injectMode === 'off') return { text: '', source: 'none', ruleIds: [], chars: 0 };
+
     // 待补缺口很短（通常 0~3 行），接在准则本后面——
     // 它提醒模型「这些是你还不知道的」，避免在同一个地方反复卡壳。
     const gapText = gaps.renderSection();
@@ -1090,10 +1105,10 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     // P2：指纹缓存——只复用**渲染结果**，准则一变立刻失效。
     // cacheKey 带上命中的主题与索引模式，避免不同主题互相串缓存。
     const renderedPlaybook = playbook.renderSectionCached({
-      cacheKey: `${hitTopicId ?? 'all'}|${config.injectIndexOnly === true ? 'index' : 'full'}`,
+      cacheKey: `${hitTopicId ?? 'all'}|${injectMode === 'index' ? 'index' : 'full'}`,
       topicName,
       ...(topicFilter === undefined ? {} : { filter: topicFilter }),
-      indexOnly: config.injectIndexOnly === true,
+      indexOnly: injectMode === 'index',
     });
     // 索引模式（Anthropic 分层记忆）：注入层只放 id + 标题，正文靠 recall。
     const section = renderedPlaybook.section;
@@ -1103,7 +1118,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       // 且**条数的影响大于上下文长度**。所以超限时不是压字数，而是把剩下的折叠成一行。
       const activeEntries = playbook.all().filter((entry) => entry.status === 'active');
       const rendered = new Set(ruleIds);
-      const omitted = config.injectIndexOnly ? [] : activeEntries.filter((entry) => !rendered.has(entry.id));
+      const omitted = injectMode !== 'full' ? [] : activeEntries.filter((entry) => !rendered.has(entry.id));
       let body = section;
       if (omitted.length > 0 && activeEntries.length > config.injectMaxInstances) {
         const shown = omitted.slice(0, 5).map((entry) => entry.id);
@@ -1699,6 +1714,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         ...detail(),
         // 主题 wiki 摘要（附注用；不含全文，避免把面板撑爆）
         inbox: { stats: inbox.stats(), pending: inbox.list('pending').slice(0, 20) },
+        injectMode,
         usage: summarizeUsage({
           injectionFile: join(dataDir(), 'cognition-injection.jsonl'),
           usageFile: join(dataDir(), 'cognition-usage.jsonl'),
@@ -2877,6 +2893,14 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       },
       { method: 'POST', requireAuth: explicitLock },
     );
+    route('/cognition-engine/settings/inject-mode', (url) => {
+      if (url.searchParams.get('mode') === null) return { mode: injectMode };
+      const mode = url.searchParams.get('mode');
+      if (!isInjectMode(mode)) throw new Error('mode 只能是 off / index / full');
+      injectMode = mode;
+      settings.writeInjectMode(mode);
+      return { mode: injectMode };
+    }, { method: 'POST', requireAuth: explicitLock });
     route('/cognition-engine/usage', () =>
       summarizeUsage({
         injectionFile: join(dataDir(), 'cognition-injection.jsonl'),

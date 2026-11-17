@@ -47,6 +47,7 @@ import { readdirSync } from 'node:fs';
 import { WikiStore, buildWiki } from './wiki.ts';
 import { CandidateInbox } from './inbox.ts';
 import { summarizeUsage } from './usage.ts';
+import { resolveInjectMode } from './settings.ts';
 import { updateWikiIncrementally } from './wiki_incremental.ts';
 import { inspectRequirement } from './ambiguity.ts';
 import { completionNeedsEvidence } from './task_manager.ts';
@@ -3908,6 +3909,16 @@ async function main(): Promise<void> {
     assert.equal(s.model.estTokens, Math.round((2000 + 800 + 300 + 100) * 0.75));
     assert.ok(s.estCostYuan > 0 && s.estCostYuan < 1);
     rmSync(dir, { recursive: true, force: true });
+  });
+  section('[45] 注入方式三档（off / index / full）');
+
+  await test('优先级：显式配置 > 面板保存 > 旧开关 > 默认 index', () => {
+    assert.equal(resolveInjectMode({ configured: 'full', saved: 'off', injectMemory: false }), 'full');
+    assert.equal(resolveInjectMode({ saved: 'off', injectMemory: true }), 'off');
+    assert.equal(resolveInjectMode({ injectMemory: false }), 'off');
+    assert.equal(resolveInjectMode({ injectIndexOnly: false }), 'full');
+    assert.equal(resolveInjectMode({}), 'index');
+    assert.equal(resolveInjectMode({ configured: '乱写' }), 'index', '非法配置忽略');
   });
   /* ---------------------------------------------------------------- */
   console.log('');

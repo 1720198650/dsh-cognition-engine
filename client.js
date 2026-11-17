@@ -1069,6 +1069,23 @@ window.__ModuleLoader__.load({
           body = h(
             'div',
             null,
+            section(
+              '注入方式',
+              h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                '当前：' + ((detail && detail.injectMode) === 'off' ? '关闭（不注入，只能手动问）' :
+                  (detail && detail.injectMode) === 'full' ? '全文（约 700 字/轮）' : '索引（只给 id+标题，约 350 字/轮）')),
+              h('div', { style: S.meta },
+                ...[['off', '关闭'], ['index', '索引（省 token）'], ['full', '全文']].map(([mode, label]) =>
+                  h('button', {
+                    type: 'button',
+                    style: S.tab,
+                    onClick: async () => {
+                      await post('/cognition-engine/settings/inject-mode?mode=' + mode);
+                      setTick((v) => v + 1);
+                    },
+                  }, label)),
+              ),
+            ),
             usage
               ? section(
                   '用量（估算）',
