@@ -2278,7 +2278,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
                   source: 'gate-insufficient',
                   note: preCheck.note ?? '回归集样本不足，无法评估',
                 });
-                ok = playbook.reject(id);
+                playbook.reject(id, '转 shadow：回归集不足');
+                ok = false;
                 softFail = true;
                 gate = {
                   ...preCheck,
@@ -2549,6 +2550,11 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     );
     route('/cognition-engine/cpe/freeze', () => cpe.freeze(), { method: 'POST' });
     route('/cognition-engine/cpe/unfreeze', () => cpe.unfreeze(), { method: 'POST' });
+    route('/cognition-engine/cpe/thresholds', (url) => {
+      const raw = url.searchParams.get('minCases');
+      const minCases = raw === null ? undefined : Number(raw);
+      return cpe.setThresholds(minCases === undefined || !Number.isFinite(minCases) ? {} : { minCases: Math.max(1, Math.round(minCases)) });
+    }, { method: 'POST', requireAuth: explicitLock });
     route('/cognition-engine/cpe/baseline', () => cpe.measureBaseline(ruleRankResolver), { method: 'POST' });
     route('/cognition-engine/cpe/check', () => cpe.check(ruleRankResolver), { method: 'POST' });
 

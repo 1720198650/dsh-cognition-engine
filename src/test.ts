@@ -4137,6 +4137,24 @@ async function main(): Promise<void> {
     assert.equal(pb.reject(id, '再来一次'), false, '非 pending 不能再丢');
     rmSync(dir, { recursive: true, force: true });
   });
+  section('[53] CPE 阈值可调（小规模起步）');
+
+  await test('setThresholds 生效并持久化；低于 minCases 时基线不打', () => {
+    const dir = join(TEST_TMP, 'cpe-th');
+    mkdirSync(dir, { recursive: true });
+    const cpe = new CpeStore({ filePath: join(dir, 'cpe.json'), now: () => 1_700_000_000_000 });
+    cpe.addCase({ question: '发版前要做什么', expectedRuleIds: ['ctxt-00001'], by: 'user' });
+    const narrow = cpe.setThresholds({ minCases: 4 });
+    assert.equal(narrow.minCases, 4);
+    const baseline = cpe.measureBaseline(() => []);
+    assert.equal(baseline.ok, false, '1 条用例 < 4，打基线应被拒');
+    cpe.addCase({ question: 'npm 发布要不要加 registry', expectedRuleIds: ['ctxt-00005'], by: 'user' });
+    cpe.addCase({ question: '零依赖是什么意思', expectedRuleIds: ['ctxt-00003'], by: 'user' });
+    cpe.addCase({ question: '版本号什么时候升', expectedRuleIds: ['ctxt-00002'], by: 'user' });
+    const okBaseline = cpe.measureBaseline(() => []);
+    assert.equal(okBaseline.ok, true, JSON.stringify(okBaseline));
+    rmSync(dir, { recursive: true, force: true });
+  });
   /* ---------------------------------------------------------------- */
   console.log('');
   if (failures.length === 0) {

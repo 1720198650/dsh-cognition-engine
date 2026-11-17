@@ -502,6 +502,14 @@ export class CpeStore {
     return { restored, failed };
   }
 
+  /** 调整阈值（minCases 等）。小规模起步时把 minCases 调低，比关掉整道闸门安全。 */
+  setThresholds(patch: Partial<CpeThresholds>): CpeThresholds {
+    this.loadSync();
+    this.doc.thresholds = { ...this.doc.thresholds, ...patch };
+    this.#save();
+    return { ...this.doc.thresholds };
+  }
+
   #save(): void {
     try {
       mkdirSync(dirname(this.filePath), { recursive: true });

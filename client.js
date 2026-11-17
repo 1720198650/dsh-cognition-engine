@@ -854,9 +854,22 @@ window.__ModuleLoader__.load({
         };
 
         // 准则本操作：接受 / 拒绝 / 停用 / 恢复
-        const playbookAct = async (id, action) => {
-          await post(`/cognition-engine/playbook/act?id=${encodeURIComponent(id)}&action=${action}`);
-          setTick((value) => value + 1);
+        const playbookAct = async (id, action, extra) => {
+          // 把后端的 ok:false（如"先填边界"）显示出来，否则按钮像"点了没反应"
+          try {
+            const res = await call(
+              `/cognition-engine/playbook/act?id=${encodeURIComponent(id)}&action=${action}` + (extra || ''),
+            );
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.ok === false) {
+              setNotice('✗ ' + (data.error || `HTTP ${res.status}`));
+              return;
+            }
+            setNotice('');
+            setTick((value) => value + 1);
+          } catch (error) {
+            setNotice('✗ ' + (error instanceof Error ? error.message : String(error)));
+          }
         };
 
         // 新建表单：任务（含时间段）与记忆（内容 + 主题）
@@ -1648,7 +1661,27 @@ window.__ModuleLoader__.load({
                     ? h('span', { style: { color: 'var(--dsw-alias-state-warn-primary)' } }, `${dict.playbookConflict} ${entry.conflictWith}`)
                     : null,
                   entry.status === 'pending'
-                    ? h('button', { type: 'button', style: S.tab, onClick: () => playbookAct(entry.id, 'accept') }, dict.playbookAccept)
+                    ? h('input', {
+                        id: 'pbEnv-' + entry.id,
+                        placeholder: '适用边界（必填，用 | 分隔多条）',
+                        defaultValue: (entry.boundaryEnvs || []).join(' | '),
+                        style: S.input,
+                      })
+                    : null,
+                  entry.status === 'pending'
+                    ? h('button', {
+                        type: 'button',
+                        style: S.tab,
+                        onClick: () => {
+                          const el = document.getElementById('pbEnv-' + entry.id);
+                          const raw = el ? el.value.trim() : '';
+                          if (raw.length === 0) {
+                            setNotice('✗ 先填适用边界再接受');
+                            return;
+                          }
+                          playbookAct(entry.id, 'accept', '&envs=' + encodeURIComponent(raw));
+                        },
+                      }, dict.playbookAccept)
                     : null,
                   entry.status === 'pending'
                     ? h('button', { type: 'button', style: S.tab, onClick: () => playbookAct(entry.id, 'reject') }, dict.playbookReject)
