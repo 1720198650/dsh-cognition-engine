@@ -41,6 +41,18 @@ export function extractText(raw: string, options: { maxChars?: number } = {}): E
 
   const flags = new Set<string>();
 
+  // 论文/博客页面：正文通常在 <article> 或 <main> 里，先切出来，
+  // 否则 20000 字预算会被导航菜单和侧栏吃光（2026-11-18 实测 arXiv HTML）。
+  if (/<article\b|<main\b/i.test(raw)) {
+    const article = /<article\b[^>]*>([\s\S]*?)<\/article\s*>/i.exec(raw);
+    const main = /<main\b[^>]*>([\s\S]*?)<\/main\s*>/i.exec(raw);
+    const best = [article?.[1] ?? '', main?.[1] ?? ''].sort((a, b) => b.length - a.length)[0] ?? '';
+    if (best.length > 2000) {
+      flags.add('article-scoped');
+      text = best;
+    }
+  }
+
   // 1) 结构性剥离：注释、script/style/iframe 内的内容整段不要
   if (/<!--[\s\S]*?-->/.test(text)) flags.add('html-comment');
   text = text.replace(/<!--[\s\S]*?-->/g, ' ');

@@ -1378,7 +1378,7 @@ window.__ModuleLoader__.load({
                     const beginRes = await call('/cognition-engine/inbox/upload/begin?name=' + encodeURIComponent(file.name), { method: 'POST' });
                     const beginData = await beginRes.json().catch(() => ({}));
                     if (!beginRes.ok || !beginData.id) { window.alert('开始上传失败：' + (beginData.error || beginRes.status)); return; }
-                    const CHUNK = 1200;
+                    const CHUNK = 400;
                     for (let i = 0; i < text.length; i += CHUNK) {
                       const piece = text.slice(i, i + CHUNK);
                       const res = await call('/cognition-engine/inbox/upload/chunk?id=' + encodeURIComponent(beginData.id) + '&text=' + encodeURIComponent(piece), { method: 'POST' });
