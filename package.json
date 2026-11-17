@@ -68,7 +68,8 @@
     "eval": "tsx src/eval.ts",
     "eval:node": "node src/eval.ts",
     "prepublishOnly": "npm run build",
-    "check:injection": "node scripts/check-injection.mjs"
+    "check:injection": "node scripts/check-injection.mjs",
+    "brief": "node scripts/task-brief.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

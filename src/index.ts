@@ -36,6 +36,7 @@ import { recordUsage, summarizeUsage } from './usage.ts';
 import { SettingsStore, resolveInjectMode, isInjectMode, type InjectMode } from './settings.ts';
 import { runPracticeProbes, type ProbeTurn } from './probes.ts';
 import { extractText } from './extract.ts';
+import { buildTaskBrief } from './brief.ts';
 import { updateWikiIncrementally, type WikiSectionKey } from './wiki_incremental.ts';
 import { buildJudgePrompt, parseJudgeResponse } from './sediment_judge.ts';
 import { AgentsFileSync, defaultAgentsFilePath } from './agents_file.ts';
@@ -3006,6 +3007,48 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         maxCounter: config.probeMaxCounter ?? 2,
       });
     }, { method: 'POST', requireAuth: explicitLock });
+    // P5 任务简报：给子代理/超级代理用；不进主上下文
+    route(
+      '/cognition-engine/brief',
+      (url) => {
+        const task = (url.searchParams.get('task') ?? '').trim();
+        if (task.length === 0) throw new Error('需要 task 参数');
+        const facts = memory
+          .all()
+          .filter((fact) => fact.deletedAt === undefined && fact.archived !== true)
+          .map((fact) => ({
+            id: fact.id,
+            subject: fact.subject,
+            content: fact.content,
+            importance: fact.importance,
+            supersededBy: fact.supersededBy ?? null,
+            supersedeReason: fact.supersedeReason ?? '',
+          }));
+        const rules = playbook
+          .all()
+          .filter((entry) => entry.status === 'active')
+          .map((entry) => ({
+            id: entry.id,
+            content: entry.content,
+            ...(entry.section === undefined ? {} : { section: String(entry.section) }),
+            boundaryEnvs: entry.boundaryEnvs ?? [],
+          }));
+        const hit = topics.match(task, 1)[0];
+        const wikiExcerpt = hit === undefined || wikiRef === undefined ? '' : wikiRef.excerpt(hit.topic.id, 400);
+        const completion = url.searchParams.get('completion') ?? undefined;
+        const preferredSubjects =
+          hit === undefined ? [] : [hit.topic.name, ...(hit.topic.aliases ?? [])];
+        return buildTaskBrief({
+          task,
+          facts,
+          rules,
+          preferredSubjects,
+          ...(wikiExcerpt.length === 0 ? {} : { wikiExcerpt }),
+          ...(completion === undefined ? {} : { completion }),
+        });
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
     route('/cognition-engine/usage', () =>
       summarizeUsage({
         injectionFile: join(dataDir(), 'cognition-injection.jsonl'),

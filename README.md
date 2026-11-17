@@ -692,6 +692,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/research-super-agent-and-persona.md](docs/research-super-agent-and-persona.md) | Super-agent 项目清单 + 人格块设计 + 「自我学习」四层辨析（L1 上下文 / L2 记忆 / L3 工具自造 / L4 权重更新） |
 | [docs/research-frozen-weight-learning.md](docs/research-frozen-weight-learning.md) | 冻结权重下的学习与遗忘：ExpeL / Voyager / AWM / Reflexion / ReasoningBank / ACE / PATH-Bench / Oblivion |
 | [docs/VISION.md](docs/VISION.md) | **愿景**：三本账（记忆/准则/倾向）、差异化只有"可验证"、对称的成功/失败判据、底线 |
+| [docs/p5-task-brief.md](docs/p5-task-brief.md) | **P5 任务简报**：给子代理/超级代理的工作集（确定性选材、≤800字、每条带 id）；替代被闸门挡下的全局概念层 |
 | [docs/c0-concept-labels.md](docs/c0-concept-labels.md) | **C0 闸门（不通过）**：23 条事实人工标概念，两种标法重叠 <40% → 概念层暂缓，等数据够 |
 | [docs/plan-concept-layer-v1.md](docs/plan-concept-layer-v1.md) | **概念层可行性**：反思引擎不能当压缩器（漂移/不可复现/贵）；可行方案=确定性概念格(FCA)+指针+按需展开；含 rate-distortion 警告与 C0–C3 |
 | [docs/p4-3-subagent-redaction.md](docs/p4-3-subagent-redaction.md) | **子代理报告脱敏**：委派话术模板 + `scan-sensitive.mjs` 9 条规则；全仓 0 命中 |
@@ -706,6 +707,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/decision-reuse-vs-build.md](docs/decision-reuse-vs-build.md) | **要不要原创？** 三条判据 × 7 个候选的对照矩阵；结论：机制不必原创，只剩「哈希链不可逆 + 检索消融验收」这一处薄增量；给出 A/B/C 三条路线 |
 | [docs/m0-findings.md](docs/m0-findings.md) | **M0 实测**：真实语料上正则召回 0/3；「取代」≠「翻案」比例 1/3；据此改准入/分类/证据三条 |
 | [docs/VISION.md](docs/VISION.md) | **愿景**：三本账（记忆/准则/倾向）、差异化只有"可验证"、对称的成功/失败判据、底线 |
+| [docs/p5-task-brief.md](docs/p5-task-brief.md) | **P5 任务简报**：给子代理/超级代理的工作集（确定性选材、≤800字、每条带 id）；替代被闸门挡下的全局概念层 |
 | [docs/c0-concept-labels.md](docs/c0-concept-labels.md) | **C0 闸门（不通过）**：23 条事实人工标概念，两种标法重叠 <40% → 概念层暂缓，等数据够 |
 | [docs/plan-concept-layer-v1.md](docs/plan-concept-layer-v1.md) | **概念层可行性**：反思引擎不能当压缩器（漂移/不可复现/贵）；可行方案=确定性概念格(FCA)+指针+按需展开；含 rate-distortion 警告与 C0–C3 |
 | [docs/p4-3-subagent-redaction.md](docs/p4-3-subagent-redaction.md) | **子代理报告脱敏**：委派话术模板 + `scan-sensitive.mjs` 9 条规则；全仓 0 命中 |
