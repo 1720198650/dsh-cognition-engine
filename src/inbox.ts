@@ -143,7 +143,8 @@ export class CandidateInbox {
       title: (input.title ?? content.slice(0, 30)).trim(),
       ...(input.url === undefined ? {} : { url: input.url }),
       content,
-      ...(input.summary === undefined ? {} : { summary: input.summary }),
+      // 确定性摘要：取前 200 字（不调模型）；长材料在面板上只显示这段
+      summary: (input.summary ?? content).replace(/\s+/g, ' ').slice(0, 200),
       ...(input.subject === undefined ? {} : { subject: input.subject }),
       source: input.source ?? 'paste',
       ...(input.note === undefined ? {} : { note: input.note }),
@@ -205,11 +206,25 @@ export class CandidateInbox {
    *
    * `sink` 由调用方注入（插件里就是 memory.ingest），这样本模块不依赖记忆层，便于单测。
    */
-  accept(id: string, sink: (input: { content: string; subject: string; tags: string[]; importance: number; origin: string }) => string): Candidate {
+  accept(
+    id: string,
+    sink: (input: { content: string; subject: string; tags: string[]; importance: number; origin: string }) => string,
+    overrides?: { content?: string; subject?: string },
+  ): Candidate {
     this.load();
     const cand = this.data.candidates.find((item) => item.id === id);
     if (cand === undefined) throw new Error(`没有这个候选：${id}`);
     if (cand.status !== 'pending') throw new Error(`候选 ${id} 状态是 ${cand.status}，不能再采用`);
+
+    // 采用前允许改：改过就覆盖候选原文（审计上仍保留原 content 在 note 里）
+    if (overrides?.content !== undefined && overrides.content.trim().length > 0 && overrides.content.trim() !== cand.content) {
+      cand.note = `采用时改写：原 ${cand.content.slice(0, 40)}…`;
+      cand.content = overrides.content.trim();
+      cand.summary = cand.content.replace(/\s+/g, ' ').slice(0, 200);
+    }
+    if (overrides?.subject !== undefined && overrides.subject.trim().length > 0) {
+      cand.subject = overrides.subject.trim();
+    }
 
     const content = (cand.summary ?? cand.content).trim();
     const factId = sink({
@@ -221,7 +236,7 @@ export class CandidateInbox {
     });
     cand.status = 'accepted';
     cand.acceptedFactId = factId;
-    cand.note = `已采用 → ${factId}`;
+    cand.note = [cand.note, `已采用 → ${factId}`].filter((part) => typeof part === 'string' && part.length > 0).join('；');
     this.persist();
     return { ...cand };
   }

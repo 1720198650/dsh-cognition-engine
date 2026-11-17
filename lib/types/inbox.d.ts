@@ -79,7 +79,10 @@ export declare class CandidateInbox {
         tags: string[];
         importance: number;
         origin: string;
-    }) => string): Candidate;
+    }) => string, overrides?: {
+        content?: string;
+        subject?: string;
+    }): Candidate;
     reject(id: string, reason?: string): Candidate;
     stats(): InboxStats;
     /** 上限保护：超过 MAX_CANDIDATES 时先丢最旧的 rejected/duplicate。 */

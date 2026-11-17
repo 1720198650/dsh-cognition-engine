@@ -4155,6 +4155,32 @@ async function main(): Promise<void> {
     assert.equal(okBaseline.ok, true, JSON.stringify(okBaseline));
     rmSync(dir, { recursive: true, force: true });
   });
+  section('[54] L0 补缺口：摘要 / 采用前可改 / 自动主题');
+
+  await test('摘要截 200 字；采用时可改内容与主题，并留改写说明', () => {
+    const dir = join(TEST_TMP, 'inbox3');
+    mkdirSync(dir, { recursive: true });
+    const box = new CandidateInbox({ filePath: join(dir, 'inbox.json'), now: () => 1 });
+    const long = '这是很长的材料。'.repeat(60);
+    const cand = box.add({ content: long, subject: '' });
+    assert.ok((cand.summary ?? '').length <= 200, '摘要应 ≤200 字');
+    assert.ok(long.startsWith((cand.summary ?? '').slice(0, 20)));
+
+    const got: { content: string; subject: string }[] = [];
+    const accepted = box.accept(
+      cand.id,
+      (input) => {
+        got.push({ content: input.content, subject: input.subject });
+        return 'mem-x';
+      },
+      { content: '改过的短版本：设备台账按季度复核', subject: '设备台账' },
+    );
+    assert.equal(accepted.subject, '设备台账');
+    assert.ok((accepted.note ?? '').includes('采用时改写'));
+    assert.equal(got[0]!.subject, '设备台账');
+    assert.ok(got[0]!.content.includes('季度复核'));
+    rmSync(dir, { recursive: true, force: true });
+  });
   /* ---------------------------------------------------------------- */
   console.log('');
   if (failures.length === 0) {

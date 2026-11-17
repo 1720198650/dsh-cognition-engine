@@ -13,7 +13,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 
 import { GapStore } from './gaps.ts';
 import { PlaybookEventLog } from './events.ts';
@@ -1775,7 +1775,11 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       () => ({
         ...detail(),
         // 主题 wiki 摘要（附注用；不含全文，避免把面板撑爆）
-        inbox: { stats: inbox.stats(), pending: inbox.list('pending').slice(0, 20) },
+        inbox: {
+          stats: inbox.stats(),
+          pending: inbox.list('pending').slice(0, 20),
+          duplicates: inbox.list('duplicate').slice(0, 8),
+        },
         injectMode,
         usage: summarizeUsage({
           injectionFile: join(dataDir(), 'cognition-injection.jsonl'),
@@ -2989,21 +2993,74 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       (url) => {
         const id = (url.searchParams.get('id') ?? '').trim();
         if (id.length === 0) throw new Error('需要 id');
-        const cand = inbox.accept(id, (input) => {
-          const fact = memory.ingest({
-            content: input.content,
-            subject: input.subject,
-            tags: input.tags,
-            importance: input.importance,
-            source: 'imported',
-            origin: 'ui',
-          });
-          return fact.id;
-        });
+        const contentOverride = url.searchParams.get('content') ?? undefined;
+        const subjectOverride = url.searchParams.get('subject') ?? undefined;
+        // 主题为空时，按内容自动匹配一个主题（省得全落到「待归类」）
+        let autoSubject = subjectOverride;
+        if (autoSubject === undefined || autoSubject.trim().length === 0) {
+          const hitTopic = topics.match(contentOverride ?? '', 1)[0];
+          if (hitTopic !== undefined) autoSubject = hitTopic.topic.name;
+        }
+        const cand = inbox.accept(
+          id,
+          (input) => {
+            const fact = memory.ingest({
+              content: input.content,
+              subject: input.subject,
+              tags: input.tags,
+              importance: input.importance,
+              source: 'imported',
+              origin: 'ui',
+            });
+            return fact.id;
+          },
+          {
+            ...(contentOverride === undefined ? {} : { content: contentOverride }),
+            ...(autoSubject === undefined ? {} : { subject: autoSubject }),
+          },
+        );
         refreshEvidence();
         touch();
         void stateStore.flush();
         return cand;
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+    // 从本地文件导入：只当文本读，不执行、不解析格式；二进制与超大文件拒收
+    route(
+      '/cognition-engine/inbox/add-file',
+      (url) => {
+        const rawPath = (url.searchParams.get('path') ?? '').trim();
+        if (rawPath.length === 0) throw new Error('需要 path');
+        const filePath = expandHome(rawPath);
+        let info;
+        try {
+          info = statSync(filePath);
+        } catch {
+          throw new Error('读不到这个文件：' + filePath);
+        }
+        if (!info.isFile()) throw new Error('不是普通文件');
+        if (info.size > 256 * 1024) throw new Error('文件太大（>256KB）：先截取片段再放');
+        const buf = readFileSync(filePath);
+        if (buf.includes(0)) throw new Error('看起来是二进制文件，只能导入纯文本');
+        const text = extractText(buf.toString('utf8'), { maxChars: 6000 });
+        const facts = memory
+          .all()
+          .filter((fact) => fact.deletedAt === undefined && fact.supersededBy === null && fact.archived !== true)
+          .map((fact) => ({ id: fact.id, content: fact.content }));
+        const subject = url.searchParams.get('subject');
+        return inbox.add(
+          {
+            content: text.text,
+            title: filePath.split(/[\\/]/).pop() ?? filePath,
+            ...(subject === null ? {} : { subject }),
+            note:
+              '来自本地文件：' + filePath +
+              (text.flags.length === 0 ? '' : '；含可疑句式（' + text.flags.join('、') + '）'),
+            source: 'file',
+          },
+          { facts },
+        );
       },
       { method: 'POST', requireAuth: explicitLock },
     );

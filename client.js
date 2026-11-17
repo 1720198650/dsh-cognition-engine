@@ -1337,55 +1337,65 @@ window.__ModuleLoader__.load({
         } else if (tab === 'persona') {
           body = h(PersonaEmbedded, { variant: 'embedded' });
         } else if (tab === 'inbox') {
-          const ib = detail && detail.inbox ? detail.inbox : { stats: { pending: 0 }, pending: [] };
+          const ib = detail && detail.inbox ? detail.inbox : { stats: { pending: 0 }, pending: [], duplicates: [] };
           const pending = Array.isArray(ib.pending) ? ib.pending : [];
+          const dups = Array.isArray(ib.duplicates) ? ib.duplicates : [];
           body = h(
             'div',
             { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
             h('div', { style: S.explain }, dict.inboxHint),
             h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
-              '待审 ' + ib.stats.pending + ' 条'),
+              '待审 ' + ib.stats.pending + ' 条 · 重复已丢 ' + (ib.stats.duplicate || 0) + ' 条'),
             h('input', { id: 'ibContent', placeholder: dict.inboxAddPlaceholder, style: S.input }),
             h('input', { id: 'ibSubject', placeholder: dict.inboxSubject, style: S.input }),
             h('div', { style: S.meta },
-              h('button', {
-                type: 'button',
-                style: S.tab,
-                onClick: async () => {
-                  const content = document.getElementById('ibContent').value.trim();
-                  const subject = document.getElementById('ibSubject').value.trim();
-                  if (content.length === 0) return;
-                  await post('/cognition-engine/inbox/add?content=' + encodeURIComponent(content) +
-                    (subject.length === 0 ? '' : '&subject=' + encodeURIComponent(subject)));
-                  setTick((v) => v + 1);
-                },
-              }, dict.inboxAddBtn),
+              h('button', { type: 'button', style: S.tab, onClick: async () => {
+                const content = document.getElementById('ibContent').value.trim();
+                const subject = document.getElementById('ibSubject').value.trim();
+                if (content.length === 0) return;
+                await post('/cognition-engine/inbox/add?content=' + encodeURIComponent(content) +
+                  (subject.length === 0 ? '' : '&subject=' + encodeURIComponent(subject)));
+                setTick((v) => v + 1);
+              } }, dict.inboxAddBtn),
+            ),
+            h('div', { style: S.meta },
+              h('input', { id: 'ibFilePath', placeholder: '或填本机文件路径（.txt/.md/.json/.js 等纯文本，≤256KB，只读不执行）', style: S.input }),
+              h('button', { type: 'button', style: S.tab, onClick: async () => {
+                const path = document.getElementById('ibFilePath').value.trim();
+                if (path.length === 0) return;
+                await post('/cognition-engine/inbox/add-file?path=' + encodeURIComponent(path));
+                setTick((v) => v + 1);
+              } }, '从文件导入'),
             ),
             pending.length === 0
               ? h('div', { style: S.explain }, dict.inboxEmpty)
-              : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+              : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
                   pending.map((cand) => h('div', { key: cand.id, style: S.item },
                     h('div', { style: { fontSize: 12 } }, cand.title + '（重要度 ' + cand.importance + '）'),
-                    h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, cand.content.slice(0, 120)),
+                    h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, cand.summary || (cand.content || '').slice(0, 120)),
+                    cand.note ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)' } }, cand.note) : null,
+                    h('textarea', { id: 'ibC-' + cand.id, defaultValue: cand.content, style: Object.assign({}, S.input, { minHeight: 56, height: 56 }) }),
+                    h('input', { id: 'ibS-' + cand.id, defaultValue: cand.subject || '', placeholder: '主题（留空则按内容自动匹配）', style: S.input }),
                     h('div', { style: S.meta },
-                      h('button', {
-                        type: 'button',
-                        style: S.tab,
-                        onClick: async () => {
-                          await post('/cognition-engine/inbox/accept?id=' + encodeURIComponent(cand.id));
-                          setTick((v) => v + 1);
-                        },
-                      }, dict.inboxAccept),
-                      h('button', {
-                        type: 'button',
-                        style: { ...S.tab, color: '#f85149' },
-                        onClick: async () => {
-                          await post('/cognition-engine/inbox/reject?id=' + encodeURIComponent(cand.id));
-                          setTick((v) => v + 1);
-                        },
-                      }, dict.inboxReject),
+                      h('button', { type: 'button', style: S.tab, onClick: async () => {
+                        const c = document.getElementById('ibC-' + cand.id).value.trim();
+                        const sj = document.getElementById('ibS-' + cand.id).value.trim();
+                        await post('/cognition-engine/inbox/accept?id=' + encodeURIComponent(cand.id) +
+                          '&content=' + encodeURIComponent(c) +
+                          (sj.length === 0 ? '' : '&subject=' + encodeURIComponent(sj)));
+                        setTick((v) => v + 1);
+                      } }, dict.inboxAccept),
+                      h('button', { type: 'button', style: { ...S.tab, color: '#f85149' }, onClick: async () => {
+                        await post('/cognition-engine/inbox/reject?id=' + encodeURIComponent(cand.id));
+                        setTick((v) => v + 1);
+                      } }, dict.inboxReject),
                     ),
                   ))),
+            dups.length === 0 ? null : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 } },
+              h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, '重复已丢（前 8 条）'),
+              ...dups.map((item) => h('div', { key: item.id, style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                '· ' + item.title + ' —— ' + (item.note || '重复'))),
+            ),
           );
         } else if (tab === 'sediment') {
           const events = sedimentData === null ? [] : sedimentData.events;
