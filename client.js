@@ -1358,14 +1358,24 @@ window.__ModuleLoader__.load({
                 setTick((v) => v + 1);
               } }, dict.inboxAddBtn),
             ),
-            h('div', { style: S.meta },
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
               h('input', { id: 'ibFilePath', placeholder: '或填本机文件路径（.txt/.md/.json/.js 等纯文本，≤256KB，只读不执行）', style: S.input }),
-              h('button', { type: 'button', style: S.tab, onClick: async () => {
-                const path = document.getElementById('ibFilePath').value.trim();
-                if (path.length === 0) return;
-                await post('/cognition-engine/inbox/add-file?path=' + encodeURIComponent(path));
-                setTick((v) => v + 1);
-              } }, '从文件导入'),
+              h('div', { style: S.meta },
+                h('button', { type: 'button', style: S.tab, onClick: async () => {
+                  const el = document.getElementById('ibFilePath');
+                  const path = el ? el.value.trim() : '';
+                  if (path.length === 0) { window.alert('先填文件路径'); return; }
+                  try {
+                    const res = await call('/cognition-engine/inbox/add-file?path=' + encodeURIComponent(path), { method: 'POST' });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || data.error) { window.alert('导入失败：' + (data.error || ('HTTP ' + res.status))); return; }
+                    window.alert('已导入为候选：' + (data.title || data.id) + '（待审里可以看到）');
+                    setTick((v) => v + 1);
+                  } catch (error) {
+                    window.alert('导入失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                } }, '从文件导入'),
+              ),
             ),
             pending.length === 0
               ? h('div', { style: S.explain }, dict.inboxEmpty)
