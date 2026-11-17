@@ -708,8 +708,9 @@ async function main(): Promise<void> {
     assert.equal(pb.active().length, 1);
 
     const b = pb.submit({ content: '另一条待审的准则内容示例文本', section: '约定' });
-    assert.equal(pb.reject(b.entry!.id), true);
-    assert.equal(pb.get(b.entry!.id), undefined, 'reject 直接移除');
+    assert.equal(pb.reject(b.entry!.id, '不需要'), true);
+    assert.equal(pb.get(b.entry!.id)!.status, 'rejected', 'reject 改为留档，不再删除');
+    assert.equal(pb.pending().length, 0);
   });
 
   await test('编辑保留历史版本', () => {
@@ -4114,6 +4115,26 @@ async function main(): Promise<void> {
     const reloaded = new PlaybookStore({ filePath: file });
     await reloaded.load();
     assert.deepEqual(reloaded.get(id)!.boundaryEnvs, ['纯文档改动', '本地调试'], '重启后边界必须还在');
+    rmSync(dir, { recursive: true, force: true });
+  });
+  section('[52] 丢弃要留档（rejected 不删除）');
+
+  await test('reject 后条目仍在、状态 rejected、原因可查；pending 计数归零', () => {
+    const dir = join(TEST_TMP, 'reject');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'pb.json');
+    const pb = new PlaybookStore({ filePath: file });
+    const submitted = pb.submit({ content: '自动化脚本里不要用 PowerShell 处理中文路径', section: '坑', origin: 'agent' });
+    const id = submitted.entry!.id;
+    assert.equal(pb.stats().pending, 1);
+    assert.equal(pb.reject(id, '与现有准则重复'), true);
+
+    const entry = pb.get(id);
+    assert.ok(entry !== undefined, '丢弃后条目必须还在（决策历史）');
+    assert.equal(entry!.status, 'rejected');
+    assert.ok((entry!.note ?? '').includes('与现有准则重复'));
+    assert.equal(pb.stats().pending, 0);
+    assert.equal(pb.reject(id, '再来一次'), false, '非 pending 不能再丢');
     rmSync(dir, { recursive: true, force: true });
   });
   /* ---------------------------------------------------------------- */

@@ -13,7 +13,7 @@
  */
 export declare const PLAYBOOK_SECTIONS: readonly ["约定", "坑", "状态", "未分类"];
 export type PlaybookSection = (typeof PLAYBOOK_SECTIONS)[number];
-export type PlaybookStatus = 'active' | 'pending' | 'retired' | 'expired';
+export type PlaybookStatus = 'active' | 'pending' | 'retired' | 'expired' | 'rejected';
 /** 来源等级：只升不降，agent 不能自封 human。 */
 export type PlaybookOrigin = 'human' | 'agent' | 'auto';
 /**
@@ -371,7 +371,14 @@ export declare class PlaybookStore {
      * 与 retired 的区别见 tombstone 字段注释——「被推翻」和「被超越」是两种历史。
      */
     revoke(id: string, reason: string): boolean;
-    reject(id: string): boolean;
+    /**
+     * 丢弃一条待审准则。
+     *
+     * **保留记录**（status=rejected + 原因），不删条目：
+     * "被否掉的备选"本身是决策历史的一部分（SkillHone 的批评就是只留最终产物）。
+     * 2026-11-17 实测：原实现直接 splice 删除，四条候选丢了就再也说不清为什么没要。
+     */
+    reject(id: string, reason?: string): boolean;
     /**
      * 永久删除一条准则（任意状态）。
      *

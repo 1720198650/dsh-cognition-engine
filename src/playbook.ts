@@ -25,7 +25,7 @@ import { resolveDataFile, resolveUserPath } from './util.ts';
 export const PLAYBOOK_SECTIONS = ['约定', '坑', '状态', '未分类'] as const;
 export type PlaybookSection = (typeof PLAYBOOK_SECTIONS)[number];
 
-export type PlaybookStatus = 'active' | 'pending' | 'retired' | 'expired';
+export type PlaybookStatus = 'active' | 'pending' | 'retired' | 'expired' | 'rejected';
 
 /** 来源等级：只升不降，agent 不能自封 human。 */
 export type PlaybookOrigin = 'human' | 'agent' | 'auto';
@@ -1045,11 +1045,19 @@ export class PlaybookStore {
     return true;
   }
 
-  reject(id: string): boolean {
-    const index = this.data.entries.findIndex((entry) => entry.id === id);
-    if (index < 0) return false;
-    if (this.data.entries[index]?.status !== 'pending') return false;
-    this.data.entries.splice(index, 1);
+  /**
+   * 丢弃一条待审准则。
+   *
+   * **保留记录**（status=rejected + 原因），不删条目：
+   * "被否掉的备选"本身是决策历史的一部分（SkillHone 的批评就是只留最终产物）。
+   * 2026-11-17 实测：原实现直接 splice 删除，四条候选丢了就再也说不清为什么没要。
+   */
+  reject(id: string, reason?: string): boolean {
+    const entry = this.entryRef(id);
+    if (entry === undefined || entry.status !== 'pending') return false;
+    entry.status = 'rejected';
+    entry.note = reason === undefined || reason.trim() === '' ? '已丢弃（未填原因）' : `已丢弃：${reason.trim()}`;
+    entry.updatedAt = this.clock();
     return true;
   }
 

@@ -2150,15 +2150,18 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     );
 
     // —— 准则本 ——
-    route('/cognition-engine/playbook', () => ({
+    route('/cognition-engine/playbook', (url) => {
+      const includeRejected = url.searchParams.get('includeRejected') === 'true';
+      return {
       stats: playbook.stats(),
       // 带上计算出来的过期标记：页面不用自己算时间，也能正确分组到「已过期」
-      entries: playbook.all().map((entry) => ({
+      entries: playbook.all().filter((entry) => includeRejected || entry.status !== 'rejected').map((entry) => ({
         ...entry,
         expired: entry.status === 'active' && playbook.isExpired(entry),
       })),
       rendered: playbook.render(),
-    }));
+      };
+    });
 
     route(
       '/cognition-engine/playbook/candidate',
@@ -2211,6 +2214,19 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         let softFail = false;
         switch (action) {
           case 'accept': {
+            // 候选没有边界就不能生效（P3-1）；允许在采纳时一并传 envs
+            const boundaryRaw = url.searchParams.get('envs') ?? '';
+            if (boundaryRaw.trim().length > 0) {
+              playbook.setBoundary(
+                id,
+                boundaryRaw.split(/[|｜]/).map((value) => value.trim()).filter((value) => value.length > 0),
+              );
+            } else {
+              const target = playbook.get(id);
+              if (target !== undefined && (target.boundaryEnvs ?? []).length === 0) {
+                return { ok: false, error: '先填适用边界（envs）再采纳：没有边界的准则会被到处套用' };
+              }
+            }
             // P4-2 practice probe：先看历史上会不会撞上用户纠正
             try {
               const target = playbook.get(id);
