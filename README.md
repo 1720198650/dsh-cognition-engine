@@ -720,6 +720,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/l1-injection-regression.md](docs/l1-injection-regression.md) | **L1 注入回归**：`extractText` 四步 + 7 类标记 + 12 样本；`npm run check:injection`；收件箱入库前自动抽取 |
 | [docs/l0-inbox.md](docs/l0-inbox.md) | **L0 候选收件箱**：Zettelkasten 三段流 + Mem0 显式写操作 + 分级审批；三级判重、重要度排序、采用才写事实 |
 | [docs/m2-fish-observer.md](docs/m2-fish-observer.md) | **M2 只读观察器**：给 dsh-fish（或任意事件流 agent）算独立哈希锚 + 沉默率/重复率；只读不写 |
+| [docs/notes-somem.md](docs/notes-somem.md) | **SoMem 学习笔记**（arXiv:2611.11929）：Source/Topic/Core + Graph/Timeline/Recent 派生视图 + 校验更新；三条可落地；**警示：对手是全量上下文（84.22 vs 88.96）** |
 | [docs/notes-hy-memory.md](docs/notes-hy-memory.md) | **学习笔记：腾讯混元 Hy-Memory**（Apache-2.0，2067★，EMNLP 2026）——8 层记忆/三档模式/事实与经验双层/diff 链"装饰器而非检索器"；可借 4 条、不借 3 条、差异化只剩"可验证性" |
 | [docs/plan-autonomy-v1.md](docs/plan-autonomy-v1.md) | **自动采集/自动学习升级方案**：三件事划界（采集可做、学习需人批、自动改自己不做）；注入回归、去重、限速、外部锚；L0–L3 |
 | [docs/plan-hybrid-v4.md](docs/plan-hybrid-v4.md) | **融合方案 v4（现行）**：LLM 判语义、确定性算状态的分工依据（LLM-Modulo / 自我验证失效 / judge 偏差）；与 dsh-fish 的四层对接；哈希锚/消融报告/视角窗三件差异化；M0 闸门 |
