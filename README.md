@@ -691,6 +691,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/research-humanlike-agents-and-autonomy.md](docs/research-humanlike-agents-and-autonomy.md) | 拟人化机制拆解（人设/记忆/时机/风格）、B 站自动化真实流水线、QQ bot 可控记忆四层、LLM 自主行动与学习论文清单 |
 | [docs/research-super-agent-and-persona.md](docs/research-super-agent-and-persona.md) | Super-agent 项目清单 + 人格块设计 + 「自我学习」四层辨析（L1 上下文 / L2 记忆 / L3 工具自造 / L4 权重更新） |
 | [docs/research-frozen-weight-learning.md](docs/research-frozen-weight-learning.md) | 冻结权重下的学习与遗忘：ExpeL / Voyager / AWM / Reflexion / ReasoningBank / ACE / PATH-Bench / Oblivion |
+| [docs/plan-concept-layer-v1.md](docs/plan-concept-layer-v1.md) | **概念层可行性**：反思引擎不能当压缩器（漂移/不可复现/贵）；可行方案=确定性概念格(FCA)+指针+按需展开；含 rate-distortion 警告与 C0–C3 |
 | [docs/research-skillhone-pybot.md](docs/research-skillhone-pybot.md) | **两份材料评估**：PyBot（agent swarm 写 63 万行）价值低仅作反例；**SkillHone（EMNLP 2026）值得抄"决策历史"与准入前试跑** → P4 三项 |
 | [docs/MANUAL.md](docs/MANUAL.md) | **小白版使用说明书**：九页签/八个工具/六件自动行为/数据与备份/常见问题/限制/速查表 |
 | [docs/UPGRADE-PLAN.md](docs/UPGRADE-PLAN.md) | **⬅ 升级总表（唯一事实来源）**：现状/待做 P0–P3/观察期裁决/发版节奏/不做清单 |
@@ -701,6 +702,7 @@ Dynamic Cheatsheet 的消融有一列「空小抄」——给同样的解题指�
 | [docs/charter-phenomenological-persona.md](docs/charter-phenomenological-persona.md) | **理念与方向（宪章）**：三条不可让渡承诺、五个"不是"、四维操作定义、术语翻译表、跑偏自查清单 |
 | [docs/decision-reuse-vs-build.md](docs/decision-reuse-vs-build.md) | **要不要原创？** 三条判据 × 7 个候选的对照矩阵；结论：机制不必原创，只剩「哈希链不可逆 + 检索消融验收」这一处薄增量；给出 A/B/C 三条路线 |
 | [docs/m0-findings.md](docs/m0-findings.md) | **M0 实测**：真实语料上正则召回 0/3；「取代」≠「翻案」比例 1/3；据此改准入/分类/证据三条 |
+| [docs/plan-concept-layer-v1.md](docs/plan-concept-layer-v1.md) | **概念层可行性**：反思引擎不能当压缩器（漂移/不可复现/贵）；可行方案=确定性概念格(FCA)+指针+按需展开；含 rate-distortion 警告与 C0–C3 |
 | [docs/research-skillhone-pybot.md](docs/research-skillhone-pybot.md) | **两份材料评估**：PyBot（agent swarm 写 63 万行）价值低仅作反例；**SkillHone（EMNLP 2026）值得抄"决策历史"与准入前试跑** → P4 三项 |
 | [docs/MANUAL.md](docs/MANUAL.md) | **小白版使用说明书**：九页签/八个工具/六件自动行为/数据与备份/常见问题/限制/速查表 |
 | [docs/UPGRADE-PLAN.md](docs/UPGRADE-PLAN.md) | **⬅ 升级总表（唯一事实来源）**：现状/待做 P0–P3/观察期裁决/发版节奏/不做清单 |
