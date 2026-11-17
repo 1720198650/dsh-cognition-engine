@@ -97,3 +97,15 @@ npm 发布必须带 `--registry=https://registry.npmjs.org`。
 | 融合/差异化 | [plan-hybrid-v4.md](plan-hybrid-v4.md)、[notes-hy-memory.md](notes-hy-memory.md) |
 | 理念与边界 | [charter-phenomenological-persona.md](charter-phenomenological-persona.md) |
 | 自动采集/学习 | [plan-autonomy-v1.md](plan-autonomy-v1.md) |
+
+---
+
+## 十、P4（来自 SkillHone，EMNLP 2026 Industry）
+
+| # | 内容 | 工时 | 验收 |
+|---|---|---|---|
+| **P4-1** 准则历史四段化 | `history[]` 每条补 `diagnosis / evidence / outcome`；改准则必须填诊断 | 0.5 天 | 改准则缺诊断被拒；面板可见"这次修订的依据" |
+| **P4-2** practice probes | 候选准则采纳前用最近 N 个真实回合试跑；与历史纠正冲突 ≥2 次 → 拒收并说明 | 1 天 | 构造与历史冲突的候选必须被拦下 |
+| **P4-3** 子代理报告脱敏 | 委派任务明确"只写结论与可核对出处，不贴私人原文" | 0.2 天 | 正则黑名单 + 抽查无敏感串 |
+
+依据：[research-skillhone-pybot.md](research-skillhone-pybot.md)。PyBot 不采纳（只作旁证与反例）。
