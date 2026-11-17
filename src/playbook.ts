@@ -100,6 +100,12 @@ export interface EvidenceState {
 export interface PlaybookHistoryEntry {
   content: string;
   replacedAt: number;
+  /** 为什么改（P4-1，必填）：一句话诊断 */
+  diagnosis?: string;
+  /** 依据：记忆 id / 会话 id / 链接 */
+  evidence?: string;
+  /** 改之前的成绩快照，便于事后判断这次修订是否真的更好 */
+  outcome?: string;
 }
 
 export interface PlaybookEntry {
@@ -273,6 +279,8 @@ export interface PlaybookOptions {
    * 是否强制要求「适用边界」（P3-1）。插件运行时开 true；库测试默认 false，避免旧夹具全部要改。
    */
   requireBoundary?: boolean;
+  /** 是否要求修订准则必须写诊断（P4-1）。插件运行时开 true；库测试默认 false。 */
+  requireRevisionDiagnosis?: boolean;
 }
 
 export interface PlaybookStats {
@@ -526,6 +534,7 @@ export class PlaybookStore {
   private readonly dedupeThreshold: number;
   private readonly validateSourceIds: ((ids: readonly string[]) => string[]) | undefined;
   private readonly requireBoundary: boolean;
+  private readonly requireRevisionDiagnosis: boolean;
   /**
    * 注入渲染缓存（P2）。
    * key = 调用方给的 cacheKey（如 topicId / 'all' + indexOnly）；
@@ -549,6 +558,7 @@ export class PlaybookStore {
     this.dedupeThreshold = Math.min(0.99, Math.max(0.5, options.dedupeThreshold ?? 0.85));
     this.validateSourceIds = options.validateSourceIds;
     this.requireBoundary = options.requireBoundary === true;
+    this.requireRevisionDiagnosis = options.requireRevisionDiagnosis === true;
     this.isSourceAlive = options.isSourceAlive;
   }
 
@@ -1063,14 +1073,29 @@ export class PlaybookStore {
     return true;
   }
 
-  /** 编辑条目：旧内容进 history，不原地丢弃。 */
-  revise(id: string, content: string): boolean {
+  /** 编辑条目：旧内容进 history（带诊断/证据/成绩快照），不原地丢弃。 */
+  revise(id: string, content: string, meta?: { diagnosis?: string; evidence?: string }): boolean {
     const entry = this.entryRef(id);
     if (entry === undefined) return false;
     const next = normalizeContent(content);
     if (next.length < CONTENT_MIN || next.length > CONTENT_MAX) return false;
     if (next === entry.content) return false;
-    entry.history.push({ content: entry.content, replacedAt: this.clock() });
+
+    const diagnosis = (meta?.diagnosis ?? '').trim();
+    // P4-1：改准则必须说清"为什么改"（SkillHone 的批评：只留最终产物 = 丢掉决策历史）
+    if (this.requireRevisionDiagnosis && diagnosis.length < 4) {
+      throw new Error('修订准则必须写诊断（为什么改，至少 4 个字）；没有诊断的修订不予接受');
+    }
+
+    entry.history.push({
+      content: entry.content,
+      replacedAt: this.clock(),
+      ...(diagnosis.length === 0 ? {} : { diagnosis }),
+      ...(meta?.evidence === undefined || meta.evidence.trim().length === 0
+        ? {}
+        : { evidence: meta.evidence.trim() }),
+      outcome: `helpful=${entry.helpful} harmful=${entry.harmful}`,
+    });
     entry.content = next;
     entry.updatedAt = this.clock();
     return true;

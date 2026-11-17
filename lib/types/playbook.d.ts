@@ -72,6 +72,12 @@ export interface EvidenceState {
 export interface PlaybookHistoryEntry {
     content: string;
     replacedAt: number;
+    /** 为什么改（P4-1，必填）：一句话诊断 */
+    diagnosis?: string;
+    /** 依据：记忆 id / 会话 id / 链接 */
+    evidence?: string;
+    /** 改之前的成绩快照，便于事后判断这次修订是否真的更好 */
+    outcome?: string;
 }
 export interface PlaybookEntry {
     id: string;
@@ -241,6 +247,8 @@ export interface PlaybookOptions {
      * 是否强制要求「适用边界」（P3-1）。插件运行时开 true；库测试默认 false，避免旧夹具全部要改。
      */
     requireBoundary?: boolean;
+    /** 是否要求修订准则必须写诊断（P4-1）。插件运行时开 true；库测试默认 false。 */
+    requireRevisionDiagnosis?: boolean;
 }
 export interface PlaybookStats {
     active: number;
@@ -269,6 +277,7 @@ export declare class PlaybookStore {
     private readonly dedupeThreshold;
     private readonly validateSourceIds;
     private readonly requireBoundary;
+    private readonly requireRevisionDiagnosis;
     /**
      * 注入渲染缓存（P2）。
      * key = 调用方给的 cacheKey（如 topicId / 'all' + indexOnly）；
@@ -372,8 +381,11 @@ export declare class PlaybookStore {
     remove(id: string): boolean;
     retire(id: string, reason?: string): boolean;
     revive(id: string): boolean;
-    /** 编辑条目：旧内容进 history，不原地丢弃。 */
-    revise(id: string, content: string): boolean;
+    /** 编辑条目：旧内容进 history（带诊断/证据/成绩快照），不原地丢弃。 */
+    revise(id: string, content: string, meta?: {
+        diagnosis?: string;
+        evidence?: string;
+    }): boolean;
     /** 记录一次使用反馈（ACE 的双向计数）。 */
     mark(id: string, kind: 'helpful' | 'harmful', amount?: number): boolean;
     /**
