@@ -1520,10 +1520,20 @@ window.__ModuleLoader__.load({
                         h('button', { type: 'button', style: S.tab, onClick: async () => {
                           const c = document.getElementById('ibC-' + cand.id).value.trim();
                           const sj = document.getElementById('ibS-' + cand.id).value.trim();
-                          await post('/cognition-engine/inbox/accept?id=' + encodeURIComponent(cand.id) +
-                            '&content=' + encodeURIComponent(c) +
-                            (sj.length === 0 ? '' : '&subject=' + encodeURIComponent(sj)));
-                          setTick((v) => v + 1);
+                          // 正文走请求体：两万字塞 query string 会被 Node 直接判 431，业务代码收不到
+                          try {
+                            const res = await call('/cognition-engine/inbox/accept?id=' + encodeURIComponent(cand.id), {
+                              method: 'POST',
+                              headers: { 'content-type': 'application/json' },
+                              body: JSON.stringify({ content: c, subject: sj }),
+                            });
+                            const data = await res.json().catch(() => ({}));
+                            if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+                            setNotice('');
+                            setTick((v) => v + 1);
+                          } catch (error) {
+                            window.alert('采用失败：' + (error instanceof Error ? error.message : String(error)));
+                          }
                         } }, '采用为记忆'),
                         h('button', { type: 'button', style: { ...S.tab, color: '#f85149' }, onClick: async () => {
                           await post('/cognition-engine/inbox/reject?id=' + encodeURIComponent(cand.id));

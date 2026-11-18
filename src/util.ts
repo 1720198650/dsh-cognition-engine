@@ -236,3 +236,29 @@ export function parseMoment(value: unknown, now: number = Date.now()): number | 
 
   return undefined;
 }
+
+/**
+ * 解析 POST 请求体里的 JSON（空体返回空对象，坏 JSON 也返回空对象，绝不抛）。
+ *
+ * 用途：长文本不能塞 query string——Node 的请求行上限约 16KB，超了直接回 431，
+ * 而且请求根本到不了业务代码，日志里什么都看不到。所以凡是"可能是整篇文章"的字段，
+ * 一律走请求体。
+ */
+export function readBodyJson(body: string): Record<string, unknown> {
+  const trimmed = body.replace(/^\uFEFF/, '').trim();
+  if (trimmed.length === 0) return {};
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/** 从请求体对象里取字符串字段；没有或类型不对就返回 undefined。 */
+export function bodyString(body: Record<string, unknown>, key: string): string | undefined {
+  const value = body[key];
+  return typeof value === 'string' ? value : undefined;
+}

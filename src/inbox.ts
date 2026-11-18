@@ -214,7 +214,12 @@ export class CandidateInbox {
   accept(
     id: string,
     sink: (input: { content: string; subject: string; tags: string[]; importance: number; origin: string }) => string,
-    overrides?: { content?: string; subject?: string },
+    overrides?: {
+      content?: string;
+      subject?: string;
+      /** 写进记忆的正文（不改候选原文）：长资料只落"入口 + 要点"，全文留在资料库 */
+      factContent?: string;
+    },
   ): Candidate {
     this.load();
     const cand = this.data.candidates.find((item) => item.id === id);
@@ -231,7 +236,7 @@ export class CandidateInbox {
       cand.subject = overrides.subject.trim();
     }
 
-    const content = (cand.summary ?? cand.content).trim();
+    const content = (overrides?.factContent ?? cand.summary ?? cand.content).trim();
     const factId = sink({
       content,
       subject: (cand.subject ?? '待归类').slice(0, 40),
@@ -241,7 +246,12 @@ export class CandidateInbox {
     });
     cand.status = 'accepted';
     cand.acceptedFactId = factId;
-    cand.note = [cand.note, `已采用 → ${factId}`].filter((part) => typeof part === 'string' && part.length > 0).join('；');
+    cand.note = [
+      cand.note,
+      overrides?.factContent === undefined ? `已采用 → ${factId}` : `已采用 → ${factId}（记忆里是入口与要点，全文在资料库）`,
+    ]
+      .filter((part) => typeof part === 'string' && part.length > 0)
+      .join('；');
     this.persist();
     return { ...cand };
   }

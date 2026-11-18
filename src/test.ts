@@ -4230,6 +4230,30 @@ async function main(): Promise<void> {
     assert.equal(store.conflicts().length, 1, '同主题但无关内容不该新增冲突');
   });
 
+  section('[61] 长资料采用：只落入口与要点，候选原文不许被吃掉');
+  await test('factContent 只影响写进记忆的正文，候选 content 保持原样', () => {
+    const dir = join(TEST_TMP, 'inbox-long');
+    mkdirSync(dir, { recursive: true });
+    const store = new CandidateInbox({ filePath: join(dir, 'inbox.json'), now: () => 1000 });
+    const longText = '论文正文第一段。'.repeat(400);
+    const cand = store.add({ content: longText, title: 'paper.html', sourceId: 'src-9', source: 'file' }, { facts: [] });
+    let written = '';
+    const accepted = store.accept(
+      cand.id,
+      (input) => {
+        written = input.content;
+        return 'fact-1';
+      },
+      { factContent: '资料《paper.html》（src-9）已入资料库，共 33 块；要点：讲三层记忆。' },
+    );
+    assert.ok(written.includes('已入资料库'), '记忆里应是入口，不是论文开头');
+    assert.ok(written.length < 200, `入口不该过长：${written.length}`);
+    assert.equal(accepted.content, longText, '候选原文必须保留（全文在资料库，候选不能自毁）');
+    assert.equal(accepted.status, 'accepted');
+    assert.ok(/记忆里是入口/.test(accepted.note ?? ''), accepted.note);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   /* ---------------------------------------------------------------- */
   section('[57] 资料切块：长文要能被检索到，不能切出一条巨块');
   await test('无空行的中文长文按句切，块长受控且不丢字', () => {

@@ -49,7 +49,7 @@ import type { TemporalFact } from './memory.ts';
 import { JsonStateStore } from './persist.ts';
 import { buildDetail, buildCoreDigest } from './views.ts';
 import { DialecticalReflectionEngine, MockDialecticalLLM, ReflectionWorker } from './reflection.ts';
-import { assertObjectSchema, asRecord, dataDir, expandHome, messageOf, migrateLegacyData, parseMoment, requireString, textOutput } from './util.ts';
+import { assertObjectSchema, asRecord, bodyString, dataDir, expandHome, messageOf, migrateLegacyData, parseMoment, readBodyJson, requireString, textOutput } from './util.ts';
 import { createTools } from './tools.ts';
 import { ProactiveGate } from './proactive.ts';
 import { ProactiveStore, scoreScan } from './proactive_scan.ts';
@@ -1738,10 +1738,25 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       return value === lockToken;
     };
 
+    /** 读 POST 请求体（上限 8MB）；宿主给的不是流就返回空串。 */
+    const readRequestBody = async (request: unknown): Promise<string> => {
+      const req = request as { [Symbol.asyncIterator]?: () => AsyncIterator<unknown> };
+      if (typeof req[Symbol.asyncIterator] !== 'function') return '';
+      const chunks: Buffer[] = [];
+      let size = 0;
+      for await (const chunk of req as AsyncIterable<unknown>) {
+        const buf = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : (chunk as Buffer);
+        size += buf.length;
+        if (size > 8 * 1024 * 1024) throw new Error('请求体太大（>8MB）');
+        chunks.push(buf);
+      }
+      return Buffer.concat(chunks).toString('utf8');
+    };
+
     /** 注册一条路由：统一方法校验、鉴权与错误转换，避免每个 handler 各写一份。 */
     const route = (
       path: string,
-      produce: (url: URL) => unknown,
+      produce: (url: URL, body: string) => unknown,
       options: { method?: 'GET' | 'POST'; requireAuth?: boolean } = {},
     ): void => {
       const method = options.method ?? 'GET';
@@ -1762,7 +1777,10 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
                   send(response, 401, { error: 'unauthorized' });
                   return;
                 }
-                send(response, 200, await produce(new URL(req.url ?? path, 'http://local')));
+                // 长文本必须走请求体：塞 query string 会超过 Node 的请求行上限（431），
+                // 而且 431 是 Node 自己回的，业务代码根本没机会报错。
+                const body = method === 'POST' ? await readRequestBody(request) : '';
+                send(response, 200, await produce(new URL(req.url ?? path, 'http://local'), body));
               } catch (error) {
                 send(response, 500, { error: messageOf(error) });
               }
@@ -3090,11 +3108,13 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     );
     route(
       '/cognition-engine/inbox/accept',
-      (url) => {
+      (url, body) => {
         const id = (url.searchParams.get('id') ?? '').trim();
         if (id.length === 0) throw new Error('需要 id');
-        const contentOverride = url.searchParams.get('content') ?? undefined;
-        const subjectOverride = url.searchParams.get('subject') ?? undefined;
+        // 正文可能是一整篇文章：优先从请求体取，query 只作兼容回退
+        const json = readBodyJson(body);
+        const contentOverride = url.searchParams.get('content') ?? bodyString(json, 'content');
+        const subjectOverride = url.searchParams.get('subject') ?? bodyString(json, 'subject');
         // 主题为空时，按内容自动匹配一个主题（省得全落到「待归类」）
         let autoSubject = subjectOverride;
         if (autoSubject === undefined || autoSubject.trim().length === 0) {
@@ -3106,6 +3126,21 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         const sourceId = pendingCand?.sourceId;
         if (sourceId !== undefined && sources.get(sourceId) === undefined) {
           throw new Error('来源记录不存在（' + sourceId + '），拒绝采用：没有证据的内容不能进记忆');
+        }
+        // 长资料采用时不把两万字塞进一条记忆：落「入口 + 要点」，全文留在资料库。
+        // 老行为是落 summary（前 200 字），等于把论文开头当内容，用户当场指出过。
+        const longSource = pendingCand !== undefined && (contentOverride ?? pendingCand.content).length > 600;
+        let factContent: string | undefined;
+        if (longSource) {
+          const known = sourceId === undefined ? undefined : library.note(sourceId);
+          const blocks = sourceId === undefined ? 0 : library.blocksOf(sourceId).length;
+          const title = pendingCand.title;
+          const brief = known !== undefined && known.status === 'ready' && known.summary.length > 0
+            ? '要点：' + known.summary
+            : '摘要待提炼（可在收件页点「重新提炼」）';
+          factContent =
+            `资料《${title}》${sourceId === undefined ? '' : '（' + sourceId + '）'}已入资料库，共 ${blocks} 块；${brief}。` +
+            '需要细节时用 cognition_source 工具查原文，不要凭记忆复述。';
         }
         const cand = inbox.accept(
           id,
@@ -3123,6 +3158,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           {
             ...(contentOverride === undefined ? {} : { content: contentOverride }),
             ...(autoSubject === undefined ? {} : { subject: autoSubject }),
+            ...(factContent === undefined ? {} : { factContent }),
           },
         );
         refreshEvidence();
