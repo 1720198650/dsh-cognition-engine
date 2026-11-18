@@ -1449,7 +1449,9 @@ window.__ModuleLoader__.load({
                           ? '提炼中…'
                           : note.status === 'skipped'
                             ? '未提炼（太短或不是正文）'
-                            : '提炼失败';
+                            : note.status === 'suspicious'
+                              ? '提炼出的结论可疑'
+                              : '提炼失败';
                     return h('div', { key: item.sourceId, style: S.item },
                       h('div', { style: { fontSize: 12 } },
                         item.title + '（' + item.sourceId + ' · ' + Math.round(item.chars / 1000) + 'k 字 · ' + item.blocks + ' 块 · ' + statusText + (note && note.topic ? ' · ' + note.topic : '') + '）'),
@@ -1486,6 +1488,10 @@ window.__ModuleLoader__.load({
                             )
                           : h('button', { type: 'button', style: S.tab, onClick: () => setDeleteConfirm(item.sourceId) }, '删'),
                       ),
+                      note && note.status === 'suspicious' && note.flags
+                        ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)' } },
+                            '摘要里扫出可疑句式（' + note.flags.join('、') + '）：这条结论不参与检索返回，只保留原文块')
+                        : null,
                       note && note.status === 'failed' && note.error
                         ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)' } }, note.error)
                         : null,

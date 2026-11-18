@@ -89,19 +89,45 @@ export function checkUrl(raw: string, policy: FetchPolicy): UrlCheck {
 export interface RobotsRules {
   /** 命中的 crawl-delay 毫秒（没写则 0）。 */
   crawlDelayMs: number;
-  /** 是否允许抓这个路径。 */
-  allow: (pathname: string) => boolean;
+  /** 是否允许抓这个位置（传 pathname + search）。 */
+  allow: (target: string) => boolean;
+  /** 规则来源：'specific'（命中自己那组）/ 'star'（只有 *）/ 'none'（没规则）。 */
+  matched: 'specific' | 'star' | 'none';
+}
+
+/** 把 robots 的一条路径规则编译成正则：`*` 是任意序列，结尾 `$` 是行尾锚点（RFC 9309 §2.2.3）。 */
+function compileRule(pattern: string): { test: (target: string) => boolean; weight: number } {
+  const anchored = pattern.endsWith('$');
+  const body = anchored ? pattern.slice(0, -1) : pattern;
+  const escape = (part: string): string => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  const source = body.split('*').map(escape).join('.*');
+  let re: RegExp;
+  try {
+    re = new RegExp('^' + source + (anchored ? '$' : ''));
+  } catch {
+    // 规则写坏了就当成不匹配，别让一条坏规则把整站封死
+    return { test: () => false, weight: 0 };
+  }
+  // 具体性按规则字面长度算（去掉通配符），与"最长匹配优先"一致
+  return { test: (target: string) => re.test(target), weight: body.replace(/\*/g, '').length };
 }
 
 /**
- * 极简 robots.txt 解析：只认 `User-agent:` / `Disallow:` / `Allow:` / `Crawl-delay:`。
+ * robots.txt 解析（RFC 9309）。
  *
- * 规则选择顺序：优先匹配我们 UA 里出现的名字，其次 `*`；同长度规则里 Allow 优先于 Disallow
- * （与主流实现一致）。抓不到的 robots 一律按"允许"处理，但限速仍然生效。
+ * 三条容易做错的规则，这里都按规范来：
+ *   1. **同名 UA 的多段规则要合并**（§2.2.1），不能只取第一组；
+ *   2. 有匹配自己 UA 的组时**整组用自己那组**，`*` 组不参与；
+ *   3. 规则匹配最长者优先，等长时 Allow 胜（§2.2.2）；`*` / `$` 是规范里的 MUST（§2.2.3）。
  */
 export function parseRobots(text: string, userAgent: string): RobotsRules {
-  const groups: Array<{ agents: string[]; rules: Array<{ allow: boolean; path: string }>; crawlDelayMs: number }> = [];
-  let current: { agents: string[]; rules: Array<{ allow: boolean; path: string }>; crawlDelayMs: number } | undefined;
+  interface Group {
+    agents: string[];
+    rules: Array<{ allow: boolean; pattern: string }>;
+    crawlDelayMs: number;
+  }
+  const groups: Group[] = [];
+  let current: Group | undefined;
   let lastWasAgent = false;
 
   for (const rawLine of text.split(/\r?\n/)) {
@@ -123,49 +149,52 @@ export function parseRobots(text: string, userAgent: string): RobotsRules {
     }
     lastWasAgent = false;
     if (current === undefined) continue;
-    if (field === 'disallow' && value.length > 0) current.rules.push({ allow: false, path: value });
-    if (field === 'allow' && value.length > 0) current.rules.push({ allow: true, path: value });
+    if (field === 'disallow') {
+      // 空 Disallow 是"没有限制"，不是"禁全站"
+      if (value.length > 0) current.rules.push({ allow: false, pattern: value });
+    }
+    if (field === 'allow' && value.length > 0) current.rules.push({ allow: true, pattern: value });
     if (field === 'crawl-delay') {
       const seconds = Number(value);
       if (Number.isFinite(seconds) && seconds > 0) current.crawlDelayMs = Math.round(seconds * 1000);
     }
   }
 
-  const uaLower = userAgent.toLowerCase();
-  const tokens = uaLower.split(/[^a-z0-9._-]+/).filter((token) => token.length > 0);
-  const score = (agents: string[]): number => {
-    if (agents.includes('*')) return 1;
-    let best = 0;
-    for (const agent of agents) {
-      if (agent.length > 0 && tokens.includes(agent)) best = Math.max(best, 2 + agent.length);
-    }
-    return best;
-  };
-
-  let chosen: (typeof groups)[number] | undefined;
-  let bestScore = 0;
+  const tokens = userAgent.toLowerCase().split(/[^a-z0-9._-]+/).filter((token) => token.length > 0);
+  // 自己 UA 的匹配组（可能多段），取"UA 名最长"的那一类；同长度的全并进来
+  let bestAgentLength = 0;
+  const specific: Group[] = [];
   for (const group of groups) {
-    const value = score(group.agents);
-    if (value > bestScore) {
-      bestScore = value;
-      chosen = group;
+    for (const agent of group.agents) {
+      if (agent === '*' || agent.length === 0) continue;
+      if (!tokens.includes(agent)) continue;
+      if (agent.length > bestAgentLength) {
+        bestAgentLength = agent.length;
+        specific.length = 0;
+        specific.push(group);
+      } else if (agent.length === bestAgentLength && !specific.includes(group)) {
+        specific.push(group);
+      }
     }
   }
 
-  const rules = chosen?.rules ?? [];
-  const crawlDelayMs = chosen?.crawlDelayMs ?? 0;
+  const chosen = specific.length > 0 ? specific : groups.filter((group) => group.agents.includes('*'));
+  const matched: RobotsRules['matched'] = specific.length > 0 ? 'specific' : chosen.length > 0 ? 'star' : 'none';
+  const crawlDelayMs = chosen.reduce((max, group) => Math.max(max, group.crawlDelayMs), 0);
+
+  const rules = chosen
+    .flatMap((group) => group.rules)
+    .map((rule) => ({ allow: rule.allow, ...compileRule(rule.pattern) }));
 
   return {
     crawlDelayMs,
-    allow(pathname: string): boolean {
-      let best: { allow: boolean; length: number } | undefined;
+    matched,
+    allow(target: string): boolean {
+      let best: { allow: boolean; weight: number } | undefined;
       for (const rule of rules) {
-        // `*` 通配与 `$` 结尾在极简实现里只做前缀匹配
-        const pattern = rule.path.replace(/\*.*$/, '');
-        if (!pathname.startsWith(pattern)) continue;
-        const length = pattern.length;
-        if (best === undefined || length > best.length || (length === best.length && rule.allow)) {
-          best = { allow: rule.allow, length };
+        if (!rule.test(target)) continue;
+        if (best === undefined || rule.weight > best.weight || (rule.weight === best.weight && rule.allow)) {
+          best = { allow: rule.allow, weight: rule.weight };
         }
       }
       return best === undefined ? true : best.allow;

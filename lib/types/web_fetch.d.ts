@@ -28,14 +28,18 @@ export declare function checkUrl(raw: string, policy: FetchPolicy): UrlCheck;
 export interface RobotsRules {
     /** 命中的 crawl-delay 毫秒（没写则 0）。 */
     crawlDelayMs: number;
-    /** 是否允许抓这个路径。 */
-    allow: (pathname: string) => boolean;
+    /** 是否允许抓这个位置（传 pathname + search）。 */
+    allow: (target: string) => boolean;
+    /** 规则来源：'specific'（命中自己那组）/ 'star'（只有 *）/ 'none'（没规则）。 */
+    matched: 'specific' | 'star' | 'none';
 }
 /**
- * 极简 robots.txt 解析：只认 `User-agent:` / `Disallow:` / `Allow:` / `Crawl-delay:`。
+ * robots.txt 解析（RFC 9309）。
  *
- * 规则选择顺序：优先匹配我们 UA 里出现的名字，其次 `*`；同长度规则里 Allow 优先于 Disallow
- * （与主流实现一致）。抓不到的 robots 一律按"允许"处理，但限速仍然生效。
+ * 三条容易做错的规则，这里都按规范来：
+ *   1. **同名 UA 的多段规则要合并**（§2.2.1），不能只取第一组；
+ *   2. 有匹配自己 UA 的组时**整组用自己那组**，`*` 组不参与；
+ *   3. 规则匹配最长者优先，等长时 Allow 胜（§2.2.2）；`*` / `$` 是规范里的 MUST（§2.2.3）。
  */
 export declare function parseRobots(text: string, userAgent: string): RobotsRules;
 export interface FetchResult {

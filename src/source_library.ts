@@ -25,7 +25,7 @@ export interface SourceBlock {
   text: string;
 }
 
-export type SourceNoteStatus = 'pending' | 'ready' | 'failed' | 'skipped';
+export type SourceNoteStatus = 'pending' | 'ready' | 'failed' | 'skipped' | 'suspicious';
 
 export interface SourceNote {
   sourceId: string;
@@ -40,6 +40,8 @@ export interface SourceNote {
   points: string[];
   /** 失败原因（status='failed' 时有值） */
   error?: string;
+  /** 提炼产物里再扫出来的可疑标记（status='suspicious' 时有值） */
+  flags?: string[];
 }
 
 const TERMINATORS = '。！？；!?;\n';

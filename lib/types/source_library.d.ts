@@ -8,7 +8,7 @@ export interface SourceBlock {
     chars: number;
     text: string;
 }
-export type SourceNoteStatus = 'pending' | 'ready' | 'failed' | 'skipped';
+export type SourceNoteStatus = 'pending' | 'ready' | 'failed' | 'skipped' | 'suspicious';
 export interface SourceNote {
     sourceId: string;
     at: number;
@@ -22,6 +22,8 @@ export interface SourceNote {
     points: string[];
     /** 失败原因（status='failed' 时有值） */
     error?: string;
+    /** 提炼产物里再扫出来的可疑标记（status='suspicious' 时有值） */
+    flags?: string[];
 }
 /** 表格形状（分隔符 / 表头 / 数据行），不是表格返回 null。 */
 export declare function detectTableShape(text: string): {
