@@ -52,6 +52,7 @@ import { DEFAULT_POLICY, FetchThrottle, WhitelistStore, checkUrl, parseRobots } 
 import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts';
 import { buildSearchQueries, pickSources } from './autolearn.ts';
 import { RevisionLog, markAuto, revisionBadge, shouldAutoRevise, unmarkAuto } from './autorevise.ts';
+import { detectCorrection, parseCorrectionResult } from './correction.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote } from './source_note.ts';
 import { summarizeUsage } from './usage.ts';
 import { resolveInjectMode } from './settings.ts';
@@ -4764,6 +4765,32 @@ async function main(): Promise<void> {
     assert.equal(revisionBadge({ origin: 'auto_revise', by: 'auto' }), '[自动修订] ');
     assert.equal(revisionBadge({ origin: 'manual', by: 'user' }), '');
     assert.equal(revisionBadge(undefined), '');
+  });
+
+  section('[72] 纠正识别：扳机只认用户原话');
+  await test('中英文纠正句式能被识别，闲聊不误判', () => {
+    const zh = detectCorrection('不对，发版前应该先跑真实入口');
+    assert.equal(zh.corrected, true);
+    assert.ok(zh.quote.includes('不对'), zh.quote);
+    assert.equal(detectCorrection('其实是这样，那个开关默认是关的').corrected, true);
+    assert.equal(detectCorrection('你搞错了，我说的是 4339 那个端口').corrected, true);
+
+    const en = detectCorrection("that's wrong, you should run the real entry first");
+    assert.equal(en.corrected, true);
+    assert.equal(detectCorrection("what i meant was the other file").corrected, true);
+
+    // 普通陈述不能被当成纠正，否则会一直触发自动学习
+    assert.equal(detectCorrection('今天把相片文档做完了').corrected, false);
+    assert.equal(detectCorrection('这个插件的记忆是 JSON 存储').corrected, false);
+    assert.equal(detectCorrection('好').corrected, false);
+  });
+
+  await test('反思输出解析：坏 JSON 不抛错，缺字段给空串', () => {
+    const parsed = parseCorrectionResult('前言 {"wrong":"只跑了单测","diagnosis":"把个别当普遍","rule":"发版前必须跑真实入口"} 尾巴');
+    assert.equal(parsed.wrong, '只跑了单测');
+    assert.equal(parsed.rule, '发版前必须跑真实入口');
+    const broken = parseCorrectionResult('模型拒答了');
+    assert.equal(broken.rule, '', '解析不出就返回空，不编内容');
   });
 
   section('[63] 文件编码：GBK 表格不能读成乱码');  await test('UTF-8/GBK/UTF-16 都能正确解码，不乱码', () => {
