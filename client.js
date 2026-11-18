@@ -1127,19 +1127,22 @@ window.__ModuleLoader__.load({
         // 面板形态没有「收起」：永远展开。浮层形态才有折叠成一行摘要的行为。
         if (!isPanel && !open) return h('div', { style: rootStyle }, row);
 
-        const tabs = [
-          // 页签文案不带计数（原来「记忆 21」这类数字让一行晃来晃去）；
-          // 计数放到每个页签自己的正文顶部，视觉上更稳。
-          ['memories', dict.memories],
-          ['schemas', dict.schemas],
-          ['playbook', dict.playbookTab],
-          ['persona', dict.personaTab],
-          ['superagent', dict.superagentTab],
-          ['inbox', dict.inboxTab],
-          ['sediment', dict.sedimentTab],
-          ['learning', dict.learnTab],
-          ['settings', dict.settings],
+        /**
+         * UI v2：九个页签合成五区（记忆 / 规则 / 收件 / 观察 / 设置）。
+         *
+         * 分组的依据是从自己源码里学到的：面板高频轮询只该拉计数，
+         * 明细按需拉，所以每一区先给「这一区现在有几个东西」，点进去才看明细。
+         * 每个区是一组按钮，区里的成员还是原来的页签，行为不变——先合并入口，不动内容。
+         */
+        const GROUPS = [
+          ['记忆', [['memories', dict.memories], ['schemas', dict.schemas]]],
+          ['规则', [['playbook', dict.playbookTab]]],
+          ['收件', [['inbox', dict.inboxTab], ['learning', dict.learnTab]]],
+          ['观察', [['sediment', dict.sedimentTab], ['persona', dict.personaTab], ['superagent', dict.superagentTab]]],
+          ['设置', [['settings', dict.settings]]],
         ];
+        const tabs = GROUPS.flatMap(([, members]) => members);
+        const groupOf = (key) => GROUPS.find(([, members]) => members.some(([k]) => k === key)) || GROUPS[0];
 
         /** 统一的「标题 + 一行元信息」块，设置页三行都用它。 */
         const section = (title, ...meta) =>
@@ -2595,18 +2598,51 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: S.tabs },
-            tabs.map(([key, label]) =>
-              h(
-                'button',
-                {
-                  key,
-                  type: 'button',
-                  style: key === tab ? { ...S.tab, ...S.tabActive } : S.tab,
-                  onClick: () => setTab(key),
-                },
-                label,
-              ),
-            ),
+            // 先给五个区（大按钮），区下面挂它包含的页签（小按钮）。
+            // 这样入口从 9 个降到 5 个，但每个页签的行为完全没变。
+            GROUPS.map(([groupLabel, members], groupIndex) => {
+              const activeGroup = groupOf(tab);
+              const isActiveGroup = activeGroup[0] === groupLabel;
+              return h(
+                'span',
+                { key: 'grp-' + groupLabel, style: { display: 'inline-flex', alignItems: 'center', gap: 2 } },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    // 区本身不带动作：点它跳到区内第一个页签，避免"点了没反应"
+                    style: isActiveGroup ? { ...S.tab, ...S.tabActive, fontWeight: 600 } : { ...S.tab, fontWeight: 600 },
+                    onClick: () => setTab(members[0][0]),
+                  },
+                  groupLabel,
+                ),
+                members.length > 1
+                  ? h(
+                      'span',
+                      { style: { display: 'inline-flex', gap: 0 } },
+                      ...members.map(([key, label], memberIndex) =>
+                        h(
+                          'button',
+                          {
+                            key,
+                            type: 'button',
+                            title: groupLabel + ' · ' + label,
+                            style: key === tab
+                              ? { ...S.tab, ...S.tabActive, fontSize: 11, padding: '2px 6px' }
+                              : { ...S.tab, fontSize: 11, padding: '2px 6px', opacity: isActiveGroup ? 1 : 0.55 },
+                            onClick: () => setTab(key),
+                          },
+                          // 第一个成员就是区本身，不重复显示文字
+                          memberIndex === 0 ? '·' : label,
+                        ),
+                      ),
+                    )
+                  : null,
+                groupIndex < GROUPS.length - 1
+                  ? h('span', { style: { ...S.sep, margin: '0 4px' } }, '|')
+                  : null,
+              );
+            }),
             h(
               'button',
               {
