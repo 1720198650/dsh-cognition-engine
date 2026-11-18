@@ -33,6 +33,8 @@ import { SedimentStore, observeSupersedeFrom, type SedimentJudge } from './sedim
 import { WikiStore, buildWiki } from './wiki.ts';
 import { CandidateInbox } from './inbox.ts';
 import { SourceStore } from './sources.ts';
+import { SourceLibrary, type SourceNote } from './source_library.ts';
+import { buildSourceNotePrompt, parseSourceNote, fallbackNote } from './source_note.ts';
 import { recordUsage, summarizeUsage } from './usage.ts';
 import { SettingsStore, resolveInjectMode, isInjectMode, type InjectMode } from './settings.ts';
 import { runPracticeProbes, type ProbeTurn } from './probes.ts';
@@ -47,7 +49,7 @@ import type { TemporalFact } from './memory.ts';
 import { JsonStateStore } from './persist.ts';
 import { buildDetail, buildCoreDigest } from './views.ts';
 import { DialecticalReflectionEngine, MockDialecticalLLM, ReflectionWorker } from './reflection.ts';
-import { assertObjectSchema, dataDir, expandHome, messageOf, migrateLegacyData, parseMoment } from './util.ts';
+import { assertObjectSchema, asRecord, dataDir, expandHome, messageOf, migrateLegacyData, parseMoment, requireString, textOutput } from './util.ts';
 import { createTools } from './tools.ts';
 import { ProactiveGate } from './proactive.ts';
 import { ProactiveStore, scoreScan } from './proactive_scan.ts';
@@ -628,6 +630,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const inbox = new CandidateInbox({ filePath: config.inboxFile });
   // 不可变来源账本（SoMem 的 Source 层）：只追加，内容哈希 + 链
   const sources = new SourceStore({ filePath: join(dataDir(), 'cognition-sources.jsonl') });
+  // 资料库（资料层）：来源切块索引 + 自动摘要。
+  // 长文只走这条路，不进记忆事实——否则几十条同主题事实会把用户真实口径挤出检索窗口。
+  const library = new SourceLibrary({
+    blocksFile: join(dataDir(), 'cognition-source-blocks.jsonl'),
+    notesFile: join(dataDir(), 'cognition-source-notes.json'),
+  });
   // 运行时设置（面板可改）：注入方式
   /**
    * 练习样本：把「用户纠正/确认」的回合和当时的原话拼起来。
@@ -921,6 +929,58 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       model: `${config.llmProvider ?? ''}:${config.llmModel ?? ''}`,
     });
     return text;
+  };
+
+  /**
+   * 「放什么就自动学什么」的实现：切块（同步、确定性）+ 提炼摘要（异步、要模型）。
+   *
+   * 两件事必须拆开：切块不依赖模型，模型不可用时检索照样能用；
+   * 摘要失败只是少了一段导读，不能连带把资料弄丢。
+   */
+  const indexSourceNow = (record: { id: string; title: string; content: string }): void => {
+    try {
+      library.indexSource(record);
+    } catch (error) {
+      ctx.logger?.warn?.(`cognition-engine: 来源切块失败 ${record.id}: ${messageOf(error)}`);
+    }
+  };
+
+  const distillSourceNote = async (record: { id: string; title: string; content: string }): Promise<SourceNote> => {
+    library.setPending(record.id, record.title);
+    const failed = (error: string): SourceNote =>
+      library.saveNote(fallbackNote({ sourceId: record.id, title: record.title, text: record.content, at: Date.now(), error }));
+    if (reflectionMode !== 'real') {
+      return failed('未开启真实模型：切块已建好，可检索；把设置页切到「真实模型」后可在收件页重新提炼');
+    }
+    try {
+      const built = buildSourceNotePrompt({
+        title: record.title,
+        text: record.content,
+        topics: topics.all().map((topic) => topic.name),
+        maxPoints: 5,
+      });
+      const raw = await callRealModel(built.prompt, 2000, 'source');
+      const parsed = parseSourceNote(raw);
+      return library.saveNote({
+        sourceId: record.id,
+        at: Date.now(),
+        status: 'ready',
+        title: record.title,
+        summary: parsed.summary,
+        points: parsed.points,
+        ...(parsed.topic === undefined ? {} : { topic: parsed.topic }),
+      });
+    } catch (error) {
+      return failed(messageOf(error));
+    }
+  };
+
+  /** 导入一处来源后统一走这里：先建块索引，再后台提炼。 */
+  const ingestSource = (record: { id: string; title: string; content: string }): void => {
+    indexSourceNow(record);
+    void distillSourceNote(record).catch((error: unknown) => {
+      ctx.logger?.warn?.(`cognition-engine: 来源提炼失败 ${record.id}: ${messageOf(error)}`);
+    });
   };
 
   /**
@@ -1780,9 +1840,10 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         // 主题 wiki 摘要（附注用；不含全文，避免把面板撑爆）
         inbox: {
           stats: inbox.stats(),
-          pending: inbox.list('pending').slice(0, 20),
+          pending: inbox.list('pending').slice(0, 20).map((cand) => ({ ...cand, knowledge: library.describe(cand.sourceId) })),
           duplicates: inbox.list('duplicate').slice(0, 8),
           sources: { total: sources.list(200).length, chain: sources.verify() },
+          library: library.stats(),
         },
         injectMode,
         usage: summarizeUsage({
@@ -2962,8 +3023,35 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       const status = url.searchParams.get('status');
       const allowed = ['pending', 'accepted', 'rejected', 'duplicate'];
       const filter = status !== null && allowed.includes(status) ? (status as never) : undefined;
-      return { stats: inbox.stats(), items: inbox.list(filter), filePath: inbox.filePath };
+      // 每条候选带上资料层的状态：块数 + 摘要，页面据此显示"已学成什么样"
+      const items = inbox.list(filter).map((cand) => ({ ...cand, knowledge: library.describe(cand.sourceId) }));
+      return { stats: inbox.stats(), items, library: library.stats(), filePath: inbox.filePath };
     });
+    // 资料层：按需检索（收件页与工具共用）
+    route('/cognition-engine/sources/search', (url) => {
+      const query = (url.searchParams.get('q') ?? '').trim();
+      if (query.length === 0) throw new Error('需要 q');
+      const hits = library.search(query, {
+        k: Number(url.searchParams.get('k') ?? 5),
+        maxChars: Number(url.searchParams.get('maxChars') ?? 1500),
+      });
+      return { query, hits, stats: library.stats() };
+    });
+    // 资料层：全部摘要
+    route('/cognition-engine/sources/notes', () => ({ notes: library.notes(), stats: library.stats() }));
+    // 重新提炼某条来源（模型当时不可用、或换了模型想重做）
+    route(
+      '/cognition-engine/sources/redistill',
+      async (url) => {
+        const sourceId = url.searchParams.get('sourceId') ?? '';
+        const record = sources.get(sourceId);
+        if (record === undefined) throw new Error('来源不存在：' + sourceId);
+        indexSourceNow(record);
+        const note = await distillSourceNote(record);
+        return { note, stats: library.stats() };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
     route(
       '/cognition-engine/inbox/add',
       (url) => {
@@ -2980,6 +3068,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           title: url.searchParams.get('title') ?? extracted.text.slice(0, 40),
           content: extracted.text,
         });
+        ingestSource(source);
         const cand = inbox.add(
           {
             content: extracted.text,
@@ -3069,6 +3158,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           content: text.text,
           locator: filePath,
         });
+        ingestSource(source);
         const facts = memory
           .all()
           .filter((fact) => fact.deletedAt === undefined && fact.supersededBy === null && fact.archived !== true)
@@ -3130,6 +3220,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         if (raw.trim().length === 0) throw new Error('文件是空的');
         const text = extractText(raw, { maxChars: 20000 });
         const source = sources.append({ kind: 'file', title: entry.name, content: text.text });
+        ingestSource(source);
         const facts = memory
           .all()
           .filter((fact) => fact.deletedAt === undefined && fact.supersededBy === null && fact.archived !== true)
@@ -3751,7 +3842,48 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   });
   const [remember, recall, forget, reflect, state, cognitionContext, manageLongTask, clarify] = toolList;
 
-  for (const definition of [remember, recall, forget, reflect, state, cognitionContext, manageLongTask, clarify]) {
+  /**
+   * 资料层检索工具：模型在对话里主动取回「用户放进来的资料」。
+   *
+   * 与 cognition_recall 分工明确——recall 查的是「关于用户为真」的口径，
+   * 这个查的是外部资料原文。合在一起就会出现「用论文里的话冒充用户口径」。
+   */
+  const sourceTool = {
+    name: 'cognition_source',
+    description: '查用户放进来的资料（论文/文档/网页）：按关键词取回原文片段与已提炼的结论摘要。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['query'],
+      properties: {
+        query: { type: 'string', description: '要查什么：关键词或一句话。' },
+        k: { type: 'number', description: '返回块数，默认 4。' },
+        withNote: { type: 'boolean', description: '是否附带来源的摘要与结论，默认 true。' },
+      },
+    },
+    output: textOutput,
+    async execute(args: unknown): Promise<string> {
+      const input = asRecord(args);
+      const query = requireString(input, 'query');
+      const hits = library.search(query, { k: Number(input.k ?? 4) });
+      const withNote = input.withNote !== false;
+      const sourceIds = [...new Set(hits.map((hit) => hit.sourceId))];
+      const notes = withNote
+        ? sourceIds
+            .map((sourceId) => library.note(sourceId))
+            .filter((note): note is SourceNote => note !== undefined && note.status === 'ready')
+            .map((note) => ({ sourceId: note.sourceId, title: note.title, topic: note.topic, summary: note.summary, points: note.points }))
+        : [];
+      return JSON.stringify({
+        query,
+        hits: hits.map((hit) => ({ sourceId: hit.sourceId, title: hit.title, ord: hit.ord, score: Number(hit.score.toFixed(3)), text: hit.text })),
+        notes,
+        hint: hits.length === 0 ? '资料库里没有命中的块：可能没导入过，或换个关键词。' : '以上是资料原文片段，不是用户的口径；引用时说明来自哪份资料。',
+      });
+    },
+  };
+
+  for (const definition of [remember, recall, forget, reflect, state, cognitionContext, manageLongTask, clarify, sourceTool]) {
     try {
       assertObjectSchema(definition.name, definition.parameters);
       disposers.push(tools.register(definition));

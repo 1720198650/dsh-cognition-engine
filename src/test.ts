@@ -47,6 +47,8 @@ import { readdirSync } from 'node:fs';
 import { WikiStore, buildWiki } from './wiki.ts';
 import { CandidateInbox } from './inbox.ts';
 import { SourceStore } from './sources.ts';
+import { SourceLibrary, chunkText, scoreQuery } from './source_library.ts';
+import { buildSourceNotePrompt, parseSourceNote } from './source_note.ts';
 import { summarizeUsage } from './usage.ts';
 import { resolveInjectMode } from './settings.ts';
 import { runPracticeProbes, overlapOf } from './probes.ts';
@@ -4227,6 +4229,99 @@ async function main(): Promise<void> {
     store.ingest({ content: '这个月的电费单据已归档到抽屉里', subject: '部署区域', source: 'user' });
     assert.equal(store.conflicts().length, 1, '同主题但无关内容不该新增冲突');
   });
+
+  /* ---------------------------------------------------------------- */
+  section('[57] 资料切块：长文要能被检索到，不能切出一条巨块');
+  await test('无空行的中文长文按句切，块长受控且不丢字', () => {
+    const sentence = '这是论文里的一句正文，用来验证按句切块不会把一句话切断。';
+    const long = sentence.repeat(60);
+    const pieces = chunkText(long, { target: 600, max: 1200 });
+    assert.ok(pieces.length > 1, '两万字级的长文必须切成多块');
+    for (const piece of pieces) {
+      assert.ok(piece.length <= 1200, `块长 ${piece.length} 超过上限 1200`);
+    }
+    const rebuilt = pieces.join('');
+    assert.equal(rebuilt.replace(/\s+/g, ''), long.replace(/\s+/g, ''), '切块不能丢字');
+  });
+
+  await test('有空行的短段合并到目标长度，不产生碎片块', () => {
+    const text = Array.from({ length: 30 }, (_, i) => `第 ${i + 1} 段：一段很短的说明文字。`).join('\n\n');
+    const pieces = chunkText(text, { target: 600, max: 1200 });
+    assert.ok(pieces.length >= 1 && pieces.length <= 3, `应合并成少量块，实际 ${pieces.length} 块`);
+    assert.ok(pieces.every((piece) => piece.length >= 20), '不该出现只有几个字的碎片');
+  });
+
+  section('[58] 资料库：索引幂等 + 按查询取回块');
+  await test('重复索引同一条来源不产生新块；检索能命中且带来源出处', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cog-lib-'));
+    try {
+      let now = 1_000_000;
+      const lib = new SourceLibrary({
+        blocksFile: join(dir, 'blocks.jsonl'),
+        notesFile: join(dir, 'notes.json'),
+        now: () => now,
+      });
+      const text =
+        '多层记忆系统的第一层是不可变来源，只追加不修改。第二层是可编辑的主题文档，承载当前口径。' +
+        '第三层是核心层，大小有界，超出时必须合并而不是无限增长。';
+      const first = lib.indexSource({ id: 'src-1', title: 'l0-notes.html', content: text });
+      assert.ok(first.blocks >= 1, '至少切出一块');
+      assert.equal(first.skipped, false);
+      now += 1000;
+      const again = lib.indexSource({ id: 'src-1', title: 'l0-notes.html', content: text });
+      assert.equal(again.skipped, true, '重复索引必须跳过');
+      assert.equal(lib.blocksOf('src-1').length, first.blocks, '块数不能翻倍');
+
+      lib.saveNote({ sourceId: 'src-1', at: now, status: 'ready', title: 'l0-notes.html', topic: '记忆分层', summary: '三层记忆', points: ['来源不可变'] });
+      const hits = lib.search('不可变来源');
+      assert.ok(hits.length >= 1, '关键词应命中');
+      assert.equal(hits[0]!.sourceId, 'src-1', '命中必须带来源 id，可追溯到原文');
+      assert.equal(hits[0]!.title, 'l0-notes.html');
+      assert.equal(lib.search('完全无关的量子色动力学').length, 0, '无关查询不该硬凑结果');
+
+      const describe = lib.describe('src-1');
+      assert.equal(describe.note?.status, 'ready');
+      assert.equal(describe.blocks, first.blocks);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  section('[59] 资料检索打分：英文按整词，中文按双字');
+  await test('英文查询不因 bigram 巧合命中无关段落；中文查询按双字覆盖率', () => {
+    // 真实踩过的坑：英文长段里 ab/bl/la/at/ti/iv/ve 几乎凑齐，"ablative" 全给 1.00
+    const unrelated = 'The system processes tokens and validates the table before writing output.';
+    assert.equal(scoreQuery('ablative', unrelated), 0, '无关英文段落不该命中');
+    assert.equal(scoreQuery('table', unrelated), 1, '整词命中给满分');
+    assert.equal(scoreQuery('validates output', unrelated), 1, '多词全中给满分');
+    assert.ok(scoreQuery('validates memory', unrelated) < 0.7, '只中一半要打折');
+
+    const zh = '多层记忆系统的第一层是不可变来源，只追加不修改。';
+    assert.ok(scoreQuery('不可变来源', zh) > 0.8, '中文双字命中要高分');
+    assert.equal(scoreQuery('量子色动力学', zh), 0, '无关中文查询不命中');
+  });
+
+  section('[60] 资料提炼：提示词给主题线索，解析要挑剔');  await test('解析模型输出：能抠出 JSON，缺字段直接报错而不是瞎编', () => {
+    const good = parseSourceNote(
+      '这是解释性废话\n```json\n{"summary":"讲三层记忆","points":["来源不可变","核心层有界"],"topic":"记忆分层"}\n```',
+    );
+    assert.equal(good.summary, '讲三层记忆');
+    assert.equal(good.points.length, 2);
+    assert.equal(good.topic, '记忆分层');
+
+    assert.throws(() => parseSourceNote('模型拒答了'), /没有输出 JSON/, '没有 JSON 要抛错');
+    assert.throws(() => parseSourceNote('{"points":["a"]}'), /summary/, '缺 summary 要抛错');
+    assert.throws(() => parseSourceNote('{"summary":"x"}'), /points/, '缺 points 要抛错');
+  });
+
+  await test('长文只送头尾，并标注中间省略了多少字', () => {
+    const built = buildSourceNotePrompt({ title: 'paper.html', text: '正文'.repeat(8000), topics: ['记忆'] });
+    assert.ok(built.truncated, '两万字正文必须截断');
+    assert.ok(built.prompt.length < 16_000, `提示词过长：${built.prompt.length}`);
+    assert.ok(built.prompt.includes('中间省略'), '要明确告诉模型中间被省略');
+    assert.ok(built.prompt.includes('记忆'), '已有主题要作为线索给进去');
+  });
+
   /* ---------------------------------------------------------------- */
   console.log('');
   if (failures.length === 0) {

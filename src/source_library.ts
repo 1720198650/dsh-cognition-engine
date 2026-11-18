@@ -1,0 +1,347 @@
+/**
+ * src/source_library.ts — 资料库：把贴进来的长文变成「可查的知识」，而不是「一条巨长记忆」。
+ *
+ * 为什么要有这一层（2026-11-18 用户质问"收件如果不能自动学习，我为什么不直接在对话框发给你"）：
+ *
+ *   - 记忆事实是「关于用户为真」的东西：它参与注入、参与冲突仲裁、按主题和重要度排序。
+ *     一篇论文切出几十条同主题事实，会立刻把用户自己的真实口径挤出检索窗口——记忆洪泛。
+ *   - 所以长文只能进**资料层**：全量存档（sources.ts，不可变 + 哈希链）→ 切块索引
+ *     （本文件）→ 自动摘要（source_note.ts）→ 按需检索。
+ *   - 它不占每一轮的注入预算，但任何时候都能被查到、被引用。「学到」= 随时能查，不是「永远摆在眼前」。
+ *
+ * 零依赖：JSONL + JSON，纯文本切块，bigram 打分。
+ */
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+
+export interface SourceBlock {
+  /** `blk-<sourceId>-<ord>`，确定性 id：同一条来源重复索引不会产生新记录 */
+  id: string;
+  sourceId: string;
+  /** 在来源里的顺序（0 起） */
+  ord: number;
+  at: number;
+  chars: number;
+  text: string;
+}
+
+export type SourceNoteStatus = 'pending' | 'ready' | 'failed';
+
+export interface SourceNote {
+  sourceId: string;
+  at: number;
+  status: SourceNoteStatus;
+  title: string;
+  /** 2~6 字主题名，尽量命中已有主题 */
+  topic?: string;
+  /** ≤300 字：这份资料在解决什么问题、结论是什么 */
+  summary: string;
+  /** 3~6 条可复用结论，每条独立成立 */
+  points: string[];
+  /** 失败原因（status='failed' 时有值） */
+  error?: string;
+}
+
+const TERMINATORS = '。！？；!?;\n';
+
+/**
+ * 从 `max` 往 `min` 回溯，找最后一个句末标点；找不到就硬切。
+ *
+ * 中文资料从 HTML 抽出来后常常没有空行，整篇是一大段——只按空行切会得到
+ * 一条 2 万字的块，检索时等于没有索引。所以长段必须按句切。
+ */
+function lastBoundary(text: string, min: number, max: number): number {
+  const limit = Math.min(max, text.length);
+  const floor = Math.max(1, Math.floor(min / 2));
+  for (let i = limit - 1; i >= floor; i -= 1) {
+    const ch = text[i];
+    if (ch !== undefined && TERMINATORS.includes(ch)) return i + 1;
+  }
+  return limit;
+}
+
+/**
+ * 切块：先按空行分段，长段再按句切，最后贪心合并到目标长度。
+ *
+ * 目标 600 字是权衡结果：再大则检索命中后塞进上下文的噪声太多，
+ * 再小则一句话的上下文被切断。
+ */
+export function chunkText(text: string, options: { target?: number; max?: number } = {}): string[] {
+  const target = Math.max(80, options.target ?? 600);
+  const max = Math.max(target, options.max ?? 1200);
+  const clean = text
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (clean.length === 0) return [];
+
+  const pieces: string[] = [];
+  for (const para of clean.split(/\n{2,}/)) {
+    const p = para.trim();
+    if (p.length === 0) continue;
+    if (p.length <= max) {
+      pieces.push(p);
+      continue;
+    }
+    let rest = p;
+    while (rest.length > max) {
+      const cut = lastBoundary(rest, target, max);
+      const head = rest.slice(0, cut).trim();
+      if (head.length > 0) pieces.push(head);
+      rest = rest.slice(cut).trim();
+    }
+    if (rest.length > 0) pieces.push(rest);
+  }
+
+  const out: string[] = [];
+  let buffer = '';
+  for (const piece of pieces) {
+    if (buffer.length === 0) {
+      buffer = piece;
+      continue;
+    }
+    if (buffer.length + piece.length + 1 <= target) {
+      buffer = `${buffer}\n${piece}`;
+      continue;
+    }
+    out.push(buffer);
+    buffer = piece;
+  }
+  if (buffer.length > 0) out.push(buffer);
+  return out;
+}
+
+/** 去标点小写后的 bigram 集合：中文按双字、英文按双字母，够用且不需要分词器。 */
+export function bigrams(text: string): Set<string> {
+  const clean = text.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+  const out = new Set<string>();
+  for (let i = 0; i + 1 < clean.length; i += 1) out.add(clean.slice(i, i + 2));
+  return out;
+}
+
+const CJK = /[\u3400-\u9fff]/;
+
+/**
+ * 给一个块打分：中文走 bigram 覆盖率，纯英文按整词命中。
+ *
+ * 为什么要分两条路：英文长块里 "ablative" 的 7 个 bigram（ab/bl/la/at/ti/iv/ve）
+ * 几乎在任何一段英文里都能凑齐，覆盖率全是 1.00 —— 等于没筛。整词命中才有区分度。
+ */
+export function scoreQuery(query: string, text: string): number {
+  const q = query.trim();
+  if (q.length === 0 || text.length === 0) return 0;
+  const tokens = q
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 2);
+  const lower = text.toLowerCase();
+  let tokenScore = 0;
+  if (tokens.length > 0) {
+    let total = 0;
+    let found = 0;
+    for (const token of tokens) {
+      total += token.length;
+      if (lower.includes(token)) found += token.length;
+    }
+    tokenScore = total === 0 ? 0 : found / total;
+  }
+  const queryGrams = bigrams(q);
+  let gramScore = 0;
+  if (queryGrams.size > 0) {
+    const textGrams = bigrams(text);
+    let hit = 0;
+    for (const gram of queryGrams) if (textGrams.has(gram)) hit += 1;
+    gramScore = hit / queryGrams.size;
+  }
+  // 纯英文查询只认整词，不受 bigram 噪声影响；中英混排取两者较高值
+  return CJK.test(q) ? Math.max(tokenScore, gramScore) : tokenScore;
+}
+
+export interface SourceHit {
+  id: string;
+  sourceId: string;
+  title: string;
+  ord: number;
+  score: number;
+  text: string;
+}
+
+export class SourceLibrary {
+  readonly blocksFile: string;
+  readonly notesFile: string;
+  private readonly clock: () => number;
+  private blockCache: SourceBlock[] | undefined;
+  private noteCache: Record<string, SourceNote> | undefined;
+
+  constructor(options: { blocksFile: string; notesFile: string; now?: () => number }) {
+    this.blocksFile = options.blocksFile;
+    this.notesFile = options.notesFile;
+    this.clock = options.now ?? (() => Date.now());
+  }
+
+  private loadBlocks(): SourceBlock[] {
+    if (this.blockCache !== undefined) return this.blockCache;
+    this.blockCache = [];
+    if (!existsSync(this.blocksFile)) return this.blockCache;
+    for (const line of readFileSync(this.blocksFile, 'utf8').replace(/^\uFEFF/, '').split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
+      try {
+        this.blockCache.push(JSON.parse(trimmed) as SourceBlock);
+      } catch {
+        // 坏行直接停下：宁可少几块，也不要拿半条错数据去污染检索
+        break;
+      }
+    }
+    return this.blockCache;
+  }
+
+  private loadNotes(): Record<string, SourceNote> {
+    if (this.noteCache !== undefined) return this.noteCache;
+    this.noteCache = {};
+    if (!existsSync(this.notesFile)) return this.noteCache;
+    try {
+      const parsed = JSON.parse(readFileSync(this.notesFile, 'utf8').replace(/^\uFEFF/, '')) as Record<string, SourceNote>;
+      if (parsed !== null && typeof parsed === 'object') this.noteCache = parsed;
+    } catch {
+      this.noteCache = {};
+    }
+    return this.noteCache;
+  }
+
+  private saveNotes(): void {
+    const all = this.loadNotes();
+    mkdirSync(dirname(this.notesFile), { recursive: true });
+    writeFileSync(this.notesFile, JSON.stringify(all, null, 2), 'utf8');
+  }
+
+  /** 索引一条来源（幂等：同 sourceId 已经有块就跳过）。 */
+  indexSource(
+    source: { id: string; title: string; content: string },
+    options: { target?: number; max?: number } = {},
+  ): { sourceId: string; blocks: number; skipped: boolean } {
+    const blocks = this.loadBlocks();
+    const existing = blocks.filter((block) => block.sourceId === source.id);
+    if (existing.length > 0) return { sourceId: source.id, blocks: existing.length, skipped: true };
+
+    const pieces = chunkText(source.content, options);
+    if (pieces.length === 0) return { sourceId: source.id, blocks: 0, skipped: false };
+    const at = this.clock();
+    const fresh: SourceBlock[] = pieces.map((text, ord) => ({
+      id: `blk-${source.id}-${ord}`,
+      sourceId: source.id,
+      ord,
+      at,
+      chars: text.length,
+      text,
+    }));
+    mkdirSync(dirname(this.blocksFile), { recursive: true });
+    appendFileSync(this.blocksFile, fresh.map((block) => `${JSON.stringify(block)}\n`).join(''), 'utf8');
+    blocks.push(...fresh);
+    return { sourceId: source.id, blocks: fresh.length, skipped: false };
+  }
+
+  blocksOf(sourceId: string): SourceBlock[] {
+    return this.loadBlocks()
+      .filter((block) => block.sourceId === sourceId)
+      .sort((a, b) => a.ord - b.ord);
+  }
+
+  note(sourceId: string): SourceNote | undefined {
+    return this.loadNotes()[sourceId];
+  }
+
+  setPending(sourceId: string, title: string): SourceNote {
+    const all = this.loadNotes();
+    const note: SourceNote = { sourceId, at: this.clock(), status: 'pending', title, summary: '', points: [] };
+    all[sourceId] = note;
+    this.saveNotes();
+    return note;
+  }
+
+  saveNote(note: SourceNote): SourceNote {
+    const all = this.loadNotes();
+    all[note.sourceId] = note;
+    this.saveNotes();
+    return note;
+  }
+
+  notes(): SourceNote[] {
+    return Object.values(this.loadNotes()).sort((a, b) => b.at - a.at);
+  }
+
+  /** 收件页要显示的一行摘要：块数 + 摘要状态。 */
+  describe(sourceId: string | undefined): { blocks: number; note: SourceNote | null } {
+    if (sourceId === undefined) return { blocks: 0, note: null };
+    const blocks = this.blocksOf(sourceId).length;
+    const note = this.note(sourceId) ?? null;
+    return { blocks, note };
+  }
+
+  /**
+   * 检索：bigram 覆盖率打分，按来源去重上限 `perSource`，总字符不超过 `maxChars`。
+   *
+   * 命中率门槛 0.15 与准入/冲突检测同一个量级：低于它基本都是"共用几个常见字"。
+   */
+  search(
+    query: string,
+    options: { k?: number; maxChars?: number; perSource?: number; minScore?: number } = {},
+  ): SourceHit[] {
+    const k = Math.max(1, options.k ?? 5);
+    const maxChars = Math.max(200, options.maxChars ?? 1500);
+    const perSource = Math.max(1, options.perSource ?? 2);
+    const minScore = options.minScore ?? 0.15;
+    const queryGrams = bigrams(query);
+    if (queryGrams.size === 0) return [];
+
+    const titles = new Map<string, string>();
+    for (const note of this.notes()) titles.set(note.sourceId, note.title);
+
+    const scored: SourceHit[] = [];
+    for (const block of this.loadBlocks()) {
+      const score = scoreQuery(query, block.text);
+      if (score < minScore) continue;
+      scored.push({
+        id: block.id,
+        sourceId: block.sourceId,
+        title: titles.get(block.sourceId) ?? block.sourceId,
+        ord: block.ord,
+        score,
+        text: block.text,
+      });
+    }
+    scored.sort((a, b) => b.score - a.score || a.sourceId.localeCompare(b.sourceId) || a.ord - b.ord);
+
+    const out: SourceHit[] = [];
+    const seen = new Map<string, number>();
+    // 同一篇资料被反复导入时（用户试了好几次），块文本完全一样：
+    // 输出阶段按正文去重，否则一次检索全是同一段话的 6 份拷贝。
+    const seenText = new Set<string>();
+    let budget = maxChars;
+    for (const hit of scored) {
+      if (out.length >= k) break;
+      const used = seen.get(hit.sourceId) ?? 0;
+      if (used >= perSource) continue;
+      if (hit.text.length > budget) continue;
+      if (seenText.has(hit.text)) continue;
+      out.push(hit);
+      seen.set(hit.sourceId, used + 1);
+      seenText.add(hit.text);
+      budget -= hit.text.length;
+    }
+    return out;
+  }
+
+  stats(): { blocks: number; notes: number; ready: number; failed: number; sources: number } {
+    const blocks = this.loadBlocks();
+    const notes = this.notes();
+    return {
+      blocks: blocks.length,
+      notes: notes.length,
+      ready: notes.filter((note) => note.status === 'ready').length,
+      failed: notes.filter((note) => note.status === 'failed').length,
+      sources: new Set(blocks.map((block) => block.sourceId)).size,
+    };
+  }
+}

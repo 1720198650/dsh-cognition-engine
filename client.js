@@ -568,6 +568,8 @@ window.__ModuleLoader__.load({
         });
         const [tokenDraft, setTokenDraft] = React.useState('');
         const [notice, setNotice] = React.useState('');
+        /** 资料检索结果：null=还没查，[]=查了没命中 */
+        const [sourceHits, setSourceHits] = React.useState(null);
         const dict = pickDict(ctx);
 
         const call = (path, init) =>
@@ -578,6 +580,28 @@ window.__ModuleLoader__.load({
               ...(token ? { 'x-cognition-token': token } : {}),
             },
           });
+
+        // 长文本一律走分片上传：整段塞进 query string 会超过 Node 的请求行上限，
+        // 服务端回 431（Request Header Fields Too Large），页面只剩一条红条。
+        const uploadText = async (name, text, subject) => {
+          const beginRes = await call('/cognition-engine/inbox/upload/begin?name=' + encodeURIComponent(name), { method: 'POST' });
+          const beginData = await beginRes.json().catch(() => ({}));
+          if (!beginRes.ok || !beginData.id) throw new Error('开始上传失败：' + (beginData.error || beginRes.status));
+          const CHUNK = 400;
+          for (let i = 0; i < text.length; i += CHUNK) {
+            const piece = text.slice(i, i + CHUNK);
+            const res = await call('/cognition-engine/inbox/upload/chunk?id=' + encodeURIComponent(beginData.id) + '&text=' + encodeURIComponent(piece), { method: 'POST' });
+            if (!res.ok) {
+              const d = await res.json().catch(() => ({}));
+              throw new Error('分片上传失败（第 ' + (Math.floor(i / CHUNK) + 1) + ' 片）：' + (d.error || res.status));
+            }
+          }
+          const subjectQuery = subject && subject.length > 0 ? '&subject=' + encodeURIComponent(subject) : '';
+          const commitRes = await call('/cognition-engine/inbox/upload/commit?id=' + encodeURIComponent(beginData.id) + subjectQuery, { method: 'POST' });
+          const commitData = await commitRes.json().catch(() => ({}));
+          if (!commitRes.ok || commitData.error) throw new Error('提交失败：' + (commitData.error || commitRes.status));
+          return commitData;
+        };
 
         // 沉积页签数据：放在 call/tick 之后，否则 deps 里引用 tick 会触发 TDZ（实测导致整个面板白屏）
         React.useEffect(() => {
@@ -1345,7 +1369,8 @@ window.__ModuleLoader__.load({
             { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
             h('div', { style: S.explain }, dict.inboxHint),
             h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
-              '待审 ' + ib.stats.pending + ' 条 · 重复已丢 ' + (ib.stats.duplicate || 0) + ' 条 · 来源账本 ' + ((ib.sources && ib.sources.total) || 0) + ' 条' + (ib.sources && ib.sources.chain && ib.sources.chain.ok === false ? '（链断！）' : '')),
+              '待审 ' + ib.stats.pending + ' 条 · 重复已丢 ' + (ib.stats.duplicate || 0) + ' 条 · 来源账本 ' + ((ib.sources && ib.sources.total) || 0) + ' 条' + (ib.sources && ib.sources.chain && ib.sources.chain.ok === false ? '（链断！）' : '') +
+                (ib.library ? ' · 资料库 ' + ib.library.blocks + ' 块 / 已提炼 ' + ib.library.ready + ' 篇' : '')),
             h('input', { id: 'ibContent', placeholder: dict.inboxAddPlaceholder, style: S.input }),
             h('input', { id: 'ibSubject', placeholder: dict.inboxSubject, style: S.input }),
             h('div', { style: S.meta },
@@ -1353,8 +1378,18 @@ window.__ModuleLoader__.load({
                 const content = document.getElementById('ibContent').value.trim();
                 const subject = document.getElementById('ibSubject').value.trim();
                 if (content.length === 0) return;
-                await post('/cognition-engine/inbox/add?content=' + encodeURIComponent(content) +
-                  (subject.length === 0 ? '' : '&subject=' + encodeURIComponent(subject)));
+                if (content.length <= 800) {
+                  await post('/cognition-engine/inbox/add?content=' + encodeURIComponent(content) +
+                    (subject.length === 0 ? '' : '&subject=' + encodeURIComponent(subject)));
+                } else {
+                  // 长文本走分片，避免请求行超限（HTTP 431）
+                  try {
+                    const data = await uploadText('粘贴内容-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '') + '.txt', content, subject);
+                    window.alert('已导入为候选：' + (data.title || data.id) + '（待审里可以看到）');
+                  } catch (error) {
+                    window.alert('导入失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                }
                 setTick((v) => v + 1);
               } }, dict.inboxAddBtn),
             ),
@@ -1375,18 +1410,7 @@ window.__ModuleLoader__.load({
                   try {
                     const text = await file.text();
                     if (text.trim().length === 0) { window.alert('文件是空的'); return; }
-                    const beginRes = await call('/cognition-engine/inbox/upload/begin?name=' + encodeURIComponent(file.name), { method: 'POST' });
-                    const beginData = await beginRes.json().catch(() => ({}));
-                    if (!beginRes.ok || !beginData.id) { window.alert('开始上传失败：' + (beginData.error || beginRes.status)); return; }
-                    const CHUNK = 400;
-                    for (let i = 0; i < text.length; i += CHUNK) {
-                      const piece = text.slice(i, i + CHUNK);
-                      const res = await call('/cognition-engine/inbox/upload/chunk?id=' + encodeURIComponent(beginData.id) + '&text=' + encodeURIComponent(piece), { method: 'POST' });
-                      if (!res.ok) { const d = await res.json().catch(() => ({})); window.alert('分片上传失败：' + (d.error || res.status)); return; }
-                    }
-                    const commitRes = await call('/cognition-engine/inbox/upload/commit?id=' + encodeURIComponent(beginData.id), { method: 'POST' });
-                    const commitData = await commitRes.json().catch(() => ({}));
-                    if (!commitRes.ok || commitData.error) { window.alert('提交失败：' + (commitData.error || commitRes.status)); return; }
+                    const commitData = await uploadText(file.name, text);
                     window.alert('已导入为候选：' + (commitData.title || commitData.id) + '（待审里可以看到）');
                     event.target.value = '';
                     setTick((v) => v + 1);
@@ -1416,30 +1440,98 @@ window.__ModuleLoader__.load({
                 } }, '按路径导入'),
               ),
             ),
+            // 检索验证：放进去的东西到底能不能查到——这是"自动学"唯一可验证的证据
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 4, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
+              h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                '查一下资料库（不占每轮注入，用到时才取）：'),
+              h('div', { style: { display: 'flex', gap: 6 } },
+                h('input', { id: 'ibSearch', placeholder: '关键词，例如 memory organization / 记忆分层', style: S.input }),
+                h('button', { type: 'button', style: S.tab, onClick: async () => {
+                  const el = document.getElementById('ibSearch');
+                  const query = el ? el.value.trim() : '';
+                  if (query.length === 0) { window.alert('先填关键词'); return; }
+                  try {
+                    const res = await call('/cognition-engine/sources/search?q=' + encodeURIComponent(query));
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+                    setSourceHits(data.hits || []);
+                  } catch (error) {
+                    window.alert('检索失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                } }, '查'),
+              ),
+              sourceHits === null
+                ? null
+                : sourceHits.length === 0
+                  ? h('div', { style: S.explain }, '没有命中：可能没导入过，或换个关键词。')
+                  : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+                      ...sourceHits.map((hit, index) => h('div', { key: 'hit' + index, style: S.item },
+                        h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                          hit.title + ' · 第 ' + (hit.ord + 1) + ' 块 · 相关度 ' + hit.score.toFixed(2)),
+                        h('div', { style: { fontSize: 11 } }, hit.text.slice(0, 220) + (hit.text.length > 220 ? '…' : '')),
+                      ))),
+            ),
             pending.length === 0
               ? h('div', { style: S.explain }, dict.inboxEmpty)
               : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
-                  pending.map((cand) => h('div', { key: cand.id, style: S.item },
-                    h('div', { style: { fontSize: 12 } }, cand.title + '（重要度 ' + cand.importance + (cand.sourceId ? ' · 来源 ' + cand.sourceId : '') + '）'),
-                    h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, cand.summary || (cand.content || '').slice(0, 120)),
-                    cand.note ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)' } }, cand.note) : null,
-                    h('textarea', { id: 'ibC-' + cand.id, defaultValue: cand.content, style: Object.assign({}, S.input, { minHeight: 56, height: 56 }) }),
-                    h('input', { id: 'ibS-' + cand.id, defaultValue: cand.subject || '', placeholder: '主题（留空则按内容自动匹配）', style: S.input }),
-                    h('div', { style: S.meta },
-                      h('button', { type: 'button', style: S.tab, onClick: async () => {
-                        const c = document.getElementById('ibC-' + cand.id).value.trim();
-                        const sj = document.getElementById('ibS-' + cand.id).value.trim();
-                        await post('/cognition-engine/inbox/accept?id=' + encodeURIComponent(cand.id) +
-                          '&content=' + encodeURIComponent(c) +
-                          (sj.length === 0 ? '' : '&subject=' + encodeURIComponent(sj)));
-                        setTick((v) => v + 1);
-                      } }, dict.inboxAccept),
-                      h('button', { type: 'button', style: { ...S.tab, color: '#f85149' }, onClick: async () => {
-                        await post('/cognition-engine/inbox/reject?id=' + encodeURIComponent(cand.id));
-                        setTick((v) => v + 1);
-                      } }, dict.inboxReject),
-                    ),
-                  ))),
+                  pending.map((cand) => {
+                    // 自动学的结果：切了几块 + 摘要/结论。这里显示的才是"学成了什么"，
+                    // 不是"等你审什么"——提炼是自动的，人工只在想把它变成记忆事实时才介入。
+                    const know = cand.knowledge || { blocks: 0, note: null };
+                    const note = know.note;
+                    const statusText = note === null
+                      ? '尚未提炼'
+                      : note.status === 'ready'
+                        ? '已提炼'
+                        : note.status === 'pending'
+                          ? '提炼中…'
+                          : '提炼失败';
+                    return h('div', { key: cand.id, style: S.item },
+                      h('div', { style: { fontSize: 12 } }, cand.title + '（重要度 ' + cand.importance + (cand.sourceId ? ' · 来源 ' + cand.sourceId : '') + '）'),
+                      h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                        '已切 ' + know.blocks + ' 块供检索 · ' + statusText +
+                        (note && note.topic ? ' · 主题：' + note.topic : '')),
+                      note && note.summary ? h('div', { style: { fontSize: 11, marginTop: 2 } }, note.summary) : null,
+                      note && note.points && note.points.length > 0
+                        ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 } },
+                            ...note.points.map((point, index) => h('div', { key: 'p' + index, style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, '· ' + point)))
+                        : null,
+                      note && note.status === 'failed' && note.error
+                        ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)' } }, '提炼没成功：' + note.error)
+                        : null,
+                      cand.sourceId && (!note || note.status === 'failed')
+                        ? h('div', { style: S.meta },
+                            h('button', { type: 'button', style: S.tab, onClick: async () => {
+                              try {
+                                const res = await call('/cognition-engine/sources/redistill?sourceId=' + encodeURIComponent(cand.sourceId), { method: 'POST' });
+                                const data = await res.json().catch(() => ({}));
+                                if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+                                window.alert('提炼结果：' + (data.note && data.note.status === 'ready' ? (data.note.summary || '已完成') : (data.note && data.note.error) || '见上方'));
+                                setTick((v) => v + 1);
+                              } catch (error) {
+                                window.alert('提炼失败：' + (error instanceof Error ? error.message : String(error)));
+                              }
+                            } }, '重新提炼'))
+                        : null,
+                      cand.note ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)' } }, cand.note) : null,
+                      h('textarea', { id: 'ibC-' + cand.id, defaultValue: cand.content, style: Object.assign({}, S.input, { minHeight: 56, height: 56 }) }),
+                      h('input', { id: 'ibS-' + cand.id, defaultValue: cand.subject || '', placeholder: '主题（留空则按内容自动匹配）', style: S.input }),
+                      h('div', { style: S.meta },
+                        h('button', { type: 'button', style: S.tab, onClick: async () => {
+                          const c = document.getElementById('ibC-' + cand.id).value.trim();
+                          const sj = document.getElementById('ibS-' + cand.id).value.trim();
+                          await post('/cognition-engine/inbox/accept?id=' + encodeURIComponent(cand.id) +
+                            '&content=' + encodeURIComponent(c) +
+                            (sj.length === 0 ? '' : '&subject=' + encodeURIComponent(sj)));
+                          setTick((v) => v + 1);
+                        } }, '采用为记忆'),
+                        h('button', { type: 'button', style: { ...S.tab, color: '#f85149' }, onClick: async () => {
+                          await post('/cognition-engine/inbox/reject?id=' + encodeURIComponent(cand.id));
+                          setTick((v) => v + 1);
+                        } }, dict.inboxReject),
+                      ),
+                    );
+                  })),
             dups.length === 0 ? null : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 } },
               h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, '重复已丢（前 8 条）'),
               ...dups.map((item) => h('div', { key: item.id, style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
