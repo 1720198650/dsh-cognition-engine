@@ -90,3 +90,14 @@ export declare function parseMoment(value: unknown, now?: number): number | unde
 export declare function readBodyJson(body: string): Record<string, unknown>;
 /** 从请求体对象里取字符串字段；没有或类型不对就返回 undefined。 */
 export declare function bodyString(body: Record<string, unknown>, key: string): string | undefined;
+/**
+ * 把文件字节解成文本，自动判编码。
+ *
+ * 为什么必须判：Excel「另存为 CSV」和统计局导出的表**默认是 GBK**，
+ * 直接按 UTF-8 解就是一屏乱码（2026-11-18 用户导入 1.csv，块里全是 `������`）。
+ * 顺序：BOM（UTF-16/UTF-8）→ UTF-8 严格解码 → GBK 兜底。
+ */
+export declare function decodeTextBuffer(buf: Buffer): {
+    text: string;
+    encoding: string;
+};

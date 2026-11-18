@@ -1515,7 +1515,22 @@ window.__ModuleLoader__.load({
                   const file = event.target.files && event.target.files[0];
                   if (!file) return;
                   try {
-                    const text = await file.text();
+                    // 浏览器默认按 UTF-8 读；Excel 导出的 CSV 是 GBK，直接读就是乱码。
+                    // 先严格试 UTF-8，失败再按 GBK 解（与 serve 端 decodeTextBuffer 同一口径）。
+                    const buf = await file.arrayBuffer();
+                    let text;
+                    const head = new Uint8Array(buf.slice(0, 2));
+                    if (head[0] === 0xff && head[1] === 0xfe) {
+                      text = new TextDecoder('utf-16le').decode(buf.slice(2));
+                    } else if (head[0] === 0xfe && head[1] === 0xff) {
+                      text = new TextDecoder('utf-16be').decode(buf.slice(2));
+                    } else {
+                      try {
+                        text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
+                      } catch {
+                        text = new TextDecoder('gbk').decode(buf);
+                      }
+                    }
                     if (text.trim().length === 0) { window.alert('文件是空的'); return; }
                     const commitData = await uploadText(file.name, text);
                     window.alert('已导入为候选：' + (commitData.title || commitData.id) + '（待审里可以看到）');

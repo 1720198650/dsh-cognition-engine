@@ -23,12 +23,6 @@ export interface SourceNote {
     /** 失败原因（status='failed' 时有值） */
     error?: string;
 }
-/**
- * 切块：先按空行分段，长段再按句切，最后贪心合并到目标长度。
- *
- * 目标 600 字是权衡结果：再大则检索命中后塞进上下文的噪声太多，
- * 再小则一句话的上下文被切断。
- */
 export declare function chunkText(text: string, options?: {
     target?: number;
     max?: number;

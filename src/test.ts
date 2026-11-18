@@ -59,7 +59,7 @@ import { inspectRequirement } from './ambiguity.ts';
 import { completionNeedsEvidence } from './task_manager.ts';
 import { TopicStore } from './topics.ts';
 import { buildDistillPrompt, parseDistillResult } from './distill.ts';
-import { dataDir, expandHome, packageRoot, resolveDataFile, resolveUserPath } from './util.ts';
+import { dataDir, decodeTextBuffer, expandHome, packageRoot, resolveDataFile, resolveUserPath } from './util.ts';
 import { JsonStateStore } from './persist.ts';
 import {
   DialecticalReflectionEngine,
@@ -4328,7 +4328,44 @@ async function main(): Promise<void> {
     assert.equal(scoreQuery('量子色动力学', zh), 0, '无关中文查询不命中');
   });
 
-  section('[60] 资料提炼：提示词给主题线索，解析要挑剔');  await test('解析模型输出：能抠出 JSON，缺字段直接报错而不是瞎编', () => {
+  await test('表格按整行切，每块都带表头（不能把一行劈开）', () => {
+    const header = '指标,本期值,同比';
+    const rows = Array.from({ length: 80 }, (_, i) => `第${i + 1}项投资,${1000 + i}.5,${(i % 7) - 3}.2`);
+    const csv = [header, ...rows].join('\n');
+    const pieces = chunkText(csv, { target: 600, max: 1200 });
+    assert.ok(pieces.length > 1, '大表必须切成多块');
+    for (const piece of pieces) {
+      const lines = piece.split('\n');
+      assert.equal(lines[0], header, '每块第一行都应是表头');
+      for (const line of lines.slice(1)) {
+        assert.equal(line.split(',').length, 3, '不能出现被劈开的半行：' + line);
+        assert.ok(line.length > 0);
+      }
+    }
+    // 所有行都必须在，且不能重复
+    const seen = pieces.flatMap((piece) => piece.split('\n').slice(1));
+    assert.equal(seen.length, rows.length, '行数不能多也不能少');
+    assert.equal(new Set(seen).size, rows.length, '不能有重复行');
+  });
+
+  section('[63] 文件编码：GBK 表格不能读成乱码');
+  await test('UTF-8/GBK/UTF-16 都能正确解码，不乱码', () => {
+    const gbk = Buffer.from([0xd6, 0xb8, 0xb1, 0xea, 0x2c, 0xd6, 0xb5, 0x0a]); // "指标,值\n" 的 GBK 编码
+    const decodedGbk = decodeTextBuffer(gbk);
+    assert.equal(decodedGbk.encoding, 'gbk', '非 UTF-8 字节应回退 GBK');
+    assert.equal(decodedGbk.text.trim(), '指标,值');
+
+    const utf8 = decodeTextBuffer(Buffer.from('指标,值\n', 'utf8'));
+    assert.equal(utf8.encoding, 'utf-8');
+    assert.equal(utf8.text.trim(), '指标,值');
+
+    const utf16 = decodeTextBuffer(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('指标,值', 'utf16le')]));
+    assert.equal(utf16.encoding, 'utf-16le', '带 BOM 的 UTF-16 要认出来');
+    assert.equal(utf16.text.trim(), '指标,值');
+  });
+
+  section('[60] 资料提炼：提示词给主题线索，解析要挑剔');
+  await test('解析模型输出：能抠出 JSON，缺字段直接报错而不是瞎编', () => {
     const good = parseSourceNote(
       '这是解释性废话\n```json\n{"summary":"讲三层记忆","points":["来源不可变","核心层有界"],"topic":"记忆分层"}\n```',
     );

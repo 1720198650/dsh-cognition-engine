@@ -49,7 +49,7 @@ import type { TemporalFact } from './memory.ts';
 import { JsonStateStore } from './persist.ts';
 import { buildDetail, buildCoreDigest } from './views.ts';
 import { DialecticalReflectionEngine, MockDialecticalLLM, ReflectionWorker } from './reflection.ts';
-import { assertObjectSchema, asRecord, bodyString, dataDir, expandHome, messageOf, migrateLegacyData, parseMoment, readBodyJson, requireString, textOutput } from './util.ts';
+import { assertObjectSchema, asRecord, bodyString, dataDir, decodeTextBuffer, expandHome, messageOf, migrateLegacyData, parseMoment, readBodyJson, requireString, textOutput } from './util.ts';
 import { createTools } from './tools.ts';
 import { ProactiveGate } from './proactive.ts';
 import { ProactiveStore, scoreScan } from './proactive_scan.ts';
@@ -3232,8 +3232,10 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         if (info.size > 4 * 1024 * 1024) throw new Error('文件太大（>4MB）：先截取片段再放');
         const buf = readFileSync(filePath);
         if (buf.includes(0)) throw new Error('看起来是二进制文件，只能导入纯文本');
+        // 编码要判：Excel/统计局导出的 CSV 默认是 GBK，按 UTF-8 读就是一屏乱码
+        const decoded = decodeTextBuffer(buf);
         // 文件导入给更大上限：论文 HTML 光导航就几千字，6000 会只截到菜单
-        const text = extractText(buf.toString('utf8'), { maxChars: 20000 });
+        const text = extractText(decoded.text, { maxChars: 20000 });
         const source = sources.append({
           kind: 'file',
           title: filePath.split(/[\\/]/).pop() ?? filePath,
