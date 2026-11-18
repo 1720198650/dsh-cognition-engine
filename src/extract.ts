@@ -110,7 +110,19 @@ export function extractText(raw: string, options: { maxChars?: number } = {}): E
   // 0) 视觉隐藏的元素整段剔除（要在剥标签之前，否则和正文无法区分）
   text = stripHiddenSubtrees(text, flags);
   // 链接堆（导航/侧栏）整块扔掉：它们会吃掉 2 万字预算
+  // 注意：算"剩多少正文"时必须先排掉 script/style——否则一个 200KB 的脚本页
+  // 会被算成"还剩十几万字"，目录页判断永远不成立（2026-11-18 MDN 实测踩到）
+  const plainText = (html: string): string =>
+    html
+      .replace(/<(script|style|iframe|noscript)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   text = stripLinkDenseChunks(text, flags);
+  const plainAfter = plainText(text).length;
+  // 目录/索引页：剔掉链接堆之后只剩几百字，说明这页本来就是"一堆链接"。
+  // 不拦，但要标出来——否则会出现"抓了 230KB 只得到 446 字"却不知道为什么。
+  if (flags.has('link-dense') && plainAfter < 1000) flags.add('index-page');
   // 白字只是可疑，不删：删了会掩盖攻击痕迹
   if (/style\s*=\s*["'][^"']*color\s*:\s*(?:#fff(?:fff)?|white|rgb\(\s*255\s*,\s*255\s*,\s*255\s*\))/i.test(text)) {
     flags.add('invisible-color');

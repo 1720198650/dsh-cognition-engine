@@ -4546,6 +4546,17 @@ async function main(): Promise<void> {
     assert.ok(!result.text.includes('导航项 29'), '导航项应被丢掉');
   });
 
+  await test('整页都是链接的目录页要标 index-page（否则"抓了 230KB 只得 446 字"说不清）', () => {
+    const indexPage = Array.from({ length: 200 }, (_, i) => `<div><a href="/doc${i}">文档条目第 ${i} 篇的完整标题在这里</a></div>`).join('');
+    const result = extractText(`<html><body>${indexPage}</body></html>`, { maxChars: 20000 });
+    assert.ok(result.flags.includes('index-page'), '目录页应标 index-page：' + result.flags.join(','));
+    assert.ok(result.text.length < 500, '目录页正文本来就少');
+
+    const article = '<article>' + '<p>' + '这是一篇正常文章的段落，内容充实。'.repeat(80) + '</p></article>';
+    const normal = extractText(article, { maxChars: 20000 });
+    assert.ok(!normal.flags.includes('index-page'), '正常文章不该被误判为目录页');
+  });
+
   section('[68] robots 规范细节：* 与 $ 是 MUST，同名 UA 要合并');
   await test('`*` 通配与 `$` 锚点按 RFC 9309 生效', () => {
     const rules = parseRobots(['User-agent: *', 'Disallow: *.gif$'].join('\n'), DEFAULT_POLICY.userAgent);

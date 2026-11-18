@@ -1608,7 +1608,9 @@ window.__ModuleLoader__.load({
                     const res = await call('/cognition-engine/fetch/import?url=' + encodeURIComponent(target), { method: 'POST' });
                     const data = await res.json().catch(() => ({}));
                     if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
-                    window.alert('已抓取：' + data.chars + ' 字，' + data.sourceId + (data.flags && data.flags.length > 0 ? '（含可疑句式：' + data.flags.join('、') + '）' : ''));
+                    window.alert('已抓取：' + data.chars + ' 字，' + data.sourceId +
+                      (data.flags && data.flags.length > 0 ? '（含标记：' + data.flags.join('、') + '）' : '') +
+                      (data.hint ? '\n\n' + data.hint : ''));
                     setTick((v) => v + 1);
                   } catch (error) {
                     window.alert('抓取失败：' + (error instanceof Error ? error.message : String(error)));

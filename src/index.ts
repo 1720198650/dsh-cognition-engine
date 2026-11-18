@@ -1104,7 +1104,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     const title = host + url.pathname;
     const source = sources.append({
       kind: 'web',
-      title: title + url.pathname,
+      title,
       content: extracted.text,
       locator: page.finalUrl,
     });
@@ -1116,7 +1116,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     const cand = inbox.add(
       {
         content: extracted.text,
-        title: title + url.pathname,
+        title,
         url: page.finalUrl,
         sourceId: source.id,
         note:
@@ -1135,6 +1135,13 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       chars: extracted.text.length,
       flags: extracted.flags,
       truncated: page.reason ?? null,
+      // 抓到了但内容很少时要说清原因，别让用户以为抓失败
+      hint:
+        extracted.flags.includes('index-page')
+          ? '这页像目录/索引页，正文只有 ' + extracted.text.length + ' 字（链接被剔掉了）。抓具体文章页更有用。'
+          : extracted.text.length < 800
+            ? '正文只有 ' + extracted.text.length + ' 字：太短，只存原文供检索，不会提炼结论。'
+            : null,
     };
   };
 
