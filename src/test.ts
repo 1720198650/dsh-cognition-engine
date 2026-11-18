@@ -50,6 +50,7 @@ import { SourceStore } from './sources.ts';
 import { SourceLibrary, chunkText, isPathOnlyBlock, scoreQuery } from './source_library.ts';
 import { DEFAULT_POLICY, FetchThrottle, WhitelistStore, checkUrl, parseRobots } from './web_fetch.ts';
 import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts';
+import { buildSearchQueries, pickSources } from './autolearn.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote } from './source_note.ts';
 import { summarizeUsage } from './usage.ts';
 import { resolveInjectMode } from './settings.ts';
@@ -4690,6 +4691,31 @@ async function main(): Promise<void> {
     assert.equal(drafts[0]!.anchor.quote, '每份摘要链接回原始交互作为证据');
     assert.equal(drafts[1]!.anchor.block, 1);
     assert.ok(drafts.every((draft) => draft.anchor.type === 'source' && draft.anchor.ref === 'src-9'));
+  });
+
+  section('[70] 自动学习：检索词生成与来源挑选');
+  await test('把一句纠正压成检索词；空话不生成', () => {
+    const queries = buildSearchQueries('我刚才的意思是，不普遍适用的结论要标出来');
+    assert.ok(queries.length >= 1);
+    assert.ok(queries[0]!.length > 0 && queries[0]!.length <= 40, queries[0]!);
+    assert.equal(buildSearchQueries('   ').length, 0, '空内容不生成检索词');
+  });
+
+  await test('挑来源：只留 http(s)、跳过压缩包、同域名只取一条', () => {
+    const picked = pickSources(
+      [
+        { url: 'https://a.example/doc', title: 'A', summary: '很详细的摘要' },
+        { url: 'https://a.example/other', title: 'A2', summary: '同站第二条摘要' },
+        { url: 'https://b.example/x.zip', title: '压缩包' },
+        { url: 'ftp://c.example/x', title: 'FTP' },
+        { url: 'https://d.example/page', title: 'D', snippet: '有片段' },
+      ],
+      2,
+    );
+    assert.ok(picked.length <= 2, String(picked.length));
+    assert.ok(picked.every((item) => item.url.startsWith('https://')), JSON.stringify(picked));
+    assert.equal(new Set(picked.map((item) => new URL(item.url).hostname)).size, picked.length, '同域名不能重复');
+    assert.ok(!picked.some((item) => item.url.endsWith('.zip')));
   });
 
   section('[63] 文件编码：GBK 表格不能读成乱码');  await test('UTF-8/GBK/UTF-16 都能正确解码，不乱码', () => {

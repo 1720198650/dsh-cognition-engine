@@ -11,6 +11,10 @@ export type InjectMode = 'off' | 'index' | 'full';
 
 export interface PersistedSettings {
   injectMode?: InjectMode;
+  /** 自动联网学习：出现纠正/缺口时自己检索并抓资料。默认关。 */
+  autoLearn?: boolean;
+  /** 自动修订：学到更普适的版本时自动改之前学的。默认关，且必须留存档。 */
+  autoRevise?: boolean;
 }
 
 export function isInjectMode(value: unknown): value is InjectMode {
@@ -59,6 +63,17 @@ export class SettingsStore {
 
   writeInjectMode(mode: InjectMode): PersistedSettings {
     const next: PersistedSettings = { ...this.read(), injectMode: mode };
+    mkdirSync(dirname(this.filePath), { recursive: true });
+    writeFileSync(this.filePath, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+    this.cached = next;
+    return next;
+  }
+
+  /** 改自动学习/自动修订开关（面板按钮）。 */
+  writeToggles(patch: { autoLearn?: boolean; autoRevise?: boolean }): PersistedSettings {
+    const next: PersistedSettings = { ...this.read() };
+    if (patch.autoLearn !== undefined) next.autoLearn = patch.autoLearn;
+    if (patch.autoRevise !== undefined) next.autoRevise = patch.autoRevise;
     mkdirSync(dirname(this.filePath), { recursive: true });
     writeFileSync(this.filePath, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
     this.cached = next;

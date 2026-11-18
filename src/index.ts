@@ -12,8 +12,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { basename, join } from 'node:path';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 
 import { GapStore } from './gaps.ts';
 import { PlaybookEventLog } from './events.ts';
@@ -35,6 +35,7 @@ import { CandidateInbox } from './inbox.ts';
 import { SourceStore } from './sources.ts';
 import { SourceLibrary, type SourceNote } from './source_library.ts';
 import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts';
+import { buildSearchQueries, pickSources, type AutoLearnRecord } from './autolearn.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote, fallbackNote } from './source_note.ts';
 import {
   DEFAULT_POLICY,
@@ -1029,8 +1030,100 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     });
   };
 
-  // —— L2 白名单抓取：唯一会主动联网的地方 ——
-  const whitelist = new WhitelistStore({ filePath: join(dataDir(), 'cognition-whitelist.json') });  const throttle = new FetchThrottle();
+  // —— 自动学习：走宿主 web 服务（DeepSeek 官方搜索），不需要自己维护白名单 ——
+  const autoLearnLogFile = join(dataDir(), 'cognition-autolearn.jsonl');
+  const readAutoLearn = (limit = 20): AutoLearnRecord[] => {
+    if (!existsSync(autoLearnLogFile)) return [];
+    const rows: AutoLearnRecord[] = [];
+    for (const line of readFileSync(autoLearnLogFile, 'utf8').replace(/^\uFEFF/, '').split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
+      try {
+        rows.push(JSON.parse(trimmed) as AutoLearnRecord);
+      } catch {
+        continue;
+      }
+    }
+    return rows.slice(-Math.max(1, limit)).reverse();
+  };
+  const recordAutoLearn = (record: AutoLearnRecord): void => {
+    try {
+      mkdirSync(dirname(autoLearnLogFile), { recursive: true });
+      appendFileSync(autoLearnLogFile, `${JSON.stringify(record)}\n`, 'utf8');
+    } catch (error) {
+      ctx.logger?.warn?.(`cognition-engine: 自动学习日志写入失败 ${messageOf(error)}`);
+    }
+  };
+  const autoToggles = (): { autoLearn: boolean; autoRevise: boolean } => {
+    const saved = settings.read();
+    return { autoLearn: saved.autoLearn === true, autoRevise: saved.autoRevise === true };
+  };
+
+  /**
+   * 自动联网学习：一句话 → 检索 → 抓正文 → 进资料层（切块+提炼+候选）。
+   *
+   * 用宿主的 ctx.web（DeepSeek 官方搜索）而不是我们自己抓：不维护白名单、
+   * 也不用担心 robots——provider 层已经处理。默认关闭，只在开关打开时被调用。
+   */
+  const importFromSearch = async (
+    text: string,
+    reason: AutoLearnRecord['reason'],
+  ): Promise<{ queries: string[]; imported: AutoLearnRecord['imported']; failed: AutoLearnRecord['failed']; provider: string | null }> => {
+    const web = ctx.get?.('web') as
+      | {
+          search?: (request: { query: string; maxResults?: number; llmProvider?: string }, signal?: AbortSignal) => Promise<{ sources: Array<{ url: string; title?: string; snippet?: string; summary?: string }> }>;
+          fetch?: (request: { url: string }, signal?: AbortSignal) => Promise<{ statusCode: number; body: { kind: 'html' | 'text'; content: string } }>;
+        }
+      | undefined;
+    if (web === undefined || typeof web.search !== 'function' || typeof web.fetch !== 'function') {
+      throw new Error('宿主没有提供 web 服务（搜索/抓取），自动学习不可用');
+    }
+    const queries = buildSearchQueries(text);
+    if (queries.length === 0) throw new Error('没有可检索的内容');
+    const imported: AutoLearnRecord['imported'] = [];
+    const failed: AutoLearnRecord['failed'] = [];
+    for (const query of queries) {
+      const { provider, model } = resolveModel();
+      const result = await web.search({ query, maxResults: 5, ...(provider === '' ? {} : { llmProvider: provider }) });
+      const picked = pickSources(result.sources ?? [], 2);
+      if (picked.length === 0) {
+        failed.push({ url: '(无结果)', reason: '这个检索词没搜到可用页面' });
+        continue;
+      }
+      for (const source of picked) {
+        try {
+          const page = await web.fetch({ url: source.url });
+          if (page.statusCode >= 400) {
+            failed.push({ url: source.url, reason: 'HTTP ' + page.statusCode });
+            continue;
+          }
+          const extracted = extractText(page.body.content, { maxChars: 20000 });
+          if (extracted.text.trim().length === 0) {
+            failed.push({ url: source.url, reason: '抽不出正文' });
+            continue;
+          }
+          const record = sources.append({
+            kind: 'web',
+            title: source.title ?? source.url,
+            content: extracted.text,
+            locator: source.url,
+          });
+          ingestSource(record);
+          imported.push({ sourceId: record.id, url: source.url, chars: extracted.text.length });
+        } catch (error) {
+          failed.push({ url: source.url, reason: messageOf(error) });
+        }
+      }
+      void model;
+      if (imported.length > 0) break; // 一个问题学到东西就停，别把检索词都跑一遍烧钱
+    }
+    recordAutoLearn({ at: Date.now(), reason, query: queries[0] ?? text.slice(0, 60), imported, failed });
+    return { queries, imported, failed, provider: null };
+  };
+
+  // —— L2 白名单抓取：手动指定站点时走这里；自动学习走上面的 ctx.web ——
+  const whitelist = new WhitelistStore({ filePath: join(dataDir(), 'cognition-whitelist.json') });
+  const throttle = new FetchThrottle();
   /** robots 按站点缓存一个进程生命周期，别每次抓都重新拉 */
   const robotsCache = new Map<string, RobotsRules>();
   const fetchPolicy = (): FetchPolicy => ({
@@ -3240,6 +3333,48 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       },
       { method: 'POST', requireAuth: explicitLock },
     );
+    // —— 自动学习：开关 + 手动触发 + 日志 ——
+    route('/cognition-engine/autolearn/status', () => {
+      const toggles = autoToggles();
+      const web = ctx.get?.('web') as { search?: unknown; fetch?: unknown } | undefined;
+      return {
+        ...toggles,
+        webAvailable: web !== undefined && typeof web.search === 'function' && typeof web.fetch === 'function',
+        recent: readAutoLearn(10),
+      };
+    });
+    route(
+      '/cognition-engine/autolearn/run',
+      async (url, body) => {
+        const toggles = autoToggles();
+        if (!toggles.autoLearn) throw new Error('自动联网学习是关着的：先在设置里打开（避免在我不知情的时候花你的钱）');
+        const json = readBodyJson(body);
+        const text = (url.searchParams.get('text') ?? bodyString(json, 'text') ?? '').trim();
+        if (text.length === 0) throw new Error('需要 text（要学什么）');
+        const result = await importFromSearch(text, 'manual');
+        return result;
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+    route(
+      '/cognition-engine/autolearn/toggle',
+      (url, body) => {
+        const json = readBodyJson(body);
+        const readFlag = (name: 'autoLearn' | 'autoRevise'): boolean | undefined => {
+          const raw = url.searchParams.get(name) ?? bodyString(json, name);
+          if (raw === null || raw === undefined) return undefined;
+          return raw === 'true' || raw === '1';
+        };
+        const patch = { autoLearn: readFlag('autoLearn'), autoRevise: readFlag('autoRevise') };
+        const next = settings.writeToggles({
+          ...(patch.autoLearn === undefined ? {} : { autoLearn: patch.autoLearn }),
+          ...(patch.autoRevise === undefined ? {} : { autoRevise: patch.autoRevise }),
+        });
+        return { autoLearn: next.autoLearn === true, autoRevise: next.autoRevise === true };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
     // —— L3 学习候选：事实 / 准则 / 技能，全部带外部锚 ——
     const anchorLookup = {
       blockText: (sourceId: string, block: number): string | undefined =>

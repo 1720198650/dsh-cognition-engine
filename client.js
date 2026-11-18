@@ -578,6 +578,8 @@ window.__ModuleLoader__.load({
         const [fetchInfo, setFetchInfo] = React.useState(null);
         /** L3 学习候选：{items, stats} */
         const [learnInfo, setLearnInfo] = React.useState(null);
+        /** 自动学习开关状态：{autoLearn, autoRevise, webAvailable, recent} */
+        const [autoInfo, setAutoInfo] = React.useState(null);
         const dict = pickDict(ctx);
 
         const call = (path, init) =>
@@ -617,9 +619,14 @@ window.__ModuleLoader__.load({
           let alive = true;
           (async () => {
             try {
-              const res = await call('/cognition-engine/learn/list?status=pending', { cache: 'no-store' });
-              const data = await res.json();
+              const [listRes, autoRes] = await Promise.all([
+                call('/cognition-engine/learn/list?status=pending', { cache: 'no-store' }),
+                call('/cognition-engine/autolearn/status', { cache: 'no-store' }),
+              ]);
+              const data = await listRes.json();
               if (alive) setLearnInfo(data);
+              const auto = await autoRes.json().catch(() => null);
+              if (alive) setAutoInfo(auto);
             } catch {
               if (alive) setLearnInfo(null);
             }
@@ -1845,6 +1852,50 @@ window.__ModuleLoader__.load({
           body = h(
             'div',
             { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+            // 自动学习开关：默认关，打开后才会自己检索花钱
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, paddingBottom: 8, borderBottom: '1px solid var(--dsw-alias-border-l1)' } },
+              h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+                h('button', { type: 'button', style: S.tab, onClick: async () => {
+                  const next = !(autoInfo && autoInfo.autoLearn);
+                  try {
+                    const res = await call('/cognition-engine/autolearn/toggle?autoLearn=' + next, { method: 'POST' });
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    setTick((v) => v + 1);
+                  } catch (error) {
+                    window.alert('切换失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                } }, '自动联网学习：' + (autoInfo && autoInfo.autoLearn ? '开' : '关')),
+                h('button', { type: 'button', style: S.tab, onClick: async () => {
+                  const next = !(autoInfo && autoInfo.autoRevise);
+                  try {
+                    const res = await call('/cognition-engine/autolearn/toggle?autoRevise=' + next, { method: 'POST' });
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    setTick((v) => v + 1);
+                  } catch (error) {
+                    window.alert('切换失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                } }, '自动修订：' + (autoInfo && autoInfo.autoRevise ? '开（会标注+留存档）' : '关')),
+                h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                  autoInfo && autoInfo.webAvailable === false ? '宿主没有搜索服务' : '检索走宿主 web 服务（DeepSeek 官方搜索）'),
+              ),
+              h('div', { style: { display: 'flex', gap: 6 } },
+                h('input', { id: 'alText', placeholder: '让它立刻学一次：填要搞清楚的问题', style: S.input }),
+                h('button', { type: 'button', style: S.tab, onClick: async () => {
+                  const el = document.getElementById('alText');
+                  const text = el ? el.value.trim() : '';
+                  if (text.length === 0) { window.alert('先填要学什么'); return; }
+                  try {
+                    const res = await call('/cognition-engine/autolearn/run?text=' + encodeURIComponent(text), { method: 'POST' });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+                    window.alert('学到 ' + (data.imported || []).length + ' 篇：\n' + (data.imported || []).map((item) => item.sourceId + ' ' + item.url).join('\n'));
+                    setTick((v) => v + 1);
+                  } catch (error) {
+                    window.alert('学习失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                } }, '学一次'),
+              ),
+            ),
             h('div', { style: S.explain }, '学习候选：从资料里提炼出的结论，每条都能点开核对原文块。锚核不到的不会出现在这里。'),
             h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
               h('button', { type: 'button', style: S.tab, onClick: async () => {
