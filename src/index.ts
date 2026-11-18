@@ -358,6 +358,8 @@ export interface CognitionConfig {
   fetchTimeoutMs?: number;
   /** L2 单页最大字节，默认 2MB。 */
   fetchMaxBytes?: number;
+  /** L2 允许抓本机回环（只给本地自测用），默认 false。 */
+  fetchAllowLoopback?: boolean;
 }
 
 type ResolvedConfig = Required<
@@ -502,6 +504,7 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     pricePerMTokens: numberOr(config.pricePerMTokens, 2),
     fetchTimeoutMs: Math.max(1000, numberOr(config.fetchTimeoutMs, DEFAULT_POLICY.timeoutMs)),
     fetchMaxBytes: Math.max(64 * 1024, numberOr(config.fetchMaxBytes, DEFAULT_POLICY.maxBytes)),
+    fetchAllowLoopback: config.fetchAllowLoopback === true,
     probeMaxTurns: Math.max(10, Math.round(numberOr(config.probeMaxTurns, 60))),
     probeMinOverlap: Math.min(0.9, Math.max(0.1, numberOr(config.probeMinOverlap, 0.3))),
     probeMaxCounter: Math.max(1, Math.round(numberOr(config.probeMaxCounter, 2))),
@@ -1032,6 +1035,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     hosts: whitelist.list(),
     ...(config.fetchTimeoutMs === undefined ? {} : { timeoutMs: config.fetchTimeoutMs }),
     ...(config.fetchMaxBytes === undefined ? {} : { maxBytes: config.fetchMaxBytes }),
+    allowLoopback: config.fetchAllowLoopback === true,
   });
 
   const readRobots = async (origin: string, host: string, policy: FetchPolicy): Promise<RobotsRules> => {

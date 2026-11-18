@@ -10,6 +10,11 @@ export interface FetchPolicy {
     /** 最大重定向次数。 */
     maxRedirects: number;
     userAgent: string;
+    /**
+     * 允许抓本机回环地址。**只给本地自测用**，默认 false。
+     * 生产语义是「封内网」，打开它会破坏这条保证，所以必须显式开。
+     */
+    allowLoopback?: boolean;
 }
 export declare const DEFAULT_POLICY: Omit<FetchPolicy, 'hosts'>;
 export interface UrlCheck {

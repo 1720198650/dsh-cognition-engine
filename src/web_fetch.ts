@@ -28,6 +28,11 @@ export interface FetchPolicy {
   /** 最大重定向次数。 */
   maxRedirects: number;
   userAgent: string;
+  /**
+   * 允许抓本机回环地址。**只给本地自测用**，默认 false。
+   * 生产语义是「封内网」，打开它会破坏这条保证，所以必须显式开。
+   */
+  allowLoopback?: boolean;
 }
 
 export const DEFAULT_POLICY: Omit<FetchPolicy, 'hosts'> = {
@@ -36,6 +41,7 @@ export const DEFAULT_POLICY: Omit<FetchPolicy, 'hosts'> = {
   timeoutMs: 15000,
   maxRedirects: 3,
   userAgent: 'dsh-cognition-engine/0.13 (+local reading assistant)',
+  allowLoopback: false,
 };
 
 const PRIVATE_HOST = /^(localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|::1|\[::1\])$/i;
@@ -72,7 +78,7 @@ export function checkUrl(raw: string, policy: FetchPolicy): UrlCheck {
   }
   const host = url.hostname.toLowerCase();
   if (host.length === 0) return { ok: false, reason: '网址没有域名' };
-  if (isPrivateHost(host)) {
+  if (isPrivateHost(host) && policy.allowLoopback !== true) {
     return { ok: false, reason: '拒绝抓取本机/内网地址（' + host + '）' };
   }
   const hosts = policy.hosts.map((item) => item.trim().toLowerCase()).filter((item) => item.length > 0);

@@ -69,6 +69,7 @@
     "eval:node": "node src/eval.ts",
     "prepublishOnly": "npm run build",
     "check:injection": "node scripts/check-injection.mjs",
+    "l2:selftest": "node scripts/l2-selftest.mjs",
     "brief": "node scripts/task-brief.mjs",
     "ab:brief": "node scripts/ab-brief.mjs"
   },

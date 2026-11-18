@@ -217,6 +217,8 @@ export interface CognitionConfig {
     fetchTimeoutMs?: number;
     /** L2 单页最大字节，默认 2MB。 */
     fetchMaxBytes?: number;
+    /** L2 允许抓本机回环（只给本地自测用），默认 false。 */
+    fetchAllowLoopback?: boolean;
 }
 export declare const name = "cognition-engine";
 /** 需要 tools 服务才能注册工具。 */
