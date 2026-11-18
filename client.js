@@ -574,6 +574,8 @@ window.__ModuleLoader__.load({
         const [sourceList, setSourceList] = React.useState(null);
         /** 正在二次确认删除的 sourceId（null=没有） */
         const [deleteConfirm, setDeleteConfirm] = React.useState(null);
+        /** L2 抓取白名单：{hosts, policy} */
+        const [fetchInfo, setFetchInfo] = React.useState(null);
         const dict = pickDict(ctx);
 
         const call = (path, init) =>
@@ -613,9 +615,14 @@ window.__ModuleLoader__.load({
           let alive = true;
           (async () => {
             try {
-              const res = await call('/cognition-engine/sources/list', { cache: 'no-store' });
-              const data = await res.json();
+              const [listRes, wlRes] = await Promise.all([
+                call('/cognition-engine/sources/list', { cache: 'no-store' }),
+                call('/cognition-engine/fetch/whitelist', { cache: 'no-store' }),
+              ]);
+              const data = await listRes.json();
               if (alive) setSourceList(data);
+              const wl = await wlRes.json().catch(() => null);
+              if (alive) setFetchInfo(wl);
             } catch {
               if (alive) setSourceList(null);
             }
@@ -1582,6 +1589,65 @@ window.__ModuleLoader__.load({
                   }
                 } }, '按路径导入'),
               ),
+            ),
+            // L2：白名单内的网页可以直接抓进来（默认空白名单＝一律拒绝）
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 6, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
+              h('div', { style: { display: 'flex', gap: 6 } },
+                h('input', { id: 'ibUrl', placeholder: '从网址导入：https://…（域名须在白名单）', style: S.input }),
+                h('button', { type: 'button', style: S.tab, onClick: async () => {
+                  const el = document.getElementById('ibUrl');
+                  const target = el ? el.value.trim() : '';
+                  if (target.length === 0) { window.alert('先填网址'); return; }
+                  try {
+                    const res = await call('/cognition-engine/fetch/import?url=' + encodeURIComponent(target), { method: 'POST' });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+                    window.alert('已抓取：' + data.chars + ' 字，' + data.sourceId + (data.flags && data.flags.length > 0 ? '（含可疑句式：' + data.flags.join('、') + '）' : ''));
+                    setTick((v) => v + 1);
+                  } catch (error) {
+                    window.alert('抓取失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                } }, '抓取'),
+              ),
+              h('div', { style: { display: 'flex', gap: 6 } },
+                h('input', { id: 'ibHost', placeholder: '加白名单：example.com', style: S.input }),
+                h('button', { type: 'button', style: S.tab, onClick: async () => {
+                  const el = document.getElementById('ibHost');
+                  const host = el ? el.value.trim() : '';
+                  if (host.length === 0) { window.alert('先填域名'); return; }
+                  try {
+                    const res = await call('/cognition-engine/fetch/whitelist?action=add&host=' + encodeURIComponent(host), { method: 'GET' });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+                    if (el) el.value = '';
+                    setTick((v) => v + 1);
+                  } catch (error) {
+                    window.alert('加白名单失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                } }, '加白名单'),
+              ),
+              h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                fetchInfo === null || !fetchInfo.hosts || fetchInfo.hosts.length === 0
+                  ? '白名单是空的：现在是"完全不联网"状态。填个域名加进来才会抓取，且只抓这个站。'
+                  : '白名单（' + fetchInfo.hosts.length + '）：' + fetchInfo.hosts.join('、'),
+              ),
+              fetchInfo !== null && fetchInfo.hosts && fetchInfo.hosts.length > 0
+                ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                    ...fetchInfo.hosts.map((host) => h('button', {
+                      key: 'wl-' + host,
+                      type: 'button',
+                      style: { ...S.tab, fontSize: 11 },
+                      onClick: async () => {
+                        try {
+                          const res = await call('/cognition-engine/fetch/whitelist?action=remove&host=' + encodeURIComponent(host), { method: 'GET' });
+                          if (!res.ok) throw new Error('HTTP ' + res.status);
+                          setTick((v) => v + 1);
+                        } catch (error) {
+                          window.alert('移除失败：' + (error instanceof Error ? error.message : String(error)));
+                        }
+                      },
+                    }, '移除 ' + host)))
+                : null,
             ),
             pending.length === 0
               ? null

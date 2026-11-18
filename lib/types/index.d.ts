@@ -213,6 +213,10 @@ export interface CognitionConfig {
     sedimentShadow?: boolean;
     /** 语义判定通道：'rules' 规则兜底（默认）/ 'llm' 走真实模型五分类。 */
     sedimentJudge?: 'rules' | 'llm';
+    /** L2 抓取超时毫秒，默认 15000。 */
+    fetchTimeoutMs?: number;
+    /** L2 单页最大字节，默认 2MB。 */
+    fetchMaxBytes?: number;
 }
 export declare const name = "cognition-engine";
 /** 需要 tools 服务才能注册工具。 */
