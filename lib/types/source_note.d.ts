@@ -43,6 +43,7 @@ export declare function buildSourceNotePrompt(input: {
 export declare function parseSourceNote(raw: string): {
     summary: string;
     points: string[];
+    quotes: string[];
     topic?: string;
 };
 /**

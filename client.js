@@ -576,6 +576,8 @@ window.__ModuleLoader__.load({
         const [deleteConfirm, setDeleteConfirm] = React.useState(null);
         /** L2 抓取白名单：{hosts, policy} */
         const [fetchInfo, setFetchInfo] = React.useState(null);
+        /** L3 学习候选：{items, stats} */
+        const [learnInfo, setLearnInfo] = React.useState(null);
         const dict = pickDict(ctx);
 
         const call = (path, init) =>
@@ -608,6 +610,24 @@ window.__ModuleLoader__.load({
           if (!commitRes.ok || commitData.error) throw new Error('提交失败：' + (commitData.error || commitRes.status));
           return commitData;
         };
+
+        // 学习候选：只在学习页签拉
+        React.useEffect(() => {
+          if (tab !== 'learning') return undefined;
+          let alive = true;
+          (async () => {
+            try {
+              const res = await call('/cognition-engine/learn/list?status=pending', { cache: 'no-store' });
+              const data = await res.json();
+              if (alive) setLearnInfo(data);
+            } catch {
+              if (alive) setLearnInfo(null);
+            }
+          })();
+          return () => {
+            alive = false;
+          };
+        }, [tab, tick]);
 
         // 资料库列表：收件页的主体不是"待审"，而是"已经进来了些什么、学到哪一步"
         React.useEffect(() => {
@@ -1820,7 +1840,72 @@ window.__ModuleLoader__.load({
                   ))),
           );
         } else if (tab === 'learning') {
-          body = h(LearningEmbedded, { variant: 'embedded' });
+          // L3：资料/经验 → 事实/准则/技能候选，每条必须带外部锚
+          const pendingCands = (learnInfo && Array.isArray(learnInfo.items)) ? learnInfo.items : [];
+          body = h(
+            'div',
+            { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+            h('div', { style: S.explain }, '学习候选：从资料里提炼出的结论，每条都能点开核对原文块。锚核不到的不会出现在这里。'),
+            h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+              h('button', { type: 'button', style: S.tab, onClick: async () => {
+                try {
+                  const res = await call('/cognition-engine/learn/generate', { method: 'POST' });
+                  const data = await res.json().catch(() => ({}));
+                  if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+                  window.alert('新增 ' + data.generated + ' 条候选，重复 ' + data.duplicates + ' 条，锚核不到丢弃 ' + data.dropped + ' 条');
+                  setTick((v) => v + 1);
+                } catch (error) {
+                  window.alert('生成失败：' + (error instanceof Error ? error.message : String(error)));
+                }
+              } }, '从资料生成候选'),
+              h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                learnInfo ? '待审 ' + learnInfo.stats.pending + ' 条 · 已采用 ' + learnInfo.stats.accepted + ' 条' : ''),
+            ),
+            pendingCands.length === 0
+              ? h('div', { style: S.explain }, '还没有候选。点上面那个按钮，从资料库已提炼的结论里生成。')
+              : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                  ...pendingCands.map((cand) => h('div', { key: cand.id, style: S.item },
+                    h('div', { style: { fontSize: 12 } },
+                      '[' + ({ fact: '事实', rule: '准则', skill: '技能' }[cand.kind] || cand.kind) + '] ' + cand.content),
+                    h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                      '锚：' + cand.anchor.ref + (cand.anchor.block === undefined ? '' : '#' + cand.anchor.block) +
+                      ' · 核对到 ' + (cand.anchorChars || 0) + ' 字' +
+                      (cand.scope === 'world' ? ' · 外部知识（低权重入库）' : ' · 关于你为真') +
+                      (cand.needsQuote ? ' · 引文是转述，建议补原文再采用' : '') +
+                      (cand.anchorFlags && cand.anchorFlags.length > 0 ? ' · 该块带标记（' + cand.anchorFlags.join('、') + '）' : '') +
+                      (cand.subject ? ' · 主题 ' + cand.subject : '')),
+                    h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                      '引文：' + (cand.anchor.quote || '').slice(0, 120) + ((cand.anchor.quote || '').length > 120 ? '…' : '')),
+                    cand.kind === 'rule'
+                      ? h('input', { id: 'lb-' + cand.id, placeholder: '适用边界（逗号分隔，准则必填）', style: S.input })
+                      : null,
+                    h('div', { style: S.meta },
+                      h('button', { type: 'button', style: S.tab, onClick: async () => {
+                        const boundaryEl = cand.kind === 'rule' ? document.getElementById('lb-' + cand.id) : null;
+                        const boundary = boundaryEl && boundaryEl.value.trim().length > 0 ? '&boundary=' + encodeURIComponent(boundaryEl.value.trim()) : '';
+                        try {
+                          const res = await call('/cognition-engine/learn/accept?id=' + encodeURIComponent(cand.id) + boundary, { method: 'POST' });
+                          const data = await res.json().catch(() => ({}));
+                          if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+                          setTick((v) => v + 1);
+                        } catch (error) {
+                          window.alert('采用失败：' + (error instanceof Error ? error.message : String(error)));
+                        }
+                      } }, '采用'),
+                      h('button', { type: 'button', style: { ...S.tab, color: '#f85149' }, onClick: async () => {
+                        try {
+                          const res = await call('/cognition-engine/learn/reject?id=' + encodeURIComponent(cand.id), { method: 'POST' });
+                          if (!res.ok) throw new Error('HTTP ' + res.status);
+                          setTick((v) => v + 1);
+                        } catch (error) {
+                          window.alert('丢弃失败：' + (error instanceof Error ? error.message : String(error)));
+                        }
+                      } }, '丢弃'),
+                    ),
+                  ))),
+            h('div', { style: { paddingTop: 8, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
+              h(LearningEmbedded, { variant: 'embedded' })),
+          );
         } else if (tab === 'superagent') {
           body = h(SuperagentEmbedded, { variant: 'embedded' });
         } else if (tab === 'memories') {

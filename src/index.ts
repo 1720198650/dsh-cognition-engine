@@ -34,6 +34,7 @@ import { WikiStore, buildWiki } from './wiki.ts';
 import { CandidateInbox } from './inbox.ts';
 import { SourceStore } from './sources.ts';
 import { SourceLibrary, type SourceNote } from './source_library.ts';
+import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote, fallbackNote } from './source_note.ts';
 import {
   DEFAULT_POLICY,
@@ -655,6 +656,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     blocksFile: join(dataDir(), 'cognition-source-blocks.jsonl'),
     notesFile: join(dataDir(), 'cognition-source-notes.json'),
   });
+  // L3 学习候选队列（事实/准则/技能，全部带外部锚）
+  const learning = new LearningQueue({ filePath: join(dataDir(), 'cognition-learning.json') });
   // 运行时设置（面板可改）：注入方式
   /**
    * 练习样本：把「用户纠正/确认」的回合和当时的原话拼起来。
@@ -1009,6 +1012,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         title: record.title,
         summary: parsed.summary,
         points: parsed.points,
+        ...(parsed.quotes.some((quote) => quote.length > 0) ? { quotes: parsed.quotes } : {}),
         ...(parsed.topic === undefined ? {} : { topic: parsed.topic }),
         ...(risky.length === 0 ? {} : { flags: risky }),
       });
@@ -1026,8 +1030,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   };
 
   // —— L2 白名单抓取：唯一会主动联网的地方 ——
-  const whitelist = new WhitelistStore({ filePath: join(dataDir(), 'cognition-whitelist.json') });
-  const throttle = new FetchThrottle();
+  const whitelist = new WhitelistStore({ filePath: join(dataDir(), 'cognition-whitelist.json') });  const throttle = new FetchThrottle();
   /** robots 按站点缓存一个进程生命周期，别每次抓都重新拉 */
   const robotsCache = new Map<string, RobotsRules>();
   const fetchPolicy = (): FetchPolicy => ({
@@ -3237,6 +3240,139 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       },
       { method: 'POST', requireAuth: explicitLock },
     );
+    // —— L3 学习候选：事实 / 准则 / 技能，全部带外部锚 ——
+    const anchorLookup = {
+      blockText: (sourceId: string, block: number): string | undefined =>
+        library.blocksOf(sourceId).find((item) => item.ord === block)?.text,
+      blockFlags: (sourceId: string, block: number): string[] => {
+        const text = library.blocksOf(sourceId).find((item) => item.ord === block)?.text;
+        return text === undefined ? [] : scanFlags(text);
+      },
+    };
+    route('/cognition-engine/learn/list', (url) => {
+      const status = url.searchParams.get('status');
+      const allowed = ['pending', 'accepted', 'rejected'];
+      const filter = status !== null && allowed.includes(status) ? (status as 'pending') : undefined;
+      return { stats: learning.stats(), items: learning.list(filter) };
+    });
+    /**
+     * 从资料库已提炼的结论生成候选。
+     *
+     * 只生成"能在原文块里核到"的结论——核不到的直接丢，不进待审。
+     * 这样用户看到的每一条都能点开看原文，不用赌模型有没有胡说。
+     */
+    route(
+      '/cognition-engine/learn/generate',
+      () => {
+        let generated = 0;
+        let duplicates = 0;
+        const noAnchor: string[] = [];
+        for (const note of library.notes()) {
+          if (note.status !== 'ready') continue;
+          const blocks = library.blocksOf(note.sourceId).map((block) => ({
+            ord: block.ord,
+            text: block.text,
+            flags: scanFlags(block.text),
+          }));
+          const drafts = candidatesFromPoints({
+            sourceId: note.sourceId,
+            title: note.title,
+            ...(note.topic === undefined ? {} : { topic: note.topic }),
+            summary: note.summary,
+            points: note.points,
+            ...(note.quotes === undefined ? {} : { quotes: note.quotes }),
+            blocks,
+          });
+          for (const draft of drafts) {
+            const checked = checkAnchor(draft.anchor, anchorLookup);
+            if (!checked.ok) {
+              noAnchor.push(draft.content.slice(0, 30) + '…：' + checked.reason);
+              continue;
+            }
+            const result = learning.add({
+              ...draft,
+              anchorChars: checked.matchedChars,
+              anchorFlags: checked.flags,
+              // 资料来源一律算世界知识；转述型引文标记出来让用户补原文
+              scope: 'world',
+              needsQuote: checked.needsQuote === true,
+            });
+            if (result.duplicate) duplicates += 1;
+            else generated += 1;
+          }
+        }
+        return { generated, duplicates, dropped: noAnchor.length, droppedDetail: noAnchor.slice(0, 5), stats: learning.stats() };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+    route(
+      '/cognition-engine/learn/accept',
+      (url, body) => {
+        const id = (url.searchParams.get('id') ?? '').trim();
+        if (id.length === 0) throw new Error('需要 id');
+        const candidate = learning.get(id);
+        if (candidate === undefined) throw new Error('没有这个候选：' + id);
+        if (candidate.status !== 'pending') throw new Error('候选状态是 ' + candidate.status + '，不能再采用');
+        // 采用前再核一次锚：原文可能已经被删掉或被重切
+        const checked = checkAnchor(candidate.anchor, anchorLookup);
+        if (!checked.ok) throw new Error('锚校验没通过，拒绝写入：' + checked.reason);
+
+        const json = readBodyJson(body);
+        const boundaryRaw = url.searchParams.get('boundary') ?? bodyString(json, 'boundary') ?? '';
+        const boundary = boundaryRaw.split(/[,，、]/).map((item) => item.trim()).filter((item) => item.length > 0);
+
+        if (candidate.kind === 'fact') {
+          const world = candidate.scope === 'world';
+          const fact = memory.ingest({
+            content: candidate.content,
+            // 世界知识加前缀，避免以后被当成"用户口径"引用；主题也带前缀
+            subject: (world ? '资料:' : '') + (candidate.subject ?? '待归类').slice(0, 40),
+            tags: [
+              'learned',
+              ...(world ? ['world-knowledge'] : []),
+              'anchor:' + candidate.anchor.ref + (candidate.anchor.block === undefined ? '' : '#' + candidate.anchor.block),
+            ],
+            // 外部知识压低权重：能 recall 到，但不该挤掉用户自己的工作口径
+            importance: world ? 0.25 : Math.min(0.9, 0.4 + candidate.confidence * 0.4),
+            source: 'imported',
+            origin: 'ui',
+          });
+          const done = learning.markAccepted(id, fact.id);
+          refreshEvidence();
+          touch();
+          void stateStore.flush();
+          return { candidate: done, factId: fact.id };
+        }
+        if (candidate.kind === 'rule') {
+          if (boundary.length === 0) {
+            throw new Error('准则候选必须填适用边界（boundary=场景一,场景二）：没有边界的准则会被到处套用');
+          }
+          const outcome = playbook.addManual({
+            content: candidate.content,
+            boundaryEnvs: boundary,
+            confidence: candidate.confidence,
+          });
+          if (!outcome.accepted) throw new Error('准则没写进去：' + (outcome.reason ?? '未知原因'));
+          const ruleId = (outcome as { entry?: { id?: string }; merged?: { id?: string } }).entry?.id ?? (outcome as { merged?: { id?: string } }).merged?.id ?? 'unknown';
+          const done = learning.markAccepted(id, ruleId);
+          touch();
+          void stateStore.flush();
+          return { candidate: done, ruleId };
+        }
+        throw new Error('技能候选暂未开放（格式还没定下来，先积累事实与准则）');
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+    route(
+      '/cognition-engine/learn/reject',
+      (url) => {
+        const id = (url.searchParams.get('id') ?? '').trim();
+        if (id.length === 0) throw new Error('需要 id');
+        return learning.reject(id, url.searchParams.get('reason') ?? undefined);
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
     // —— L2 白名单抓取 ——
     route('/cognition-engine/fetch/whitelist', (url) => {
       const host = url.searchParams.get('host');

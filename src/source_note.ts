@@ -111,12 +111,16 @@ export function buildSourceNotePrompt(input: {
     ...(isTable ? ['你在做资料归档。把下面这份资料压成结构化条目，供以后按需检索。', ''] : []),
     ...rules,
     '',
+    // 结论是改写，引文是照抄：分开之后才可能核对"这条结论到底来自哪句话"
+    '**每条结论都必须附一句原文引文**（quote）：从资料里**逐字照抄**一段支持它的原句，至少 8 个字，不许改写、不许拼接。',
+    '没有可照抄原句的结论就不要写进 points。',
+    '',
     ...(isTable ? [`（表共约 ${excerpt.tableRows} 行数据；只给表头和首尾若干行，中间已省略。）`] : []),
     '',
     topicLine,
     '',
     '只输出一个 JSON 对象，不要解释、不要 markdown 代码块：',
-    '{"summary":"...","points":["...","..."],"topic":"..."}',
+    '{"summary":"...","points":[{"text":"结论","quote":"原文里逐字照抄的句子"}],"topic":"..."}',
     '',
     '资料标题：' + input.title,
     '资料正文：',
@@ -126,19 +130,11 @@ export function buildSourceNotePrompt(input: {
   return { prompt, truncated: excerpt.truncated };
 }
 
-function asStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((item): item is string => typeof item === 'string')
-    .map((item) => item.replace(/\s+/g, ' ').trim())
-    .filter((item) => item.length > 0);
-}
-
 /**
  * 解析模型输出。宽容到"能从一堆废话里抠出 JSON"，但不猜内容：
  * 解析不出来就把原文塞进 error，调用方落成 failed，用户可重试。
  */
-export function parseSourceNote(raw: string): { summary: string; points: string[]; topic?: string } {
+export function parseSourceNote(raw: string): { summary: string; points: string[]; quotes: string[]; topic?: string } {
   const start = raw.indexOf('{');
   const end = raw.lastIndexOf('}');
   if (start < 0 || end <= start) throw new Error('模型没有输出 JSON：' + raw.slice(0, 120).replace(/\s+/g, ' '));
@@ -151,11 +147,41 @@ export function parseSourceNote(raw: string): { summary: string; points: string[
   if (parsed === null || typeof parsed !== 'object') throw new Error('模型输出的 JSON 不是对象');
   const record = parsed as Record<string, unknown>;
   const summary = typeof record.summary === 'string' ? record.summary.trim() : '';
-  const points = asStringArray(record.points);
   const topic = typeof record.topic === 'string' && record.topic.trim().length > 0 ? record.topic.trim().slice(0, 12) : undefined;
+
+  // points 允许两种形态：新格式 [{text, quote}]；老格式 ["结论"]（没有引文，等于不能核对）
+  const points: string[] = [];
+  const quotes: string[] = [];
+  if (Array.isArray(record.points)) {
+    for (const item of record.points) {
+      if (typeof item === 'string') {
+        const text = item.replace(/\s+/g, ' ').trim();
+        if (text.length > 0) {
+          points.push(text);
+          quotes.push('');
+        }
+        continue;
+      }
+      if (item !== null && typeof item === 'object') {
+        const row = item as Record<string, unknown>;
+        const text = typeof row.text === 'string' ? row.text.replace(/\s+/g, ' ').trim() : '';
+        const quote = typeof row.quote === 'string' ? row.quote.replace(/\s+/g, ' ').trim() : '';
+        if (text.length > 0) {
+          points.push(text);
+          quotes.push(quote);
+        }
+      }
+    }
+  }
+
   if (summary.length === 0) throw new Error('模型没有给出 summary');
   if (points.length === 0) throw new Error('模型没有给出 points');
-  return { summary: summary.slice(0, 400), points: points.slice(0, 8), ...(topic === undefined ? {} : { topic }) };
+  return {
+    summary: summary.slice(0, 400),
+    points: points.slice(0, 8),
+    quotes: quotes.slice(0, 8),
+    ...(topic === undefined ? {} : { topic }),
+  };
 }
 
 /**

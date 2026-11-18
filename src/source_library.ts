@@ -38,6 +38,8 @@ export interface SourceNote {
   summary: string;
   /** 3~6 条可复用结论，每条独立成立 */
   points: string[];
+  /** 与 points 一一对应的原文引文（逐字照抄，用来做外部锚核对） */
+  quotes?: string[];
   /** 失败原因（status='failed' 时有值） */
   error?: string;
   /** 提炼产物里再扫出来的可疑标记（status='suspicious' 时有值） */
