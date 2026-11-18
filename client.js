@@ -442,11 +442,13 @@ window.__ModuleLoader__.load({
         gap: 0,
       },
       item: {
-        padding: '12px 0',
+        // 紧凑密度：间距压到 4px 的倍数（深研 src-58/59/61：紧凑模式靠减小元素间距
+        // 提升数据可见性，但按钮/输入框这类交互件不跟着压，保可读可点）
+        padding: '8px 0',
         borderBottom: '1px solid var(--dsw-alias-border-l1)',
         display: 'flex',
         flexDirection: 'column',
-        gap: 6,
+        gap: 4,
       },
       itemTitle: {
         color: 'var(--dsw-alias-label-primary)',
