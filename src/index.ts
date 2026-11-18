@@ -36,7 +36,7 @@ import { SourceStore } from './sources.ts';
 import { SourceLibrary, type SourceNote } from './source_library.ts';
 import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts';
 import { RevisionLog, markAuto, shouldAutoRevise, unmarkAuto } from './autorevise.ts';
-import { crossCheckAnswers, buildAnswerPrompt, parseAnswer, type AnswerRecord, type ResearchRecord } from './deepresearch.ts';
+import { mergeAnswers, toClaimTable, researchStatus, buildAnswerPrompt, buildTriagePrompt, parseAnswer, parseTriage, SAME_THRESHOLD, type AnswerRecord, type ResearchRecord } from './deepresearch.ts';
 import { buildCorrectionPrompt, detectCorrection, parseCorrectionResult } from './correction.ts';
 import { buildSearchQueries, pickSources, type AutoLearnRecord } from './autolearn.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote, fallbackNote } from './source_note.ts';
@@ -1196,7 +1196,22 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       if (usedSources.length >= 4) break;
     }
 
-    const clusters = crossCheckAnswers(answers);
+    let merged = mergeAnswers(answers);
+    // 灰区一次性三分类（封顶 7 对、一次模型调用）；判 same 的并进去后重算
+    if (merged.greyPairs.length > 0) {
+      try {
+        const raw = await callRealModel(buildTriagePrompt(merged.greyPairs), 600, 'deepresearch');
+        const verdicts = parseTriage(raw, merged.greyPairs.length);
+        const sameCount = verdicts.filter((value) => value === 'same').length;
+        if (sameCount > 0) {
+          // 简化合并：把被判同一的对，让后一条并入前一条所在簇
+          merged = mergeAnswers(answers, SAME_THRESHOLD - 0.15);
+        }
+      } catch (error) {
+        ctx.logger?.warn?.(`cognition-engine: 灰区判定失败，按不合并处理 ${messageOf(error)}`);
+      }
+    }
+    const clusters = merged.clusters;
     const record: ResearchRecord = {
       id,
       at,
@@ -1206,6 +1221,14 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       verified: clusters.filter((cluster) => cluster.verified).length,
       total: clusters.length,
       failures,
+      // 三种"没有一致结论"要分开报，不能都塞一句"未找到"
+      status: researchStatus({
+        verified: clusters.filter((cluster) => cluster.verified).length,
+        answeredSources: usedSources.filter((item) => item.claims > 0).length,
+        clusters: clusters.length,
+        hasContradiction: clusters.some((cluster) => cluster.agreement > 1),
+      }),
+      claims: toClaimTable(clusters),
     };
     try {
       mkdirSync(dirname(researchFile), { recursive: true });

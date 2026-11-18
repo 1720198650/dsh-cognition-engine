@@ -72,6 +72,10 @@ export interface ResearchRecord {
         url: string;
         reason: string;
     }>;
+    /** 结论状态：verified / divergent（互斥）/ insufficient_sources（来源太少）/ no_agreement（无人一致） */
+    status?: ResearchStatus;
+    /** claim 表（每条挂 support 与出处） */
+    claims?: ClaimRow[];
 }
 /** 一个来源对"同一个问题"的回答（逐源作答，才能横向比）。 */
 export interface AnswerRecord {
@@ -134,3 +138,45 @@ export declare function judgeAnswerPair(a: string, b: string): {
     reason: string;
 };
 export declare function crossCheckAnswers(answers: readonly AnswerRecord[], threshold?: number): AnswerCluster[];
+/** 归并结果连同"灰区待判"的配对一起返回，供上层做一次 LLM 三分类。 */
+export declare function mergeAnswers(answers: readonly AnswerRecord[], threshold?: number): {
+    clusters: AnswerCluster[];
+    greyPairs: Array<{
+        a: string;
+        b: string;
+        fa: number;
+        fb: number;
+    }>;
+};
+/** 灰区三分类提示词：一次判多对，控制调用次数。 */
+export declare function buildTriagePrompt(pairs: ReadonlyArray<{
+    a: string;
+    b: string;
+}>): string;
+/** 解析三分类；解析不出来就全判 different（保守：不合并）。 */
+export declare function parseTriage(raw: string, expected: number): Array<'same' | 'different' | 'contradict'>;
+export type ResearchStatus = 'verified' | 'divergent' | 'insufficient_sources' | 'no_agreement';
+/**
+ * 结论状态：只有"一致"才叫 verified，其余三种要分开报，不能都塞一句"未找到"。
+ *
+ * 文献（docs/l4-deepresearch.md）要求：检索失败、无人作答、无一致、来源互斥分开说。
+ */
+export declare function researchStatus(input: {
+    verified: number;
+    answeredSources: number;
+    clusters: number;
+    hasContradiction?: boolean;
+}): ResearchStatus;
+export interface ClaimRow {
+    claim: string;
+    /** 断言级支撑：每条挂一个来源与可核对引文 */
+    support: Array<{
+        source: string;
+        quote: string;
+    }>;
+    agreement: number;
+    ratio: number;
+    status: 'verified' | 'single_source' | 'contradicted';
+}
+/** 产出结构：claim 表，而不是一段长报告。 */
+export declare function toClaimTable(clusters: readonly AnswerCluster[]): ClaimRow[];

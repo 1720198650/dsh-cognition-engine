@@ -132,6 +132,10 @@ export interface ResearchRecord {
   verified: number;
   total: number;
   failures: Array<{ url: string; reason: string }>;
+  /** 结论状态：verified / divergent（互斥）/ insufficient_sources（来源太少）/ no_agreement（无人一致） */
+  status?: ResearchStatus;
+  /** claim 表（每条挂 support 与出处） */
+  claims?: ClaimRow[];
 }
 
 /** 一个来源对"同一个问题"的回答（逐源作答，才能横向比）。 */
@@ -275,21 +279,30 @@ export function judgeAnswerPair(a: string, b: string): { verdict: PairVerdict; f
 }
 
 export function crossCheckAnswers(answers: readonly AnswerRecord[], threshold = SAME_THRESHOLD): AnswerCluster[] {
+  return mergeAnswers(answers, threshold).clusters;
+}
+
+/** 归并结果连同"灰区待判"的配对一起返回，供上层做一次 LLM 三分类。 */
+export function mergeAnswers(
+  answers: readonly AnswerRecord[],
+  threshold = SAME_THRESHOLD,
+): { clusters: AnswerCluster[]; greyPairs: Array<{ a: string; b: string; fa: number; fb: number }> } {
   const usable = answers.filter((item) => item.relevant && item.answer.length > 0 && item.quote.length >= 12);
   const totalAnswered = usable.length;
-  const clusters: Array<AnswerCluster & { greyAgainst: string[] }> = [];
+  const clusters: AnswerCluster[] = [];
+  const greyPairs: Array<{ a: string; b: string; fa: number; fb: number }> = [];
   for (const item of usable) {
-    let hit: (typeof clusters)[number] | undefined;
+    let hit: AnswerCluster | undefined;
     for (const cluster of clusters) {
       const verdict = judgeAnswerPair(cluster.answer, item.answer);
       if (verdict.verdict === 'same' || (verdict.verdict === 'grey' && threshold < SAME_THRESHOLD)) {
         hit = cluster;
         break;
       }
-      if (verdict.verdict === 'grey') cluster.greyAgainst.push(item.source);
+      if (verdict.verdict === 'grey' && greyPairs.length < 7) greyPairs.push({ a: cluster.answer, b: item.answer, fa: -1, fb: -1 });
     }
     if (hit === undefined) {
-      clusters.push({ answer: item.answer, sources: [item.source], quotes: [item.quote], agreement: 1, ratio: 0, verified: false, greyAgainst: [] });
+      clusters.push({ answer: item.answer, sources: [item.source], quotes: [item.quote], agreement: 1, ratio: 0, verified: false });
       continue;
     }
     if (!hit.sources.includes(item.source)) hit.sources.push(item.source);
@@ -299,7 +312,72 @@ export function crossCheckAnswers(answers: readonly AnswerRecord[], threshold = 
     if (hit.agreement >= 2) hit.verified = true;
   }
   for (const cluster of clusters) cluster.ratio = totalAnswered === 0 ? 0 : cluster.agreement / totalAnswered;
-  return clusters
-    .map(({ greyAgainst, ...cluster }) => cluster)
-    .sort((a, b) => Number(b.verified) - Number(a.verified) || b.agreement - a.agreement);
+  clusters.sort((a, b) => Number(b.verified) - Number(a.verified) || b.agreement - a.agreement);
+  return { clusters, greyPairs };
+}
+
+/** 灰区三分类提示词：一次判多对，控制调用次数。 */
+export function buildTriagePrompt(pairs: ReadonlyArray<{ a: string; b: string }>): string {
+  return [
+    '判断下面每一对回答说的是不是同一件事。只输出 JSON，不要解释：',
+    '{"verdicts":["same","different","contradict"]}',
+    '',
+    '三档含义：same = 同一结论的不同说法；different = 讲的是不同的事；contradict = 同一件事但互相矛盾（例如数值不同、一正一反）。',
+    '条数必须与输入一致，顺序对应。',
+    '',
+    ...pairs.map((pair, index) => `[${index + 1}] A: ${pair.a}\n    B: ${pair.b}`)
+  ].join('\n');
+}
+
+/** 解析三分类；解析不出来就全判 different（保守：不合并）。 */
+export function parseTriage(raw: string, expected: number): Array<'same' | 'different' | 'contradict'> {
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start < 0 || end <= start) return Array.from({ length: expected }, () => 'different' as const);
+  try {
+    const parsed = JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
+    const list = Array.isArray(parsed.verdicts) ? parsed.verdicts : [];
+    const out: Array<'same' | 'different' | 'contradict'> = [];
+    for (let i = 0; i < expected; i += 1) {
+      const value = String(list[i] ?? 'different');
+      out.push(value === 'same' ? 'same' : value === 'contradict' ? 'contradict' : 'different');
+    }
+    return out;
+  } catch {
+    return Array.from({ length: expected }, () => 'different' as const);
+  }
+}
+
+export type ResearchStatus = 'verified' | 'divergent' | 'insufficient_sources' | 'no_agreement';
+
+/**
+ * 结论状态：只有"一致"才叫 verified，其余三种要分开报，不能都塞一句"未找到"。
+ *
+ * 文献（docs/l4-deepresearch.md）要求：检索失败、无人作答、无一致、来源互斥分开说。
+ */
+export function researchStatus(input: { verified: number; answeredSources: number; clusters: number; hasContradiction?: boolean }): ResearchStatus {
+  if (input.verified > 0) return 'verified';
+  if (input.answeredSources < 2) return 'insufficient_sources';
+  if (input.hasContradiction === true) return 'divergent';
+  return 'no_agreement';
+}
+
+export interface ClaimRow {
+  claim: string;
+  /** 断言级支撑：每条挂一个来源与可核对引文 */
+  support: Array<{ source: string; quote: string }>;
+  agreement: number;
+  ratio: number;
+  status: 'verified' | 'single_source' | 'contradicted';
+}
+
+/** 产出结构：claim 表，而不是一段长报告。 */
+export function toClaimTable(clusters: readonly AnswerCluster[]): ClaimRow[] {
+  return clusters.map((cluster) => ({
+    claim: cluster.answer,
+    support: cluster.sources.map((source, index) => ({ source, quote: cluster.quotes[index] ?? cluster.quotes[0] ?? '' })),
+    agreement: cluster.agreement,
+    ratio: cluster.ratio,
+    status: cluster.verified ? 'verified' : cluster.sources.length > 1 ? 'contradicted' : 'single_source',
+  }));
 }
