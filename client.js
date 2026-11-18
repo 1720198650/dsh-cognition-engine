@@ -576,6 +576,8 @@ window.__ModuleLoader__.load({
         const [sourceList, setSourceList] = React.useState(null);
         /** 正在二次确认删除的 sourceId（null=没有） */
         const [deleteConfirm, setDeleteConfirm] = React.useState(null);
+        /** 正在选丢弃理由的候选 id（Zep 的做法：拒绝要带分类理由，不能只留"丢弃"两个字） */
+        const [rejectFor, setRejectFor] = React.useState(null);
         /** L2 抓取白名单：{hosts, policy} */
         const [fetchInfo, setFetchInfo] = React.useState(null);
         /** L3 学习候选：{items, stats} */
@@ -1984,15 +1986,28 @@ window.__ModuleLoader__.load({
                           window.alert('采用失败：' + (error instanceof Error ? error.message : String(error)));
                         }
                       } }, '采用'),
-                      h('button', { type: 'button', style: { ...S.tab, color: '#f85149' }, onClick: async () => {
-                        try {
-                          const res = await call('/cognition-engine/learn/reject?id=' + encodeURIComponent(cand.id), { method: 'POST' });
-                          if (!res.ok) throw new Error('HTTP ' + res.status);
-                          setTick((v) => v + 1);
-                        } catch (error) {
-                          window.alert('丢弃失败：' + (error instanceof Error ? error.message : String(error)));
-                        }
-                      } }, '丢弃'),
+                      rejectFor === cand.id
+                        ? h('span', { style: { display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
+                            h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, '丢弃理由：'),
+                            ...['不准确', '不相关', '已经知道了'].map((reason) =>
+                              h('button', {
+                                key: 'rj-' + reason,
+                                type: 'button',
+                                style: { ...S.tab, fontSize: 11, color: '#f85149' },
+                                onClick: async () => {
+                                  try {
+                                    const res = await call('/cognition-engine/learn/reject?id=' + encodeURIComponent(cand.id) + '&reason=' + encodeURIComponent(reason), { method: 'POST' });
+                                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                                    setRejectFor(null);
+                                    setTick((v) => v + 1);
+                                  } catch (error) {
+                                    window.alert('丢弃失败：' + (error instanceof Error ? error.message : String(error)));
+                                  }
+                                },
+                              }, reason)),
+                            h('button', { type: 'button', style: S.tab, onClick: () => setRejectFor(null) }, '取消'),
+                          )
+                        : h('button', { type: 'button', style: { ...S.tab, color: '#f85149' }, onClick: () => setRejectFor(cand.id) }, '丢弃'),
                     ),
                   ))),
                   pendingCands.length > 7
