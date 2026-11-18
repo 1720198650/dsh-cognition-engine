@@ -53,6 +53,7 @@ import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts'
 import { buildSearchQueries, pickSources } from './autolearn.ts';
 import { RevisionLog, markAuto, revisionBadge, shouldAutoRevise, unmarkAuto } from './autorevise.ts';
 import { detectCorrection, parseCorrectionResult } from './correction.ts';
+import { buildDeepClaimPrompt, crossCheck, parseDeepClaims } from './deepresearch.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote } from './source_note.ts';
 import { summarizeUsage } from './usage.ts';
 import { resolveInjectMode } from './settings.ts';
@@ -4791,6 +4792,32 @@ async function main(): Promise<void> {
     assert.equal(parsed.rule, '发版前必须跑真实入口');
     const broken = parseCorrectionResult('模型拒答了');
     assert.equal(broken.rule, '', '解析不出就返回空，不编内容');
+  });
+
+  section('[73] 深研：交叉核对是分界线，单源结论不算数');
+  await test('同一结论多源印证才 verified；单源一律 false', () => {
+    const claims = [
+      { conclusion: '面板每 2 秒只拉计数接口，明细按需拉取', quote: '计数接口高频轮询，明细接口只在面板展开时拉取', source: 'src-1' },
+      { conclusion: '面板每两秒只拉计数，明细按需', quote: 'counting polls every two seconds', source: 'src-2' },
+      { conclusion: '沉积事件不到 20 条不下结论', quote: '沉积事件不到 20 条时不做任何倾向性结论', source: 'src-3' },
+    ];
+    const clusters = crossCheck(claims);
+    const verified = clusters.filter((cluster) => cluster.verified);
+    assert.equal(verified.length, 1, '只有跨两条来源的那条算 verified：' + JSON.stringify(clusters));
+    assert.deepEqual(verified[0]!.sources.sort(), ['src-1', 'src-2']);
+    assert.equal(clusters.find((cluster) => cluster.conclusion.includes('20 条'))!.verified, false, '单源结论必须标 false');
+  });
+
+  await test('深研提示词要引文、要反例、能容忍空结果；解析挑剔', () => {
+    const built = buildDeepClaimPrompt({ question: '面板该怎么拉数据', title: 'client.js', text: '正文'.repeat(600) });
+    assert.ok(built.includes('逐字照抄'), '必须要求引文逐字照抄');
+    assert.ok(built.includes('{"claims":[]}'), '资料没讲到就返回空，不许编');
+    assert.ok(built.length > 200);
+
+    const parsed = parseDeepClaims('前言 {"claims":[{"conclusion":"面板每两秒拉计数","quote":"计数接口高频轮询，明细接口只在面板展开时拉取"},{"conclusion":"太短","quote":"短"}]}');
+    assert.equal(parsed.length, 1, '引文不足 12 字或结论不足 8 字的要丢掉');
+    assert.equal(parsed[0]!.conclusion, '面板每两秒拉计数');
+    assert.equal(parseDeepClaims('模型拒答').length, 0, '解析不出就返回空，不编');
   });
 
   section('[63] 文件编码：GBK 表格不能读成乱码');  await test('UTF-8/GBK/UTF-16 都能正确解码，不乱码', () => {

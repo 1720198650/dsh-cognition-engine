@@ -41,8 +41,8 @@ export interface SearchSourceLike {
  * 只挑 http(s)、跳过明显是聚合页/下载页的 URL；同一域名最多取 1 条，
  * 免得一次自动学习把同一个站抓一堆。按"有没有摘要/标题长度"排序。
  */
-export function pickSources(sources: readonly SearchSourceLike[], limit = 2): SearchSourceLike[] {
-  const seenHost = new Set<string>();
+export function pickSources(sources: readonly SearchSourceLike[], limit = 2, perHost = 1): SearchSourceLike[] {
+  const seenHost = new Map<string, number>();
   const scored: Array<{ source: SearchSourceLike; score: number; host: string }> = [];
   for (const source of sources) {
     let host = '';
@@ -70,8 +70,9 @@ export function pickSources(sources: readonly SearchSourceLike[], limit = 2): Se
   const out: SearchSourceLike[] = [];
   for (const item of scored) {
     if (out.length >= limit) break;
-    if (seenHost.has(item.host)) continue;
-    seenHost.add(item.host);
+    const used = seenHost.get(item.host) ?? 0;
+    if (used >= Math.max(1, perHost)) continue;
+    seenHost.set(item.host, used + 1);
     out.push(item.source);
   }
   return out;

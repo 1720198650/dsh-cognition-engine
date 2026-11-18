@@ -23,7 +23,7 @@ export interface SearchSourceLike {
  * 只挑 http(s)、跳过明显是聚合页/下载页的 URL；同一域名最多取 1 条，
  * 免得一次自动学习把同一个站抓一堆。按"有没有摘要/标题长度"排序。
  */
-export declare function pickSources(sources: readonly SearchSourceLike[], limit?: number): SearchSourceLike[];
+export declare function pickSources(sources: readonly SearchSourceLike[], limit?: number, perHost?: number): SearchSourceLike[];
 export interface AutoLearnRecord {
     at: number;
     /** 触发原因：correction / gap / manual */
