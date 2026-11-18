@@ -35,6 +35,7 @@ import { CandidateInbox } from './inbox.ts';
 import { SourceStore } from './sources.ts';
 import { SourceLibrary, type SourceNote } from './source_library.ts';
 import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts';
+import { RevisionLog, markAuto, shouldAutoRevise, unmarkAuto } from './autorevise.ts';
 import { buildSearchQueries, pickSources, type AutoLearnRecord } from './autolearn.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote, fallbackNote } from './source_note.ts';
 import {
@@ -659,6 +660,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   });
   // L3 学习候选队列（事实/准则/技能，全部带外部锚）
   const learning = new LearningQueue({ filePath: join(dataDir(), 'cognition-learning.json') });
+  // 自动修订存档（append-only，改之前必须先写进去）
+  const revisionLog = new RevisionLog({ filePath: join(dataDir(), 'cognition-revisions.jsonl') });
   // 运行时设置（面板可改）：注入方式
   /**
    * 练习样本：把「用户纠正/确认」的回合和当时的原话拼起来。
@@ -3333,6 +3336,105 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       },
       { method: 'POST', requireAuth: explicitLock },
     );
+    // —— 自动修订：先存档再改，改完带标注，可回滚 ——
+    route('/cognition-engine/autorevise/list', (url) => ({
+      items: revisionLog.list(Number(url.searchParams.get('limit') ?? 30)),
+      enabled: autoToggles().autoRevise,
+    }));
+    route(
+      '/cognition-engine/autorevise/apply',
+      (url, body) => {
+        const json = readBodyJson(body);
+        const target = (url.searchParams.get('target') ?? bodyString(json, 'target') ?? '').trim();
+        const targetId = (url.searchParams.get('targetId') ?? bodyString(json, 'targetId') ?? '').trim();
+        const content = (url.searchParams.get('content') ?? bodyString(json, 'content') ?? '').trim();
+        const reason = (url.searchParams.get('reason') ?? bodyString(json, 'reason') ?? '').trim();
+        const diagnosis = (url.searchParams.get('diagnosis') ?? bodyString(json, 'diagnosis') ?? '').trim();
+        const by = (url.searchParams.get('by') ?? bodyString(json, 'by') ?? 'user') === 'auto' ? 'auto' : 'user';
+        if (target !== 'fact' && target !== 'rule') throw new Error('target 只能是 fact / rule');
+        if (targetId.length === 0) throw new Error('需要 targetId');
+        if (content.length === 0) throw new Error('需要 content（改后的内容）');
+        if (diagnosis.length < 4) throw new Error('必须写诊断（≥4 字）：错在哪、以后怎么避免');
+        if (by === 'auto') {
+          // 自动修订要过门槛：开关 / 冷却 / 反证条数 / 准则还需用户明确说过
+          const last = revisionLog.lastAt(targetId);
+          const gate = shouldAutoRevise({
+            target: target as 'fact' | 'rule',
+            counterEvidence: Number(url.searchParams.get('counterEvidence') ?? bodyString(json, 'counterEvidence') ?? 2),
+            hoursSinceLastRevision: last === undefined ? 9999 : (Date.now() - last) / 3_600_000,
+            userSaidSo: (url.searchParams.get('userSaidSo') ?? bodyString(json, 'userSaidSo') ?? 'false') === 'true',
+            autoReviseEnabled: autoToggles().autoRevise,
+          });
+          if (!gate.allow) throw new Error('自动修订被门槛挡住：' + gate.reason);
+        }
+
+        if (target === 'fact') {
+          const existing = memory.get(targetId);
+          const before = existing === undefined ? {} : { id: existing.id, content: existing.content, subject: existing.subject, importance: existing.importance };
+          const marked = markAuto(content);
+          const record = revisionLog.backup({ target: 'fact', targetId, before, after: { content: marked }, reason: reason || '（未写原因）', diagnosis, by });
+          const fact = memory.ingest({
+            content: marked,
+            subject: String(before.subject ?? '待归类'),
+            tags: ['auto-revised', 'rev:' + record.id],
+            importance: typeof before.importance === 'number' ? before.importance : 0.5,
+            source: 'agent',
+            origin: 'ui',
+            ...(existing === undefined ? {} : { supersedes: existing.id }),
+          });
+          refreshEvidence();
+          touch();
+          void stateStore.flush();
+          return { record, factId: fact.id };
+        }
+        const entry = playbook.get(targetId);
+        if (entry === undefined) throw new Error('没有这条准则：' + targetId);
+        const before = { id: entry.id, content: entry.content, boundaryEnvs: entry.boundaryEnvs ?? [] };
+        const marked = markAuto(content);
+        const record = revisionLog.backup({ target: 'rule', targetId, before, after: { content: marked }, reason: reason || '（未写原因）', diagnosis, by });
+        const outcome = playbook.revise(targetId, marked, { diagnosis, evidence: '自动修订 ' + record.id });
+        if (!outcome) throw new Error('准则修订失败（存档已留 ' + record.id + '）');
+        touch();
+        void stateStore.flush();
+        return { record, ruleId: targetId };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+    route(
+      '/cognition-engine/autorevise/undo',
+      (url) => {
+        const id = (url.searchParams.get('id') ?? '').trim();
+        if (id.length === 0) throw new Error('需要 id');
+        const record = revisionLog.list(200).find((item) => item.id === id);
+        if (record === undefined) throw new Error('没有这条修订记录：' + id);
+        if (record.undone === true) throw new Error('这条已经回滚过了');
+        const previous = String((record.before as { content?: unknown }).content ?? '');
+        if (previous.length === 0) throw new Error('存档里没有修改前的内容，无法回滚');
+        if (record.target === 'fact') {
+          const fact = memory.ingest({
+            content: unmarkAuto(previous),
+            subject: String((record.before as { subject?: unknown }).subject ?? '待归类'),
+            tags: ['auto-revised-undo', 'rev:' + record.id],
+            importance: typeof (record.before as { importance?: unknown }).importance === 'number' ? ((record.before as { importance: number }).importance) : 0.5,
+            source: 'agent',
+            origin: 'ui',
+          });
+          revisionLog.markUndone(id);
+          refreshEvidence();
+          touch();
+          void stateStore.flush();
+          return { undone: true, factId: fact.id };
+        }
+        const outcome = playbook.revise(record.targetId, unmarkAuto(previous), { diagnosis: '回滚自动修订 ' + id, evidence: '用户点回滚' });
+        if (!outcome) throw new Error('回滚失败');
+        revisionLog.markUndone(id);
+        touch();
+        void stateStore.flush();
+        return { undone: true, ruleId: record.targetId };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
     // —— 自动学习：开关 + 手动触发 + 日志 ——
     route('/cognition-engine/autolearn/status', async () => {
       const toggles = autoToggles();

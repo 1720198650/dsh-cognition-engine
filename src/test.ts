@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 /**
  * src/test.ts — 单元测试（Mock 测试，无网络、无数据库）
@@ -51,6 +51,7 @@ import { SourceLibrary, chunkText, isPathOnlyBlock, scoreQuery } from './source_
 import { DEFAULT_POLICY, FetchThrottle, WhitelistStore, checkUrl, parseRobots } from './web_fetch.ts';
 import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts';
 import { buildSearchQueries, pickSources } from './autolearn.ts';
+import { RevisionLog, markAuto, shouldAutoRevise, unmarkAuto } from './autorevise.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote } from './source_note.ts';
 import { summarizeUsage } from './usage.ts';
 import { resolveInjectMode } from './settings.ts';
@@ -4716,6 +4717,50 @@ async function main(): Promise<void> {
     assert.ok(picked.every((item) => item.url.startsWith('https://')), JSON.stringify(picked));
     assert.equal(new Set(picked.map((item) => new URL(item.url).hostname)).size, picked.length, '同域名不能重复');
     assert.ok(!picked.some((item) => item.url.endsWith('.zip')));
+  });
+
+  section('[71] 自动修订：门槛、存档、标注、回滚');
+  await test('门槛：事实要 2 条反证；准则还要用户明说；24 小时冷却；开关关着一律不改', () => {
+    const base = { target: 'fact' as const, counterEvidence: 2, hoursSinceLastRevision: 48, userSaidSo: false, autoReviseEnabled: true };
+    assert.equal(shouldAutoRevise(base).allow, true);
+    assert.equal(shouldAutoRevise({ ...base, autoReviseEnabled: false }).allow, false, '开关关了就不改');
+    assert.equal(shouldAutoRevise({ ...base, counterEvidence: 1 }).allow, false, '反证不足不改');
+    assert.equal(shouldAutoRevise({ ...base, hoursSinceLastRevision: 3 }).allow, false, '冷却期内不改');
+    assert.equal(shouldAutoRevise({ ...base, target: 'rule' }).allow, false, '准则没用户明说不改');
+    assert.equal(shouldAutoRevise({ ...base, target: 'rule', userSaidSo: true }).allow, true);
+    assert.equal(shouldAutoRevise({ ...base, target: 'rule', userSaidSo: true, counterEvidence: 1 }).allow, false);
+  });
+
+  await test('存档：先写后改、坏行只跳过、能查上次时间、回滚留痕', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cog-rev-'));
+    try {
+      let now = 1_000_000;
+      const log = new RevisionLog({ filePath: join(dir, 'revisions.jsonl'), now: () => now });
+      const first = log.backup({ target: 'fact', targetId: 'mem-1', before: { content: '旧内容' }, after: { content: '[自动修订] 新内容' }, reason: '有新证据', diagnosis: '之前把个别情况当普遍规律', by: 'auto' });
+      assert.equal(first.id, 'rev-1');
+      assert.equal(log.lastAt('mem-1'), 1_000_000);
+      now += 3_600_000;
+      log.backup({ target: 'rule', targetId: 'ctxt-1', before: { content: '旧准则' }, after: { content: '[自动修订] 新准则' }, reason: '你纠正过', diagnosis: '边界写太窄', by: 'user' });
+      const reopened = new RevisionLog({ filePath: join(dir, 'revisions.jsonl') });
+      assert.equal(reopened.list(10).length, 2, '要能读回两条');
+      assert.equal(reopened.list(10)[0]!.target, 'rule', '新的在前');
+
+      // 存档里必须能拿到"改之前"的原文，否则回滚不了
+      assert.equal(reopened.list(10)[1]!.before.content, '旧内容');
+      // 坏行不应让后面的记录一起丢
+      appendFileSync(join(dir, 'revisions.jsonl'), '{"bad":\n');
+      const third = new RevisionLog({ filePath: join(dir, 'revisions.jsonl') });
+      assert.equal(third.list(10).length, 2, '坏行只跳过，不能把之前的记录丢光');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('标注：自动改过的内容带标记，回滚时能去掉', () => {
+    assert.equal(markAuto('准则内容'), '[自动修订] 准则内容');
+    assert.equal(markAuto('[自动修订] 已标注'), '[自动修订] 已标注', '不能重复加');
+    assert.equal(unmarkAuto('[自动修订] 准则内容'), '准则内容');
+    assert.equal(unmarkAuto('普通内容'), '普通内容');
   });
 
   section('[63] 文件编码：GBK 表格不能读成乱码');  await test('UTF-8/GBK/UTF-16 都能正确解码，不乱码', () => {
