@@ -36,7 +36,7 @@ import { SourceStore } from './sources.ts';
 import { SourceLibrary, type SourceNote } from './source_library.ts';
 import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts';
 import { RevisionLog, markAuto, shouldAutoRevise, unmarkAuto } from './autorevise.ts';
-import { crossCheck, buildDeepClaimPrompt, parseDeepClaims, type Claim, type ResearchRecord } from './deepresearch.ts';
+import { crossCheckAnswers, buildAnswerPrompt, parseAnswer, type AnswerRecord, type ResearchRecord } from './deepresearch.ts';
 import { buildCorrectionPrompt, detectCorrection, parseCorrectionResult } from './correction.ts';
 import { buildSearchQueries, pickSources, type AutoLearnRecord } from './autolearn.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote, fallbackNote } from './source_note.ts';
@@ -1149,7 +1149,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     // 导致"多源核对"根本凑不出第二个来源（2026-11-18 首次实跑踩到：只读到 1 篇）。
     const base = buildSearchQueries(question, 1)[0] ?? question;
     const queries = [...new Set([base, base + ' 方法 实践', base + ' 论文 研究'])].slice(0, 3);
-    const claims: Claim[] = [];
+    const answers: AnswerRecord[] = [];
     const usedSources: ResearchRecord['sources'] = [];
     const failures: ResearchRecord['failures'] = [];
     const seenUrls = new Set<string>();
@@ -1179,17 +1179,15 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           }
           const record = sources.append({ kind: 'web', title: source.title ?? source.url, content: extracted.text, locator: source.url });
           indexSourceNow(record);
-          const raw = await callRealModel(buildDeepClaimPrompt({ question, title: source.title ?? source.url, text: extracted.text, maxClaims: 4 }), 1200, 'deepresearch');
-          const parsed = parseDeepClaims(raw);
-          // 引文必须在这篇原文的某一块里（不核对的结论不进交叉核对）
+          const raw = await callRealModel(buildAnswerPrompt({ question, title: source.title ?? source.url, text: extracted.text }), 1000, 'deepresearch');
+          const answer = { ...parseAnswer(raw), source: record.id };
+          // 引文必须在这篇原文的某一块里，否则这条回答不算
           const lookup = {
             blockText: (sid: string, block: number): string | undefined => library.blocksOf(sid).find((item) => item.ord === block)?.text,
           };
-          const verified = parsed.filter((claim) =>
-            library.blocksOf(record.id).some((block) => checkAnchor({ type: 'source', ref: record.id, block: block.ord, quote: claim.quote }, lookup).ok),
-          );
-          for (const claim of verified) claims.push({ conclusion: claim.conclusion, quote: claim.quote, source: record.id });
-          usedSources.push({ sourceId: record.id, url: source.url, chars: extracted.text.length, claims: verified.length });
+          const quoteOk = answer.relevant && library.blocksOf(record.id).some((block) => checkAnchor({ type: 'source', ref: record.id, block: block.ord, quote: answer.quote }, lookup).ok);
+          if (quoteOk) answers.push(answer);
+          usedSources.push({ sourceId: record.id, url: source.url, chars: extracted.text.length, claims: quoteOk ? 1 : 0 });
         } catch (error) {
           failures.push({ url: source.url, reason: messageOf(error) });
         }
@@ -1198,7 +1196,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       if (usedSources.length >= 4) break;
     }
 
-    const clusters = crossCheck(claims);
+    const clusters = crossCheckAnswers(answers);
     const record: ResearchRecord = {
       id,
       at,
@@ -1220,11 +1218,11 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       if (!cluster.verified) continue;
       learning.add({
         kind: 'rule',
-        content: cluster.conclusion,
+        content: cluster.answer,
         anchor: { type: 'source', ref: cluster.sources[0] ?? 'unknown', block: 0, quote: cluster.quotes[0] ?? '' },
         scope: 'world',
         confidence: Math.min(0.9, 0.5 + cluster.sources.length * 0.1),
-        note: '深研交叉核对通过（' + cluster.sources.length + ' 个独立来源）：' + cluster.sources.join('、'),
+        note: '深研交叉核对通过（' + cluster.sources.length + ' 个独立来源，一致率 ' + Math.round(cluster.ratio * 100) + '%）：' + cluster.sources.join('、'),
       });
     }
     return record;

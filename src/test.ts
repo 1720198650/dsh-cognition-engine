@@ -53,7 +53,7 @@ import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts'
 import { buildSearchQueries, pickSources } from './autolearn.ts';
 import { RevisionLog, markAuto, revisionBadge, shouldAutoRevise, unmarkAuto } from './autorevise.ts';
 import { detectCorrection, parseCorrectionResult } from './correction.ts';
-import { buildDeepClaimPrompt, crossCheck, parseDeepClaims } from './deepresearch.ts';
+import { buildDeepClaimPrompt, crossCheck, crossCheckAnswers, buildAnswerPrompt, parseAnswer, parseDeepClaims } from './deepresearch.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote } from './source_note.ts';
 import { summarizeUsage } from './usage.ts';
 import { resolveInjectMode } from './settings.ts';
@@ -4818,6 +4818,39 @@ async function main(): Promise<void> {
     assert.equal(parsed.length, 1, '引文不足 12 字或结论不足 8 字的要丢掉');
     assert.equal(parsed[0]!.conclusion, '面板每两秒拉计数');
     assert.equal(parseDeepClaims('模型拒答').length, 0, '解析不出就返回空，不编');
+  });
+
+  section('[74] 深研重做：逐源作答再比对答案');
+  await test('同一问题、多源答案一致才 verified；单源与外行答案不算', () => {
+    const answers = [
+      { source: 'src-1', answer: '增量更新应当只重写发生变化的事实，其余保留', quote: '只重写发生变化的事实，其余保持不变', relevant: true },
+      { source: 'src-2', answer: '增量更新只重写变化的事实，其他保留不动', quote: 'incremental update rewrites only changed facts', relevant: true },
+      { source: 'src-3', answer: '这篇讲的是金融行情的解释学', quote: '牛市是解释机器，它通过移动时间框架覆盖约束', relevant: true },
+      { source: 'src-4', answer: '无关资料', quote: '', relevant: false },
+    ];
+    const clusters = crossCheckAnswers(answers);
+    const verified = clusters.filter((cluster) => cluster.verified);
+    assert.equal(verified.length, 1, '只有两个来源答案一致那条才算通过：' + JSON.stringify(clusters));
+    assert.deepEqual(verified[0]!.sources.sort(), ['src-1', 'src-2']);
+    assert.ok(verified[0]!.ratio > 0.6 && verified[0]!.ratio < 0.7, '一致率按回答数算：' + verified[0]!.ratio);
+  });
+
+  await test('作答提示词要求直接回答问题、引文逐字、没关系就 false；解析挑剔', () => {
+    const built = buildAnswerPrompt({ question: '记忆怎么增量更新', title: 'a.html', text: '正文'.repeat(500) });
+    assert.ok(built.includes('对问题的回答'), '必须要求直接回答问题');
+    assert.ok(built.includes('逐字照抄'));
+    assert.ok(built.includes('"relevant":false'), '答不上来要能返回 false');
+
+    const ok = parseAnswer('{"relevant":true,"answer":"只重写变化的事实","quote":"只重写发生变化的事实，其余保持不变"}');
+    assert.equal(ok.relevant, true);
+    assert.equal(ok.answer, '只重写变化的事实');
+
+    const irrelevant = parseAnswer('{"relevant":false,"answer":"","quote":""}');
+    assert.equal(irrelevant.relevant, false, 'graph 标 false 的要当无关');
+    assert.equal(parseAnswer('模型拒答').relevant, false, '解析不出就当无关，不编');
+    // 引文太短也不能算
+    const shortQuote = parseAnswer('{"relevant":true,"answer":"有回答","quote":"太短"}');
+    assert.equal(shortQuote.relevant, false);
   });
 
   section('[63] 文件编码：GBK 表格不能读成乱码');  await test('UTF-8/GBK/UTF-16 都能正确解码，不乱码', () => {

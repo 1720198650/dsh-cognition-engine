@@ -126,9 +126,100 @@ export interface ResearchRecord {
   question: string;
   /** 每个来源抓了多少字、抽了几条 */
   sources: Array<{ sourceId: string; url: string; chars: number; claims: number }>;
-  clusters: Cluster[];
+  /** 交叉核对后的答案簇（逐源作答再归并） */
+  clusters: AnswerCluster[];
   /** 交叉核对通过的条数 / 总条数 */
   verified: number;
   total: number;
   failures: Array<{ url: string; reason: string }>;
+}
+
+/** 一个来源对"同一个问题"的回答（逐源作答，才能横向比）。 */
+export interface AnswerRecord {
+  source: string;
+  /** 直接回答问题的句子（≤200 字） */
+  answer: string;
+  /** 支撑这句回答的逐字引文 */
+  quote: string;
+  /** 这个来源到底有没有回答问题 */
+  relevant: boolean;
+}
+
+export interface AnswerCluster {
+  answer: string;
+  sources: string[];
+  quotes: string[];
+  /** 有几个独立来源给出同一个回答 */
+  agreement: number;
+  /** 几个来源里有一致的 / 总共给出回答的 */
+  ratio: number;
+  verified: boolean;
+}
+
+/**
+ * 「同一个问题逐源作答 → 比答案」的提示词。
+ *
+ * 这是重做的核心：旧版让每篇各抽各的结论，不同网页讲不同侧面，永远凑不出同义结论
+ * （实测 5 篇 13 条 0 条通过）。改成对**同一个问题**作答，答案才有可比性。
+ */
+export function buildAnswerPrompt(input: { question: string; title: string; text: string }): string {
+  return [
+    '你在读一篇资料，用户的问题是：' + input.question,
+    '',
+    '只输出一个 JSON 对象，不要解释、不要 markdown 代码块：',
+    '{"relevant":true,"answer":"用一句话直接回答上面的问题","quote":"原文里逐字照抄、能支撑这句回答的一段"}',
+    '',
+    '要求：',
+    '- answer ≤120 字，必须是**对问题的回答**，不是资料摘要、不是背景介绍。',
+    '- quote 必须逐字照抄至少 12 个字，且真的支持 answer。',
+    '- 如果这篇资料压根没回答这个问题，输出 {"relevant":false,"answer":"","quote":""}。',
+    '',
+    '资料标题：' + input.title,
+    '正文：',
+    input.text
+  ].join('\n');
+}
+
+/** 解析逐源作答输出。 */
+export function parseAnswer(raw: string): AnswerRecord {
+  const empty: AnswerRecord = { source: '', answer: '', quote: '', relevant: false };
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start < 0 || end <= start) return empty;
+  try {
+    const parsed = JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
+    const answer = typeof parsed.answer === 'string' ? parsed.answer.replace(/\s+/g, ' ').trim() : '';
+    const quote = typeof parsed.quote === 'string' ? parsed.quote.replace(/\s+/g, ' ').trim() : '';
+    const relevant = parsed.relevant !== false && answer.length >= 6 && quote.length >= 12;
+    return { source: '', answer, quote, relevant };
+  } catch {
+    return empty;
+  }
+}
+
+/**
+ * 答案归并：把表达同一结论的答案合成一簇。
+ *
+ * 阈值 0.45 是初始值（旧版 0.6 实测过严，一条都合不起来），
+ * 待 docs/l4-deepresearch.md 的标定结果回来再调。
+ * 硬规则不变：只有 1 个独立来源的答案 verified=false。
+ */
+export function crossCheckAnswers(answers: readonly AnswerRecord[], threshold = 0.45): AnswerCluster[] {
+  const usable = answers.filter((item) => item.relevant && item.answer.length > 0 && item.quote.length >= 12);
+  const totalAnswered = usable.length;
+  const clusters: AnswerCluster[] = [];
+  for (const item of usable) {
+    const hit = clusters.find((cluster) => conclusionSimilarity(cluster.answer, item.answer) >= threshold);
+    if (hit === undefined) {
+      clusters.push({ answer: item.answer, sources: [item.source], quotes: [item.quote], agreement: 1, ratio: 0, verified: false });
+      continue;
+    }
+    if (!hit.sources.includes(item.source)) hit.sources.push(item.source);
+    if (!hit.quotes.includes(item.quote)) hit.quotes.push(item.quote);
+    if (item.answer.length > hit.answer.length) hit.answer = item.answer;
+    hit.agreement = hit.sources.length;
+    if (hit.agreement >= 2) hit.verified = true;
+  }
+  for (const cluster of clusters) cluster.ratio = totalAnswered === 0 ? 0 : cluster.agreement / totalAnswered;
+  return clusters.sort((a, b) => Number(b.verified) - Number(a.verified) || b.agreement - a.agreement);
 }

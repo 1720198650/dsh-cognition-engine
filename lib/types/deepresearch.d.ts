@@ -63,7 +63,8 @@ export interface ResearchRecord {
         chars: number;
         claims: number;
     }>;
-    clusters: Cluster[];
+    /** 交叉核对后的答案簇（逐源作答再归并） */
+    clusters: AnswerCluster[];
     /** 交叉核对通过的条数 / 总条数 */
     verified: number;
     total: number;
@@ -72,3 +73,44 @@ export interface ResearchRecord {
         reason: string;
     }>;
 }
+/** 一个来源对"同一个问题"的回答（逐源作答，才能横向比）。 */
+export interface AnswerRecord {
+    source: string;
+    /** 直接回答问题的句子（≤200 字） */
+    answer: string;
+    /** 支撑这句回答的逐字引文 */
+    quote: string;
+    /** 这个来源到底有没有回答问题 */
+    relevant: boolean;
+}
+export interface AnswerCluster {
+    answer: string;
+    sources: string[];
+    quotes: string[];
+    /** 有几个独立来源给出同一个回答 */
+    agreement: number;
+    /** 几个来源里有一致的 / 总共给出回答的 */
+    ratio: number;
+    verified: boolean;
+}
+/**
+ * 「同一个问题逐源作答 → 比答案」的提示词。
+ *
+ * 这是重做的核心：旧版让每篇各抽各的结论，不同网页讲不同侧面，永远凑不出同义结论
+ * （实测 5 篇 13 条 0 条通过）。改成对**同一个问题**作答，答案才有可比性。
+ */
+export declare function buildAnswerPrompt(input: {
+    question: string;
+    title: string;
+    text: string;
+}): string;
+/** 解析逐源作答输出。 */
+export declare function parseAnswer(raw: string): AnswerRecord;
+/**
+ * 答案归并：把表达同一结论的答案合成一簇。
+ *
+ * 阈值 0.45 是初始值（旧版 0.6 实测过严，一条都合不起来），
+ * 待 docs/l4-deepresearch.md 的标定结果回来再调。
+ * 硬规则不变：只有 1 个独立来源的答案 verified=false。
+ */
+export declare function crossCheckAnswers(answers: readonly AnswerRecord[], threshold?: number): AnswerCluster[];
