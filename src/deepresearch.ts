@@ -200,18 +200,96 @@ export function parseAnswer(raw: string): AnswerRecord {
 /**
  * 答案归并：把表达同一结论的答案合成一簇。
  *
- * 阈值 0.45 是初始值（旧版 0.6 实测过严，一条都合不起来），
- * 待 docs/l4-deepresearch.md 的标定结果回来再调。
+ * 判定分两档（依据 docs/l4-deepresearch.md）：
+ *   - 便宜档：字符级 token-F1 + 数字/否定词硬规则；
+ *     ≥0.55 判同一，0.40~0.55 灰区（交给上层用一次 LLM 三分类），<0.40 判不同。
+ *   - 阈值是初值，要用 30~50 对人工标注扫描后标定；这里先不假装它准。
  * 硬规则不变：只有 1 个独立来源的答案 verified=false。
  */
-export function crossCheckAnswers(answers: readonly AnswerRecord[], threshold = 0.45): AnswerCluster[] {
+export const SAME_THRESHOLD = 0.55;
+export const GREY_THRESHOLD = 0.4;
+
+/** 字符级 token-F1（中文按字、英文按词）。 */
+export function tokenF1(a: string, b: string): number {
+  const tokens = (text: string): string[] => {
+    const words = text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+    const chars = [...conclusionKey(text)];
+    return words.length > 0 ? [...words, ...chars] : chars;
+  };
+  const ta = tokens(a);
+  const tb = tokens(b);
+  if (ta.length === 0 || tb.length === 0) return 0;
+  const countB = new Map<string, number>();
+  for (const token of tb) countB.set(token, (countB.get(token) ?? 0) + 1);
+  let common = 0;
+  for (const token of ta) {
+    const left = countB.get(token) ?? 0;
+    if (left > 0) {
+      common += 1;
+      countB.set(token, left - 1);
+    }
+  }
+  const precision = common / ta.length;
+  const recall = common / tb.length;
+  if (precision + recall === 0) return 0;
+  return (2 * precision * recall) / (precision + recall);
+}
+
+/** 抽数字（含百分数、小数），用来发现"数值互相矛盾"。 */
+export function digitsOf(text: string): string[] {
+  return text.match(/\d+(?:\.\d+)?%?/g) ?? [];
+}
+
+/**
+ * 只认"禁止/不许"这类**极性词**，不认裸「不」字。
+ *
+ * 第一版把裸「不」当否定：`其余保留` vs `其他保留不动` 被误判成"一方否定"，
+ * 0.79 的 F1 硬被判成不同（2026-11-18 实测）。中文里「不动」「不变」是词内否定，不是判断否定。
+ */
+const PROHIBITIONS = /(不要|不能|禁止|不得|别再|不许|never|must not|cannot|don't)/i;
+
+export type PairVerdict = 'same' | 'grey' | 'different';
+
+/**
+ * 两条答案的关系判定。
+ *
+ * 数字冲突、否定相反 → 直接判 different（这类分歧不该被相似度抹平）；
+ * 其余按 token-F1 分三档。
+ */
+export function judgeAnswerPair(a: string, b: string): { verdict: PairVerdict; f1: number; reason: string } {
+  const f1 = tokenF1(a, b);
+  const da = digitsOf(a);
+  const db = digitsOf(b);
+  if (da.length > 0 && db.length > 0) {
+    const sameDigits = da.some((value) => db.includes(value));
+    if (!sameDigits) return { verdict: 'different', f1, reason: '数值不一致（' + da.join(',') + ' vs ' + db.join(',') + '）' };
+  }
+  const negA = PROHIBITIONS.test(a);
+  const negB = PROHIBITIONS.test(b);
+  if (negA !== negB && f1 >= GREY_THRESHOLD) {
+    return { verdict: 'different', f1, reason: '一方带否定、另一方不带，不敢判同一' };
+  }
+  if (f1 >= SAME_THRESHOLD) return { verdict: 'same', f1, reason: 'token-F1 ' + f1.toFixed(2) };
+  if (f1 >= GREY_THRESHOLD) return { verdict: 'grey', f1, reason: 'token-F1 ' + f1.toFixed(2) + '（灰区，需二次判定）' };
+  return { verdict: 'different', f1, reason: 'token-F1 ' + f1.toFixed(2) };
+}
+
+export function crossCheckAnswers(answers: readonly AnswerRecord[], threshold = SAME_THRESHOLD): AnswerCluster[] {
   const usable = answers.filter((item) => item.relevant && item.answer.length > 0 && item.quote.length >= 12);
   const totalAnswered = usable.length;
-  const clusters: AnswerCluster[] = [];
+  const clusters: Array<AnswerCluster & { greyAgainst: string[] }> = [];
   for (const item of usable) {
-    const hit = clusters.find((cluster) => conclusionSimilarity(cluster.answer, item.answer) >= threshold);
+    let hit: (typeof clusters)[number] | undefined;
+    for (const cluster of clusters) {
+      const verdict = judgeAnswerPair(cluster.answer, item.answer);
+      if (verdict.verdict === 'same' || (verdict.verdict === 'grey' && threshold < SAME_THRESHOLD)) {
+        hit = cluster;
+        break;
+      }
+      if (verdict.verdict === 'grey') cluster.greyAgainst.push(item.source);
+    }
     if (hit === undefined) {
-      clusters.push({ answer: item.answer, sources: [item.source], quotes: [item.quote], agreement: 1, ratio: 0, verified: false });
+      clusters.push({ answer: item.answer, sources: [item.source], quotes: [item.quote], agreement: 1, ratio: 0, verified: false, greyAgainst: [] });
       continue;
     }
     if (!hit.sources.includes(item.source)) hit.sources.push(item.source);
@@ -221,5 +299,7 @@ export function crossCheckAnswers(answers: readonly AnswerRecord[], threshold = 
     if (hit.agreement >= 2) hit.verified = true;
   }
   for (const cluster of clusters) cluster.ratio = totalAnswered === 0 ? 0 : cluster.agreement / totalAnswered;
-  return clusters.sort((a, b) => Number(b.verified) - Number(a.verified) || b.agreement - a.agreement);
+  return clusters
+    .map(({ greyAgainst, ...cluster }) => cluster)
+    .sort((a, b) => Number(b.verified) - Number(a.verified) || b.agreement - a.agreement);
 }

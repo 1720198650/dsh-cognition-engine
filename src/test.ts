@@ -53,7 +53,7 @@ import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts'
 import { buildSearchQueries, pickSources } from './autolearn.ts';
 import { RevisionLog, markAuto, revisionBadge, shouldAutoRevise, unmarkAuto } from './autorevise.ts';
 import { detectCorrection, parseCorrectionResult } from './correction.ts';
-import { buildDeepClaimPrompt, crossCheck, crossCheckAnswers, buildAnswerPrompt, parseAnswer, parseDeepClaims } from './deepresearch.ts';
+import { buildDeepClaimPrompt, crossCheck, crossCheckAnswers, buildAnswerPrompt, judgeAnswerPair, parseAnswer, parseDeepClaims, tokenF1 } from './deepresearch.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote } from './source_note.ts';
 import { summarizeUsage } from './usage.ts';
 import { resolveInjectMode } from './settings.ts';
@@ -4851,6 +4851,41 @@ async function main(): Promise<void> {
     // 引文太短也不能算
     const shortQuote = parseAnswer('{"relevant":true,"answer":"有回答","quote":"太短"}');
     assert.equal(shortQuote.relevant, false);
+  });
+
+  section('[75] 深研判据：token-F1 分档 + 数字/否定硬规则');
+  await test('F1 分三档；数字冲突与极性词相反直接判不同', () => {
+    const same = judgeAnswerPair('增量更新只重写发生变化的事实，其余保持不变', '增量更新只重写发生变化的事实，其他保留不动');
+    assert.equal(same.verdict, 'same', JSON.stringify(same));
+    assert.ok(same.f1 >= 0.55, 'F1 应达到同一档：' + same.f1.toFixed(2));
+    // 「不动」是词内否定，不该被当成判断否定（第一版就错在这）
+    assert.ok(tokenF1('其余保留', '其他保留不动') > 0.5);
+
+    const different = judgeAnswerPair('面板每两秒轮询计数接口', '金融行情是一套解释机器');
+    assert.equal(different.verdict, 'different');
+
+    // 数字冲突：句子很像但数值不同，必须判不同（不能被相似度抹平）
+    const digitClash = judgeAnswerPair('每天最多自动修订 5 次', '每天最多自动修订 20 次');
+    assert.equal(digitClash.verdict, 'different', JSON.stringify(digitClash));
+    assert.ok(digitClash.reason.includes('数值'));
+
+    // 极性相反（一方"不要"一方"要"）不能判同一
+    const polarity = judgeAnswerPair('发版前要跑真实入口', '发版前不要跑真实入口');
+    assert.equal(polarity.verdict, 'different', JSON.stringify(polarity));
+  });
+
+  await test('跨源归并：同义答案合并、单源不 verified、数字冲突的答案不能被并进去', () => {
+    const answers = [
+      { source: 'a.example', answer: '增量更新只重写发生变化的事实，其余保持不变', quote: '只重写发生变化的事实，其余保持不变', relevant: true },
+      { source: 'b.example', answer: '增量更新只重写发生变化的事实，其他保留不动', quote: 'incremental update rewrites only changed facts', relevant: true },
+      { source: 'c.example', answer: '增量更新每天最多 20 次，其余不变', quote: '每天最多 20 次增量更新，其余保持不变', relevant: true },
+    ];
+    const clusters = crossCheckAnswers(answers);
+    const verified = clusters.filter((cluster) => cluster.verified);
+    assert.equal(verified.length, 1, JSON.stringify(clusters));
+    assert.equal(verified[0]!.sources.length, 2);
+    // 数字不同的那条不能被并进同一簇
+    assert.ok(!verified[0]!.sources.includes('c.example'), '数值冲突的答案不能算同一结论');
   });
 
   section('[63] 文件编码：GBK 表格不能读成乱码');  await test('UTF-8/GBK/UTF-16 都能正确解码，不乱码', () => {

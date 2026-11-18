@@ -109,8 +109,28 @@ export declare function parseAnswer(raw: string): AnswerRecord;
 /**
  * 答案归并：把表达同一结论的答案合成一簇。
  *
- * 阈值 0.45 是初始值（旧版 0.6 实测过严，一条都合不起来），
- * 待 docs/l4-deepresearch.md 的标定结果回来再调。
+ * 判定分两档（依据 docs/l4-deepresearch.md）：
+ *   - 便宜档：字符级 token-F1 + 数字/否定词硬规则；
+ *     ≥0.55 判同一，0.40~0.55 灰区（交给上层用一次 LLM 三分类），<0.40 判不同。
+ *   - 阈值是初值，要用 30~50 对人工标注扫描后标定；这里先不假装它准。
  * 硬规则不变：只有 1 个独立来源的答案 verified=false。
  */
+export declare const SAME_THRESHOLD = 0.55;
+export declare const GREY_THRESHOLD = 0.4;
+/** 字符级 token-F1（中文按字、英文按词）。 */
+export declare function tokenF1(a: string, b: string): number;
+/** 抽数字（含百分数、小数），用来发现"数值互相矛盾"。 */
+export declare function digitsOf(text: string): string[];
+export type PairVerdict = 'same' | 'grey' | 'different';
+/**
+ * 两条答案的关系判定。
+ *
+ * 数字冲突、否定相反 → 直接判 different（这类分歧不该被相似度抹平）；
+ * 其余按 token-F1 分三档。
+ */
+export declare function judgeAnswerPair(a: string, b: string): {
+    verdict: PairVerdict;
+    f1: number;
+    reason: string;
+};
 export declare function crossCheckAnswers(answers: readonly AnswerRecord[], threshold?: number): AnswerCluster[];
