@@ -1513,7 +1513,12 @@ window.__ModuleLoader__.load({
                         // 删的是块索引和摘要，不动来源账本；两步确认，防手滑
                         deleteConfirm === item.sourceId
                           ? h('span', { style: { display: 'inline-flex', gap: 6, alignItems: 'center' } },
-                              h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)' } }, '删掉这条资料的块和摘要？'),
+                              h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)' } },
+                              // 删除前列影响清单（Coze/Dify 的做法：说清"还会连带删什么"再让你确认）
+                              '将删除 ' + (item.blocks || 0) + ' 块索引' +
+                              (item.note ? ' + 1 份摘要' : '') +
+                              (item.note && item.note.status === 'ready' ? '（已提炼，删后要重新提炼）' : '') +
+                              '；来源账本原文保留'),
                               h('button', { type: 'button', style: { ...S.tab, color: '#f85149' }, onClick: async () => {
                                 try {
                                   const res = await call('/cognition-engine/sources/delete?sourceId=' + encodeURIComponent(item.sourceId), { method: 'POST' });
