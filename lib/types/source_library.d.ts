@@ -44,6 +44,13 @@ export interface SourceHit {
     score: number;
     text: string;
 }
+/**
+ * 一条"资料"如果整个正文只是一行文件路径，它不该参与检索。
+ *
+ * 2026-11-18 实测：用户把 `D:\下载\...固定资产投资.xls` 这条路径粘进收件箱，
+ * 之后查「固定资产投资」第一名是这条 26 字的路径，真正的表排第二——噪声盖住了内容。
+ */
+export declare function isPathOnlyBlock(text: string): boolean;
 export declare class SourceLibrary {
     readonly blocksFile: string;
     readonly notesFile: string;

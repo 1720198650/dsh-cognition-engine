@@ -209,6 +209,19 @@ export interface SourceHit {
   text: string;
 }
 
+/**
+ * 一条"资料"如果整个正文只是一行文件路径，它不该参与检索。
+ *
+ * 2026-11-18 实测：用户把 `D:\下载\...固定资产投资.xls` 这条路径粘进收件箱，
+ * 之后查「固定资产投资」第一名是这条 26 字的路径，真正的表排第二——噪声盖住了内容。
+ */
+export function isPathOnlyBlock(text: string): boolean {
+  const clean = text.trim();
+  if (clean.length === 0 || clean.length > 300) return false;
+  if (/[\n。！？；]/.test(clean)) return false;
+  return /^([a-zA-Z]:[\\/]|\\\\|~[\\/]|\/)/.test(clean);
+}
+
 export class SourceLibrary {
   readonly blocksFile: string;
   readonly notesFile: string;
@@ -342,6 +355,7 @@ export class SourceLibrary {
 
     const scored: SourceHit[] = [];
     for (const block of this.loadBlocks()) {
+      if (isPathOnlyBlock(block.text)) continue;
       const score = scoreQuery(query, block.text);
       if (score < minScore) continue;
       scored.push({

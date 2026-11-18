@@ -47,7 +47,7 @@ import { readdirSync } from 'node:fs';
 import { WikiStore, buildWiki } from './wiki.ts';
 import { CandidateInbox } from './inbox.ts';
 import { SourceStore } from './sources.ts';
-import { SourceLibrary, chunkText, scoreQuery } from './source_library.ts';
+import { SourceLibrary, chunkText, isPathOnlyBlock, scoreQuery } from './source_library.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote } from './source_note.ts';
 import { summarizeUsage } from './usage.ts';
 import { resolveInjectMode } from './settings.ts';
@@ -4309,6 +4309,13 @@ async function main(): Promise<void> {
       const describe = lib.describe('src-1');
       assert.equal(describe.note?.status, 'ready');
       assert.equal(describe.blocks, first.blocks);
+
+      // 路径假资料不许参与检索：实测查「固定资产投资」第一名是那条 26 字路径
+      lib.indexSource({ id: 'src-2', title: 'pasted-path', content: 'D:\\下载\\固定资产投资(不含农户).xls' });
+      assert.equal(isPathOnlyBlock('D:\\下载\\固定资产投资(不含农户).xls'), true);
+      assert.equal(isPathOnlyBlock('这是一段真正的正文，讲固定资产投资的分组方式。'), false);
+      const afterJunk = lib.search('固定资产投资');
+      assert.ok(afterJunk.every((hit) => hit.sourceId !== 'src-2'), '路径块不该出现在检索结果里');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -4348,8 +4355,7 @@ async function main(): Promise<void> {
     assert.equal(new Set(seen).size, rows.length, '不能有重复行');
   });
 
-  section('[63] 文件编码：GBK 表格不能读成乱码');
-  await test('UTF-8/GBK/UTF-16 都能正确解码，不乱码', () => {
+  section('[63] 文件编码：GBK 表格不能读成乱码');  await test('UTF-8/GBK/UTF-16 都能正确解码，不乱码', () => {
     const gbk = Buffer.from([0xd6, 0xb8, 0xb1, 0xea, 0x2c, 0xd6, 0xb5, 0x0a]); // "指标,值\n" 的 GBK 编码
     const decodedGbk = decodeTextBuffer(gbk);
     assert.equal(decodedGbk.encoding, 'gbk', '非 UTF-8 字节应回退 GBK');
