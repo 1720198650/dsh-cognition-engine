@@ -4355,6 +4355,42 @@ async function main(): Promise<void> {
     assert.equal(new Set(seen).size, rows.length, '不能有重复行');
   });
 
+  section('[64] 资料库删除：只删派生数据，账本不动');
+  await test('deleteSource 删块与摘要，其他来源不受影响；20 行表格不受字数门槛限制', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cog-del-'));
+    try {
+      const lib = new SourceLibrary({
+        blocksFile: join(dir, 'blocks.jsonl'),
+        notesFile: join(dir, 'notes.json'),
+        now: () => 1_000_000,
+      });
+      lib.indexSource({ id: 'src-1', title: 'a', content: '第一份资料的正文。'.repeat(50) });
+      lib.indexSource({ id: 'src-2', title: 'b', content: '第二份资料的正文。'.repeat(50) });
+      lib.saveNote({ sourceId: 'src-2', at: 1, status: 'ready', title: 'b', summary: '摘要', points: [] });
+      const before = lib.stats().blocks;
+      const removed = lib.deleteSource('src-1');
+      assert.ok(removed.blocks > 0, '应删掉块');
+      assert.equal(lib.blocksOf('src-1').length, 0, '删完不能再有块');
+      assert.equal(lib.stats().blocks, before - removed.blocks, '块数要减少');
+      assert.ok(lib.blocksOf('src-2').length > 0, '别的资料不能被误删');
+      assert.equal(lib.note('src-2')?.status, 'ready', '别的摘要不能被误删');
+      // 重开一次：删除必须已经落盘
+      const again = new SourceLibrary({ blocksFile: join(dir, 'blocks.jsonl'), notesFile: join(dir, 'notes.json') });
+      assert.equal(again.blocksOf('src-1').length, 0, '删除要落盘，重启不能复活');
+      assert.equal(lib.search('第一份资料').some((hit) => hit.sourceId === 'src-1'), false, '删掉的资料不该还能被检索到');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+
+    // 20 行表格即使不满 800 字也要提炼（用户 573 字的统计表被误跳过）
+    const rows = Array.from({ length: 25 }, (_, i) => `第${i + 1}项,${i * 10},${i}.5`);
+    const csv = ['项目,数量,单耗', ...rows].join('\n');
+    assert.ok(csv.length < 800, '这张表字数确实不到 800');
+    assert.equal(distillSkipReason(csv), null, '够行数的表格不该被字数门槛拦下');
+    const fewRows = ['项目,数量,单耗', '甲,1,2.5', '乙,2,3.5'].join('\n');
+    assert.ok(distillSkipReason(fewRows) !== null, '行数不够的小表仍按太短处理');
+  });
+
   section('[63] 文件编码：GBK 表格不能读成乱码');  await test('UTF-8/GBK/UTF-16 都能正确解码，不乱码', () => {
     const gbk = Buffer.from([0xd6, 0xb8, 0xb1, 0xea, 0x2c, 0xd6, 0xb5, 0x0a]); // "指标,值\n" 的 GBK 编码
     const decodedGbk = decodeTextBuffer(gbk);

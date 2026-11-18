@@ -23,6 +23,12 @@ export interface SourceNote {
     /** 失败原因（status='failed' 时有值） */
     error?: string;
 }
+/** 表格形状（分隔符 / 表头 / 数据行），不是表格返回 null。 */
+export declare function detectTableShape(text: string): {
+    delimiter: string;
+    header: string;
+    rows: string[];
+} | null;
 export declare function chunkText(text: string, options?: {
     target?: number;
     max?: number;
@@ -79,6 +85,17 @@ export declare class SourceLibrary {
         skipped: boolean;
     };
     blocksOf(sourceId: string): SourceBlock[];
+    /**
+     * 从资料库里删掉一条来源的块索引与摘要（来源账本不动，哈希链不会断）。
+     *
+     * 为什么需要：误粘的路径、导入失败的残片会长期占着检索位和列表行。
+     * SoMem 的账本是只追加的证据层，删除只能发生在"派生视图"上——这正是块和摘要所在的层。
+     */
+    deleteSource(sourceId: string): {
+        sourceId: string;
+        blocks: number;
+        note: boolean;
+    };
     note(sourceId: string): SourceNote | undefined;
     setPending(sourceId: string, title: string): SourceNote;
     saveNote(note: SourceNote): SourceNote;

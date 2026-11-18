@@ -572,6 +572,8 @@ window.__ModuleLoader__.load({
         const [sourceHits, setSourceHits] = React.useState(null);
         /** 资料库列表（收件页主体）：{items, stats} */
         const [sourceList, setSourceList] = React.useState(null);
+        /** 正在二次确认删除的 sourceId（null=没有） */
+        const [deleteConfirm, setDeleteConfirm] = React.useState(null);
         const dict = pickDict(ctx);
 
         const call = (path, init) =>
@@ -1445,9 +1447,9 @@ window.__ModuleLoader__.load({
                       h('div', { style: { fontSize: 12 } },
                         item.title + '（' + item.sourceId + ' · ' + Math.round(item.chars / 1000) + 'k 字 · ' + item.blocks + ' 块 · ' + statusText + (note && note.topic ? ' · ' + note.topic : '') + '）'),
                       note && note.summary ? h('div', { style: { fontSize: 11, marginTop: 2 } }, note.summary) : null,
-                      item.sourceId && (!note || note.status === 'failed')
-                        ? h('div', { style: S.meta },
-                            h('button', { type: 'button', style: S.tab, onClick: async () => {
+                      h('div', { style: S.meta },
+                        item.sourceId && (!note || note.status === 'failed')
+                          ? h('button', { type: 'button', style: S.tab, onClick: async () => {
                               try {
                                 const res = await call('/cognition-engine/sources/redistill?sourceId=' + encodeURIComponent(item.sourceId), { method: 'POST' });
                                 const data = await res.json().catch(() => ({}));
@@ -1456,8 +1458,27 @@ window.__ModuleLoader__.load({
                               } catch (error) {
                                 window.alert('提炼失败：' + (error instanceof Error ? error.message : String(error)));
                               }
-                            } }, '提炼 / 重新提炼'))
-                        : null,
+                            } }, '提炼 / 重新提炼')
+                          : null,
+                        // 删的是块索引和摘要，不动来源账本；两步确认，防手滑
+                        deleteConfirm === item.sourceId
+                          ? h('span', { style: { display: 'inline-flex', gap: 6, alignItems: 'center' } },
+                              h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)' } }, '删掉这条资料的块和摘要？'),
+                              h('button', { type: 'button', style: { ...S.tab, color: '#f85149' }, onClick: async () => {
+                                try {
+                                  const res = await call('/cognition-engine/sources/delete?sourceId=' + encodeURIComponent(item.sourceId), { method: 'POST' });
+                                  const data = await res.json().catch(() => ({}));
+                                  if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+                                  setDeleteConfirm(null);
+                                  setTick((v) => v + 1);
+                                } catch (error) {
+                                  window.alert('删除失败：' + (error instanceof Error ? error.message : String(error)));
+                                }
+                              } }, '确认删'),
+                              h('button', { type: 'button', style: S.tab, onClick: () => setDeleteConfirm(null) }, '取消'),
+                            )
+                          : h('button', { type: 'button', style: S.tab, onClick: () => setDeleteConfirm(item.sourceId) }, '删'),
+                      ),
                       note && note.status === 'failed' && note.error
                         ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)' } }, note.error)
                         : null,

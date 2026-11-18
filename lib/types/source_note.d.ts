@@ -7,7 +7,7 @@
  *
  * 提示词与解析都放在这里，便于离线单测（不需要真模型）。
  */
-import type { SourceNote } from './source_library.ts';
+import { type SourceNote } from './source_library.ts';
 /**
  * 提炼前的前置校验：太短或压根不是正文的资料，不调模型。
  *
@@ -19,10 +19,13 @@ import type { SourceNote } from './source_library.ts';
  * 套出来的空话。短资料不需要结论，只需要能检索到原文。
  */
 export declare const MIN_DISTILL_CHARS = 800;
+/** 表格够这么多行就值得提炼（不受字数门槛限制）。 */
+export declare const TABLE_MIN_ROWS = 20;
 export declare function distillSkipReason(text: string): string | null;
 export declare function excerptForNote(text: string): {
     text: string;
     truncated: boolean;
+    tableRows?: number;
 };
 export declare function buildSourceNotePrompt(input: {
     title: string;

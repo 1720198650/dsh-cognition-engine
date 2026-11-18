@@ -7,7 +7,7 @@
  *
  * 提示词与解析都放在这里，便于离线单测（不需要真模型）。
  */
-import type { SourceNote } from './source_library.ts';
+import { detectTableShape, type SourceNote } from './source_library.ts';
 
 /** 送进模型的正文字数上限：头部给背景与问题，尾部给结论，中间可能只是实验细节。 */
 const HEAD_CHARS = 8000;
@@ -24,12 +24,18 @@ const TAIL_CHARS = 3000;
  * 套出来的空话。短资料不需要结论，只需要能检索到原文。
  */
 export const MIN_DISTILL_CHARS = 800;
+/** 表格够这么多行就值得提炼（不受字数门槛限制）。 */
+export const TABLE_MIN_ROWS = 20;
 
 export function distillSkipReason(text: string): string | null {
   const clean = text.trim();
   if (clean.length === 0) return '正文是空的';
+  // 表格按行数算，不按字数：20 行的表信息量远大于 800 字散文，
+  // 按字数门槛会把真表格当"太短"跳过（2026-11-18 用户 573 字的统计表就是这样被跳过的）
+  const table = detectTableShape(clean);
+  if (table !== null && table.rows.length >= TABLE_MIN_ROWS) return null;
   if (clean.length < MIN_DISTILL_CHARS) {
-    return `正文只有 ${clean.length} 字，太短：只存原文供检索，不提炼结论`;
+    return `正文只有 ${clean.length} 字${table === null ? '' : `（表格 ${table.rows.length} 行，未到 ${TABLE_MIN_ROWS} 行）`}，太短：只存原文供检索，不提炼结论`;
   }
   // 单行盘符路径 / UNC 路径：这是"填了路径没读文件"的典型形态
   if (/^([a-zA-Z]:[\\/]|\\\\|~[\\/]|\/)/.test(clean) && !/[。！？；\n]/.test(clean)) {
@@ -38,9 +44,33 @@ export function distillSkipReason(text: string): string | null {
   return null;
 }
 
-export function excerptForNote(text: string): { text: string; truncated: boolean } {
+export function excerptForNote(text: string): { text: string; truncated: boolean; tableRows?: number } {
   const clean = text.replace(/\r\n?/g, '\n').trim();
-  if (clean.length <= HEAD_CHARS + TAIL_CHARS) return { text: clean, truncated: false };
+  // 表格按整行截：切在半行上模型会读出错位的数据
+  const table = detectTableShape(clean);
+  if (table !== null && clean.length > HEAD_CHARS + TAIL_CHARS) {
+    const lines = [table.header, ...table.rows];
+    const keepTail = Math.min(5, Math.max(0, lines.length - 2));
+    const head: string[] = [];
+    let used = 0;
+    let index = 0;
+    for (; index < lines.length - keepTail; index += 1) {
+      const line = lines[index]!;
+      if (used + line.length + 1 > HEAD_CHARS) break;
+      head.push(line);
+      used += line.length + 1;
+    }
+    const tail = lines.slice(Math.max(index, lines.length - keepTail));
+    const omitted = lines.length - head.length - tail.length;
+    return {
+      text: `${head.join('\n')}\n……（中间省略 ${omitted} 行）……\n${tail.join('\n')}`,
+      truncated: true,
+      tableRows: table.rows.length,
+    };
+  }
+  if (clean.length <= HEAD_CHARS + TAIL_CHARS) {
+    return { text: clean, truncated: false, ...(table === null ? {} : { tableRows: table.rows.length }) };
+  }
   const head = clean.slice(0, HEAD_CHARS);
   const tail = clean.slice(clean.length - TAIL_CHARS);
   return { text: `${head}\n\n……（中间省略 ${clean.length - HEAD_CHARS - TAIL_CHARS} 字，直接跳到结尾）……\n\n${tail}`, truncated: true };
@@ -54,19 +84,34 @@ export function buildSourceNotePrompt(input: {
 }): { prompt: string; truncated: boolean } {
   const maxPoints = Math.max(1, input.maxPoints ?? 5);
   const excerpt = excerptForNote(input.text);
+  const isTable = excerpt.tableRows !== undefined;
   const topics = (input.topics ?? []).filter((name) => name.trim().length > 0).slice(0, 30);
   const topicLine =
     topics.length === 0
       ? '（暂无已有主题，自己起一个 2~6 字的主题名）'
       : `已有主题（能对应就沿用，对应不上再自己起 2~6 字的新名）：${topics.join('、')}`;
 
+  const rules = isTable
+    ? [
+        '这份资料是**表格**（CSV/制表符分隔）。按表格的读法提炼：',
+        `1. summary：≤300 字，说清这张表统计的是什么、口径（时间/地区/单位/分组维度）。`,
+        `2. points：${maxPoints} 条以内，给可复用的事实性结论，**必须带表里的具体数字**；数字只能照抄表里出现的，不许推算或编造。`,
+        '3. topic：一个 2~6 字的主题名。',
+      ]
+    : [
+        '你在做资料归档。把下面这份资料压成结构化条目，供以后按需检索。',
+        '',
+        '要求：',
+        `1. summary：≤300 字，说清这份资料在解决什么问题、核心结论是什么。不要客套，不要复述标题。`,
+        `2. points：${maxPoints} 条以内的可复用结论，每条 1~2 句。要求脱离原文也成立，不要出现「本文」「作者」这类指代。`,
+        '3. topic：一个 2~6 字的主题名。',
+      ];
+
   const prompt = [
-    '你在做资料归档。把下面这份资料压成结构化条目，供以后按需检索。',
+    ...(isTable ? ['你在做资料归档。把下面这份资料压成结构化条目，供以后按需检索。', ''] : []),
+    ...rules,
     '',
-    '要求：',
-    `1. summary：≤300 字，说清这份资料在解决什么问题、核心结论是什么。不要客套，不要复述标题。`,
-    `2. points：${maxPoints} 条以内的可复用结论，每条 1~2 句。要求脱离原文也成立，不要出现「本文」「作者」这类指代。`,
-    '3. topic：一个 2~6 字的主题名。',
+    ...(isTable ? [`（表共约 ${excerpt.tableRows} 行数据；只给表头和首尾若干行，中间已省略。）`] : []),
     '',
     topicLine,
     '',
