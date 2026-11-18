@@ -580,6 +580,13 @@ window.__ModuleLoader__.load({
         const [learnInfo, setLearnInfo] = React.useState(null);
         /** 自动学习开关状态：{autoLearn, autoRevise, webAvailable, recent} */
         const [autoInfo, setAutoInfo] = React.useState(null);
+        // 开关类按钮统一成 chip 样子：有边框有内边距，不然看着像一行说明文字
+        const CHIP = {
+          ...S.tab,
+          border: '1px solid var(--dsw-alias-border-l1)',
+          borderRadius: 6,
+          padding: '3px 10px',
+        };
         const dict = pickDict(ctx);
 
         const call = (path, init) =>
@@ -1858,7 +1865,7 @@ window.__ModuleLoader__.load({
             // 自动学习开关：默认关，打开后才会自己检索花钱
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, paddingBottom: 8, borderBottom: '1px solid var(--dsw-alias-border-l1)' } },
               h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-                h('button', { type: 'button', style: S.tab, onClick: async () => {
+                h('button', { type: 'button', style: CHIP, onClick: async () => {
                   const next = !(autoInfo && autoInfo.autoLearn);
                   try {
                     const res = await call('/cognition-engine/autolearn/toggle?autoLearn=' + next, { method: 'POST' });
@@ -1868,7 +1875,7 @@ window.__ModuleLoader__.load({
                     window.alert('切换失败：' + (error instanceof Error ? error.message : String(error)));
                   }
                 } }, '自动联网学习：' + (autoInfo && autoInfo.autoLearn ? '开' : '关')),
-                h('button', { type: 'button', style: S.tab, onClick: async () => {
+                h('button', { type: 'button', style: CHIP, onClick: async () => {
                   const next = !(autoInfo && autoInfo.autoRevise);
                   try {
                     const res = await call('/cognition-engine/autolearn/toggle?autoRevise=' + next, { method: 'POST' });
@@ -1918,22 +1925,49 @@ window.__ModuleLoader__.load({
             pendingCands.length === 0
               ? h('div', { style: S.explain }, '还没有候选。点上面那个按钮，从资料库已提炼的结论里生成。')
               : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-                  ...pendingCands.map((cand) => h('div', { key: cand.id, style: S.item },
-                    h('div', { style: { fontSize: 12 } },
-                      '[' + ({ fact: '事实', rule: '准则', skill: '技能' }[cand.kind] || cand.kind) + '] ' + cand.content),
-                    h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                  ...pendingCands.map((cand) => h('div', {
+                    key: cand.id,
+                    style: {
+                      ...S.item,
+                      border: '1px solid var(--dsw-alias-border-l1)',
+                      borderRadius: 8,
+                      padding: '10px 12px',
+                    },
+                  },
+                    h('div', { style: { display: 'flex', gap: 8, alignItems: 'flex-start' } },
+                      h('span', {
+                        style: {
+                          flex: '0 0 auto',
+                          fontSize: 11,
+                          padding: '1px 6px',
+                          borderRadius: 4,
+                          border: '1px solid var(--dsw-alias-border-l1)',
+                          color: 'var(--dsw-alias-label-secondary)',
+                        },
+                      }, { fact: '事实', rule: '准则', skill: '技能' }[cand.kind] || cand.kind),
+                      h('span', { style: { fontSize: 13, fontWeight: 600, lineHeight: 1.5 } }, cand.content),
+                    ),
+                    h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)', marginTop: 6 } },
                       '锚：' + cand.anchor.ref + (cand.anchor.block === undefined ? '' : '#' + cand.anchor.block) +
                       ' · 核对到 ' + (cand.anchorChars || 0) + ' 字' +
                       (cand.scope === 'world' ? ' · 外部知识（低权重入库）' : ' · 关于你为真') +
                       (cand.needsQuote ? ' · 引文是转述，建议补原文再采用' : '') +
                       (cand.anchorFlags && cand.anchorFlags.length > 0 ? ' · 该块带标记（' + cand.anchorFlags.join('、') + '）' : '') +
                       (cand.subject ? ' · 主题 ' + cand.subject : '')),
-                    h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
-                      '引文：' + (cand.anchor.quote || '').slice(0, 120) + ((cand.anchor.quote || '').length > 120 ? '…' : '')),
+                    h('div', {
+                      style: {
+                        fontSize: 11,
+                        color: 'var(--dsw-alias-label-secondary)',
+                        fontStyle: 'italic',
+                        marginTop: 4,
+                        paddingLeft: 8,
+                        borderLeft: '2px solid var(--dsw-alias-border-l1)',
+                      },
+                    }, (cand.anchor.quote || '').slice(0, 160) + ((cand.anchor.quote || '').length > 160 ? '…' : '')),
                     cand.kind === 'rule'
-                      ? h('input', { id: 'lb-' + cand.id, placeholder: '适用边界（逗号分隔，准则必填）', style: S.input })
+                      ? h('input', { id: 'lb-' + cand.id, placeholder: '适用边界（逗号分隔，准则必填）', style: { ...S.input, marginTop: 6 } })
                       : null,
-                    h('div', { style: S.meta },
+                    h('div', { style: { ...S.meta, marginTop: 8, display: 'flex', gap: 8 } },
                       h('button', { type: 'button', style: S.tab, onClick: async () => {
                         const boundaryEl = cand.kind === 'rule' ? document.getElementById('lb-' + cand.id) : null;
                         const boundary = boundaryEl && boundaryEl.value.trim().length > 0 ? '&boundary=' + encodeURIComponent(boundaryEl.value.trim()) : '';
@@ -2598,51 +2632,23 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: S.tabs },
-            // 先给五个区（大按钮），区下面挂它包含的页签（小按钮）。
-            // 这样入口从 9 个降到 5 个，但每个页签的行为完全没变。
-            GROUPS.map(([groupLabel, members], groupIndex) => {
-              const activeGroup = groupOf(tab);
-              const isActiveGroup = activeGroup[0] === groupLabel;
+            // 主层：只有五个区，视觉权重最高。点区 = 进区内第一个页签。
+            GROUPS.map(([groupLabel, members]) => {
+              const isActiveGroup = groupOf(tab)[0] === groupLabel;
               return h(
-                'span',
-                { key: 'grp-' + groupLabel, style: { display: 'inline-flex', alignItems: 'center', gap: 2 } },
-                h(
-                  'button',
-                  {
-                    type: 'button',
-                    // 区本身不带动作：点它跳到区内第一个页签，避免"点了没反应"
-                    style: isActiveGroup ? { ...S.tab, ...S.tabActive, fontWeight: 600 } : { ...S.tab, fontWeight: 600 },
-                    onClick: () => setTab(members[0][0]),
-                  },
-                  groupLabel,
-                ),
-                members.length > 1
-                  ? h(
-                      'span',
-                      { style: { display: 'inline-flex', gap: 0 } },
-                      ...members.map(([key, label], memberIndex) =>
-                        h(
-                          'button',
-                          {
-                            key,
-                            type: 'button',
-                            title: groupLabel + ' · ' + label,
-                            style: key === tab
-                              ? { ...S.tab, ...S.tabActive, fontSize: 11, padding: '2px 6px' }
-                              : { ...S.tab, fontSize: 11, padding: '2px 6px', opacity: isActiveGroup ? 1 : 0.55 },
-                            onClick: () => setTab(key),
-                          },
-                          // 第一个成员就是区本身，不重复显示文字
-                          memberIndex === 0 ? '·' : label,
-                        ),
-                      ),
-                    )
-                  : null,
-                groupIndex < GROUPS.length - 1
-                  ? h('span', { style: { ...S.sep, margin: '0 4px' } }, '|')
-                  : null,
+                'button',
+                {
+                  key: 'grp-' + groupLabel,
+                  type: 'button',
+                  style: isActiveGroup
+                    ? { ...S.tab, ...S.tabActive, fontWeight: 600, fontSize: 14 }
+                    : { ...S.tab, fontWeight: 600, fontSize: 14 },
+                  onClick: () => setTab(members[0][0]),
+                },
+                groupLabel,
               );
             }),
+            h('span', { style: { flex: 1 } }),
             h(
               'button',
               {
@@ -2671,6 +2677,37 @@ window.__ModuleLoader__.load({
                   dict.close,
                 ),
           ),
+          // 次层：当前区里的页签。只有一个成员的区不显示这一行，避免"只有一个还占一行"。
+          (() => {
+            const [, members] = groupOf(tab);
+            if (members.length <= 1) return null;
+            return h(
+              'div',
+              {
+                style: {
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 2,
+                  padding: '2px 0 4px',
+                  borderBottom: '1px solid var(--dsw-alias-border-l1)',
+                },
+              },
+              ...members.map(([key, label]) =>
+                h(
+                  'button',
+                  {
+                    key: 'sub-' + key,
+                    type: 'button',
+                    style: key === tab
+                      ? { ...S.tab, ...S.tabActive, fontSize: 12, padding: '2px 8px' }
+                      : { ...S.tab, fontSize: 12, padding: '2px 8px', opacity: 0.7 },
+                    onClick: () => setTab(key),
+                  },
+                  label,
+                ),
+              ),
+            );
+          })(),
           h(
             'div',
             { style: isPanel ? { ...S.list, ...PANEL_SCROLL_STYLE, flex: '1 1 auto' } : { ...S.list, maxHeight: 280, overflowY: 'auto' } },
