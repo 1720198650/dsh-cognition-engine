@@ -570,6 +570,8 @@ window.__ModuleLoader__.load({
         const [notice, setNotice] = React.useState('');
         /** 资料检索结果：null=还没查，[]=查了没命中 */
         const [sourceHits, setSourceHits] = React.useState(null);
+        /** 资料库列表（收件页主体）：{items, stats} */
+        const [sourceList, setSourceList] = React.useState(null);
         const dict = pickDict(ctx);
 
         const call = (path, init) =>
@@ -602,6 +604,24 @@ window.__ModuleLoader__.load({
           if (!commitRes.ok || commitData.error) throw new Error('提交失败：' + (commitData.error || commitRes.status));
           return commitData;
         };
+
+        // 资料库列表：收件页的主体不是"待审"，而是"已经进来了些什么、学到哪一步"
+        React.useEffect(() => {
+          if (tab !== 'inbox') return undefined;
+          let alive = true;
+          (async () => {
+            try {
+              const res = await call('/cognition-engine/sources/list', { cache: 'no-store' });
+              const data = await res.json();
+              if (alive) setSourceList(data);
+            } catch {
+              if (alive) setSourceList(null);
+            }
+          })();
+          return () => {
+            alive = false;
+          };
+        }, [tab, tick]);
 
         // 沉积页签数据：放在 call/tick 之后，否则 deps 里引用 tick 会触发 TDZ（实测导致整个面板白屏）
         React.useEffect(() => {
@@ -1364,13 +1384,85 @@ window.__ModuleLoader__.load({
           const ib = detail && detail.inbox ? detail.inbox : { stats: { pending: 0 }, pending: [], duplicates: [] };
           const pending = Array.isArray(ib.pending) ? ib.pending : [];
           const dups = Array.isArray(ib.duplicates) ? ib.duplicates : [];
+          const libItems = sourceList && Array.isArray(sourceList.items) ? sourceList.items : [];
+          const libStats = (sourceList && sourceList.stats) || ib.library || { blocks: 0, notes: 0, ready: 0, failed: 0, sources: 0 };
           body = h(
             'div',
             { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-            h('div', { style: S.explain }, dict.inboxHint),
+            h('div', { style: S.explain }, '放进来就自动学：原文全量存档 → 切成块 → 提炼摘要与结论。资料层不占每轮注入，用到时才取（cognition_source）。只有「转成记忆事实」需要你点头。'),
             h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
-              '待审 ' + ib.stats.pending + ' 条 · 重复已丢 ' + (ib.stats.duplicate || 0) + ' 条 · 来源账本 ' + ((ib.sources && ib.sources.total) || 0) + ' 条' + (ib.sources && ib.sources.chain && ib.sources.chain.ok === false ? '（链断！）' : '') +
-                (ib.library ? ' · 资料库 ' + ib.library.blocks + ' 块 / 已提炼 ' + ib.library.ready + ' 篇' : '')),
+              '资料库 ' + libStats.sources + ' 篇 / ' + libStats.blocks + ' 块 · 已提炼 ' + libStats.ready + ' 篇' +
+                (libStats.skipped > 0 ? ' · 太短未提炼 ' + libStats.skipped + ' 篇' : '') +
+                (libStats.failed > 0 ? ' · 提炼失败 ' + libStats.failed + ' 篇' : '') +
+                ' · 待转成记忆事实 ' + ib.stats.pending + ' 条' +
+                ' · 来源账本 ' + ((ib.sources && ib.sources.total) || 0) + ' 条' +
+                (ib.sources && ib.sources.chain && ib.sources.chain.ok === false ? '（链断！）' : '')),
+            // 检索验证：放进去的东西到底能不能查到——这是"自动学"唯一可验证的证据
+            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+              h('div', { style: { display: 'flex', gap: 6 } },
+                h('input', { id: 'ibSearch', placeholder: '查资料库：memory organization / 记忆分层', style: S.input }),
+                h('button', { type: 'button', style: S.tab, onClick: async () => {
+                  const el = document.getElementById('ibSearch');
+                  const query = el ? el.value.trim() : '';
+                  if (query.length === 0) { window.alert('先填关键词'); return; }
+                  try {
+                    const res = await call('/cognition-engine/sources/search?q=' + encodeURIComponent(query));
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+                    setSourceHits(data.hits || []);
+                  } catch (error) {
+                    window.alert('检索失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                } }, '查'),
+              ),
+              sourceHits === null
+                ? null
+                : sourceHits.length === 0
+                  ? h('div', { style: S.explain }, '没有命中：可能没导入过，或换个关键词。')
+                  : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+                      ...sourceHits.map((hit, index) => h('div', { key: 'hit' + index, style: S.item },
+                        h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                          hit.title + ' · 第 ' + (hit.ord + 1) + ' 块 · 相关度 ' + hit.score.toFixed(2)),
+                        h('div', { style: { fontSize: 11 } }, hit.text.slice(0, 220) + (hit.text.length > 220 ? '…' : '')),
+                      ))),
+            ),
+            // —— 资料库：这是"学成了什么"，放最前面 ——
+            libItems.length === 0
+              ? h('div', { style: S.explain }, '资料库还是空的：下面选个文件或粘一段文字丢进来。')
+              : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                  ...libItems.slice(0, 12).map((item) => {
+                    const note = item.note;
+                    const statusText = note === null || note === undefined
+                      ? '尚未提炼'
+                      : note.status === 'ready'
+                        ? '已提炼'
+                        : note.status === 'pending'
+                          ? '提炼中…'
+                          : note.status === 'skipped'
+                            ? '未提炼（太短或不是正文）'
+                            : '提炼失败';
+                    return h('div', { key: item.sourceId, style: S.item },
+                      h('div', { style: { fontSize: 12 } },
+                        item.title + '（' + item.sourceId + ' · ' + Math.round(item.chars / 1000) + 'k 字 · ' + item.blocks + ' 块 · ' + statusText + (note && note.topic ? ' · ' + note.topic : '') + '）'),
+                      note && note.summary ? h('div', { style: { fontSize: 11, marginTop: 2 } }, note.summary) : null,
+                      item.sourceId && (!note || note.status === 'failed')
+                        ? h('div', { style: S.meta },
+                            h('button', { type: 'button', style: S.tab, onClick: async () => {
+                              try {
+                                const res = await call('/cognition-engine/sources/redistill?sourceId=' + encodeURIComponent(item.sourceId), { method: 'POST' });
+                                const data = await res.json().catch(() => ({}));
+                                if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
+                                setTick((v) => v + 1);
+                              } catch (error) {
+                                window.alert('提炼失败：' + (error instanceof Error ? error.message : String(error)));
+                              }
+                            } }, '提炼 / 重新提炼'))
+                        : null,
+                      note && note.status === 'failed' && note.error
+                        ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-state-warn-primary)' } }, note.error)
+                        : null,
+                    );
+                  })),
             h('input', { id: 'ibContent', placeholder: dict.inboxAddPlaceholder, style: S.input }),
             h('input', { id: 'ibSubject', placeholder: dict.inboxSubject, style: S.input }),
             h('div', { style: S.meta },
@@ -1378,6 +1470,21 @@ window.__ModuleLoader__.load({
                 const content = document.getElementById('ibContent').value.trim();
                 const subject = document.getElementById('ibSubject').value.trim();
                 if (content.length === 0) return;
+                // 用户很自然会把"文件路径"粘进来（以为贴路径就会读文件）。
+                // 认出来就走按路径导入，别再存一条 42 字的假资料。
+                const looksLikePath = content.length < 400 && !/[。！？；\n]/.test(content) && /^([a-zA-Z]:[\\/]|\\\\|~[\\/]|\/)/.test(content);
+                if (looksLikePath) {
+                  try {
+                    const res = await call('/cognition-engine/inbox/add-file?path=' + encodeURIComponent(content), { method: 'POST' });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || data.error) { window.alert('这看起来是文件路径，但按文件读取失败：' + (data.error || ('HTTP ' + res.status))); return; }
+                    window.alert('已按文件导入：' + (data.title || data.id));
+                    setTick((v) => v + 1);
+                  } catch (error) {
+                    window.alert('导入失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                  return;
+                }
                 if (content.length <= 800) {
                   await post('/cognition-engine/inbox/add?content=' + encodeURIComponent(content) +
                     (subject.length === 0 ? '' : '&subject=' + encodeURIComponent(subject)));
@@ -1440,40 +1547,11 @@ window.__ModuleLoader__.load({
                 } }, '按路径导入'),
               ),
             ),
-            // 检索验证：放进去的东西到底能不能查到——这是"自动学"唯一可验证的证据
-            h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 4, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
-              h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
-                '查一下资料库（不占每轮注入，用到时才取）：'),
-              h('div', { style: { display: 'flex', gap: 6 } },
-                h('input', { id: 'ibSearch', placeholder: '关键词，例如 memory organization / 记忆分层', style: S.input }),
-                h('button', { type: 'button', style: S.tab, onClick: async () => {
-                  const el = document.getElementById('ibSearch');
-                  const query = el ? el.value.trim() : '';
-                  if (query.length === 0) { window.alert('先填关键词'); return; }
-                  try {
-                    const res = await call('/cognition-engine/sources/search?q=' + encodeURIComponent(query));
-                    const data = await res.json().catch(() => ({}));
-                    if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
-                    setSourceHits(data.hits || []);
-                  } catch (error) {
-                    window.alert('检索失败：' + (error instanceof Error ? error.message : String(error)));
-                  }
-                } }, '查'),
-              ),
-              sourceHits === null
-                ? null
-                : sourceHits.length === 0
-                  ? h('div', { style: S.explain }, '没有命中：可能没导入过，或换个关键词。')
-                  : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-                      ...sourceHits.map((hit, index) => h('div', { key: 'hit' + index, style: S.item },
-                        h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
-                          hit.title + ' · 第 ' + (hit.ord + 1) + ' 块 · 相关度 ' + hit.score.toFixed(2)),
-                        h('div', { style: { fontSize: 11 } }, hit.text.slice(0, 220) + (hit.text.length > 220 ? '…' : '')),
-                      ))),
-            ),
             pending.length === 0
-              ? h('div', { style: S.explain }, dict.inboxEmpty)
-              : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+              ? null
+              : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 6, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
+                  h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                    '待转成记忆事实（' + pending.length + ' 条）——不转也不影响检索，只是不进每轮注入：'),
                   pending.map((cand) => {
                     // 自动学的结果：切了几块 + 摘要/结论。这里显示的才是"学成了什么"，
                     // 不是"等你审什么"——提炼是自动的，人工只在想把它变成记忆事实时才介入。

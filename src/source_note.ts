@@ -13,6 +13,31 @@ import type { SourceNote } from './source_library.ts';
 const HEAD_CHARS = 8000;
 const TAIL_CHARS = 3000;
 
+/**
+ * 提炼前的前置校验：太短或压根不是正文的资料，不调模型。
+ *
+ * 为什么必须拦：2026-11-18 实测，用户把两个**文件路径**粘进收件箱（26/42 字），
+ * 模型照样一本正经地提炼出「仅有文件路径不能作为归档依据」这类假结论——
+ * 看着像知识，其实是把"资料缺失"包装成了原则。宁可不提炼。
+ *
+ * 阈值 800 字：同一天那篇 328 字的散文被提炼成 4 条"结论"，全是可以从任何文字里
+ * 套出来的空话。短资料不需要结论，只需要能检索到原文。
+ */
+export const MIN_DISTILL_CHARS = 800;
+
+export function distillSkipReason(text: string): string | null {
+  const clean = text.trim();
+  if (clean.length === 0) return '正文是空的';
+  if (clean.length < MIN_DISTILL_CHARS) {
+    return `正文只有 ${clean.length} 字，太短：只存原文供检索，不提炼结论`;
+  }
+  // 单行盘符路径 / UNC 路径：这是"填了路径没读文件"的典型形态
+  if (/^([a-zA-Z]:[\\/]|\\\\|~[\\/]|\/)/.test(clean) && !/[。！？；\n]/.test(clean)) {
+    return '看起来是一个文件路径，不是文件内容：请用「按路径导入」或「选择文件…」';
+  }
+  return null;
+}
+
 export function excerptForNote(text: string): { text: string; truncated: boolean } {
   const clean = text.replace(/\r\n?/g, '\n').trim();
   if (clean.length <= HEAD_CHARS + TAIL_CHARS) return { text: clean, truncated: false };

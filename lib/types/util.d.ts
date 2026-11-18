@@ -80,3 +80,13 @@ export declare function pick(source: Record<string, unknown>, keys: readonly str
  * 解析不出来返回 undefined，交给调用方用默认值，避免静默算错。
  */
 export declare function parseMoment(value: unknown, now?: number): number | undefined;
+/**
+ * 解析 POST 请求体里的 JSON（空体返回空对象，坏 JSON 也返回空对象，绝不抛）。
+ *
+ * 用途：长文本不能塞 query string——Node 的请求行上限约 16KB，超了直接回 431，
+ * 而且请求根本到不了业务代码，日志里什么都看不到。所以凡是"可能是整篇文章"的字段，
+ * 一律走请求体。
+ */
+export declare function readBodyJson(body: string): Record<string, unknown>;
+/** 从请求体对象里取字符串字段；没有或类型不对就返回 undefined。 */
+export declare function bodyString(body: Record<string, unknown>, key: string): string | undefined;

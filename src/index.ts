@@ -34,7 +34,7 @@ import { WikiStore, buildWiki } from './wiki.ts';
 import { CandidateInbox } from './inbox.ts';
 import { SourceStore } from './sources.ts';
 import { SourceLibrary, type SourceNote } from './source_library.ts';
-import { buildSourceNotePrompt, parseSourceNote, fallbackNote } from './source_note.ts';
+import { buildSourceNotePrompt, distillSkipReason, parseSourceNote, fallbackNote } from './source_note.ts';
 import { recordUsage, summarizeUsage } from './usage.ts';
 import { SettingsStore, resolveInjectMode, isInjectMode, type InjectMode } from './settings.ts';
 import { runPracticeProbes, type ProbeTurn } from './probes.ts';
@@ -946,6 +946,18 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   };
 
   const distillSourceNote = async (record: { id: string; title: string; content: string }): Promise<SourceNote> => {
+    const reason = distillSkipReason(record.content);
+    if (reason !== null) {
+      return library.saveNote({
+        sourceId: record.id,
+        at: Date.now(),
+        status: 'skipped',
+        title: record.title,
+        summary: record.content.trim().slice(0, 200),
+        points: [],
+        error: reason,
+      });
+    }
     library.setPending(record.id, record.title);
     const failed = (error: string): SourceNote =>
       library.saveNote(fallbackNote({ sourceId: record.id, title: record.title, text: record.content, at: Date.now(), error }));
@@ -3053,10 +3065,44 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         k: Number(url.searchParams.get('k') ?? 5),
         maxChars: Number(url.searchParams.get('maxChars') ?? 1500),
       });
-      return { query, hits, stats: library.stats() };
+      // 块里只存 sourceId，标题得回来查一次账本，否则页面上全是 src-10 这种代号
+      const titled = hits.map((hit) => ({ ...hit, title: sources.get(hit.sourceId)?.title ?? hit.title }));
+      return { query, hits: titled, stats: library.stats() };
     });
     // 资料层：全部摘要
     route('/cognition-engine/sources/notes', () => ({ notes: library.notes(), stats: library.stats() }));
+    /**
+     * 资料库总览：每篇资料一行（块数 + 提炼状态 + 主题 + 摘要）。
+     *
+     * 收件页的主体必须是这个，而不是"待审 N 条"——待审只表示"还没转成记忆事实"，
+     * 资料早就在库里可检索了。2026-11-18 用户看到「待审 0 条 · 收件箱是空的」，
+     * 以为那篇论文没学进去，实际已经切成 34 块。
+     */
+    route('/cognition-engine/sources/list', () => {
+      const seen = new Set<string>();
+      const items = [...sources.list(200)]
+        .reverse()
+        // 同一篇资料被反复导入时账本里有多条（不可变账本不能删），总览只显示最新那份
+        .filter((record) => {
+          if (seen.has(record.contentHash)) return false;
+          seen.add(record.contentHash);
+          return true;
+        })
+        .map((record) => {
+          const known = library.describe(record.id);
+          return {
+            sourceId: record.id,
+            title: record.title,
+            kind: record.kind,
+            at: record.at,
+            chars: record.content.length,
+            locator: record.locator ?? null,
+            blocks: known.blocks,
+            note: known.note,
+          };
+        });
+      return { items, stats: library.stats() };
+    });
     // 重新提炼某条来源（模型当时不可用、或换了模型想重做）
     route(
       '/cognition-engine/sources/redistill',
@@ -3912,7 +3958,13 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         : [];
       return JSON.stringify({
         query,
-        hits: hits.map((hit) => ({ sourceId: hit.sourceId, title: hit.title, ord: hit.ord, score: Number(hit.score.toFixed(3)), text: hit.text })),
+        hits: hits.map((hit) => ({
+          sourceId: hit.sourceId,
+          title: sources.get(hit.sourceId)?.title ?? hit.title,
+          ord: hit.ord,
+          score: Number(hit.score.toFixed(3)),
+          text: hit.text,
+        })),
         notes,
         hint: hits.length === 0 ? '资料库里没有命中的块：可能没导入过，或换个关键词。' : '以上是资料原文片段，不是用户的口径；引用时说明来自哪份资料。',
       });

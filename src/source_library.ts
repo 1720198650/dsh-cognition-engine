@@ -25,7 +25,7 @@ export interface SourceBlock {
   text: string;
 }
 
-export type SourceNoteStatus = 'pending' | 'ready' | 'failed';
+export type SourceNoteStatus = 'pending' | 'ready' | 'failed' | 'skipped';
 
 export interface SourceNote {
   sourceId: string;
@@ -85,8 +85,10 @@ export function chunkText(text: string, options: { target?: number; max?: number
       continue;
     }
     let rest = p;
-    while (rest.length > max) {
-      const cut = lastBoundary(rest, target, max);
+    // 按目标长度反复切，不是"切到上限就停"——否则只剩一点尾巴时（比如 1092 字）
+    // 会整块塞进去，平均块长被拉高（2026-11-18 中文长文实测 avg 1111 → 840）。
+    while (rest.length > target) {
+      const cut = lastBoundary(rest, target, Math.min(max, target));
       const head = rest.slice(0, cut).trim();
       if (head.length > 0) pieces.push(head);
       rest = rest.slice(cut).trim();
@@ -333,7 +335,7 @@ export class SourceLibrary {
     return out;
   }
 
-  stats(): { blocks: number; notes: number; ready: number; failed: number; sources: number } {
+  stats(): { blocks: number; notes: number; ready: number; failed: number; skipped: number; sources: number } {
     const blocks = this.loadBlocks();
     const notes = this.notes();
     return {
@@ -341,6 +343,7 @@ export class SourceLibrary {
       notes: notes.length,
       ready: notes.filter((note) => note.status === 'ready').length,
       failed: notes.filter((note) => note.status === 'failed').length,
+      skipped: notes.filter((note) => note.status === 'skipped').length,
       sources: new Set(blocks.map((block) => block.sourceId)).size,
     };
   }

@@ -86,6 +86,8 @@ export declare class CandidateInbox {
     }) => string, overrides?: {
         content?: string;
         subject?: string;
+        /** 写进记忆的正文（不改候选原文）：长资料只落"入口 + 要点"，全文留在资料库 */
+        factContent?: string;
     }): Candidate;
     reject(id: string, reason?: string): Candidate;
     stats(): InboxStats;

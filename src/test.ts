@@ -48,7 +48,7 @@ import { WikiStore, buildWiki } from './wiki.ts';
 import { CandidateInbox } from './inbox.ts';
 import { SourceStore } from './sources.ts';
 import { SourceLibrary, chunkText, scoreQuery } from './source_library.ts';
-import { buildSourceNotePrompt, parseSourceNote } from './source_note.ts';
+import { buildSourceNotePrompt, distillSkipReason, parseSourceNote } from './source_note.ts';
 import { summarizeUsage } from './usage.ts';
 import { resolveInjectMode } from './settings.ts';
 import { runPracticeProbes, overlapOf } from './probes.ts';
@@ -4264,6 +4264,9 @@ async function main(): Promise<void> {
     for (const piece of pieces) {
       assert.ok(piece.length <= 1200, `块长 ${piece.length} 超过上限 1200`);
     }
+    // 目标 600：不许每块都顶到上限（早期写法 avg 1111，检索噪声翻倍）
+    const avg = pieces.reduce((sum, piece) => sum + piece.length, 0) / pieces.length;
+    assert.ok(avg <= 700, `平均块长 ${Math.round(avg)} 偏大，应接近目标 600`);
     const rebuilt = pieces.join('');
     assert.equal(rebuilt.replace(/\s+/g, ''), long.replace(/\s+/g, ''), '切块不能丢字');
   });
@@ -4344,6 +4347,16 @@ async function main(): Promise<void> {
     assert.ok(built.prompt.length < 16_000, `提示词过长：${built.prompt.length}`);
     assert.ok(built.prompt.includes('中间省略'), '要明确告诉模型中间被省略');
     assert.ok(built.prompt.includes('记忆'), '已有主题要作为线索给进去');
+  });
+
+  await test('提炼前置校验：路径和太短的正文不许调模型（防假结论）', () => {
+    // 真实踩过的坑：把路径粘进收件箱，模型提炼出"仅有路径不能作为归档依据"这类假原则
+    assert.ok(distillSkipReason('D:\\下载\\固定资产.xls') !== null, '纯路径必须拦下');
+    assert.ok(distillSkipReason('D:\\下载\\企业名录.html') !== null, '纯路径必须拦下');
+    assert.ok(distillSkipReason('只有二十来个字的一段话，也发不出什么结论。') !== null, '太短要拦下');
+    assert.equal(distillSkipReason('正文'.repeat(400)), null, '正常长文不该被拦');
+    // 路径后面跟着正经正文（多行）就不该被当成纯路径
+    assert.equal(distillSkipReason('D:\\a\\b.txt\n\n这是一篇正经文章。' + '内容'.repeat(400)), null);
   });
 
   /* ---------------------------------------------------------------- */
