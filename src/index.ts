@@ -3334,12 +3334,28 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       { method: 'POST', requireAuth: explicitLock },
     );
     // —— 自动学习：开关 + 手动触发 + 日志 ——
-    route('/cognition-engine/autolearn/status', () => {
+    route('/cognition-engine/autolearn/status', async () => {
       const toggles = autoToggles();
-      const web = ctx.get?.('web') as { search?: unknown; fetch?: unknown } | undefined;
+      const web = ctx.get?.('web') as
+        | { search?: unknown; fetch?: unknown; listProviders?: () => { search: Array<{ id: string; title?: string }>; fetch: Array<{ id: string; title?: string }> } }
+        | undefined;
+      // 把宿主注册的搜索提供方列出来：收费与否取决于机器上实际选中的那个
+      let providers: { search: string[]; fetch: string[] } | null = null;
+      try {
+        const list = web?.listProviders?.();
+        if (list !== undefined) {
+          providers = {
+            search: list.search.map((item) => item.id),
+            fetch: list.fetch.map((item) => item.id),
+          };
+        }
+      } catch {
+        providers = null;
+      }
       return {
         ...toggles,
         webAvailable: web !== undefined && typeof web.search === 'function' && typeof web.fetch === 'function',
+        providers,
         recent: readAutoLearn(10),
       };
     });
