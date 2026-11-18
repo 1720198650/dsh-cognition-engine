@@ -36,6 +36,7 @@ import { SourceStore } from './sources.ts';
 import { SourceLibrary, type SourceNote } from './source_library.ts';
 import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts';
 import { RevisionLog, markAuto, shouldAutoRevise, unmarkAuto } from './autorevise.ts';
+import { buildCorrectionPrompt, detectCorrection, parseCorrectionResult } from './correction.ts';
 import { buildSearchQueries, pickSources, type AutoLearnRecord } from './autolearn.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote, fallbackNote } from './source_note.ts';
 import {
@@ -1609,6 +1610,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   let lastSessionId: string | null = null;
   /** 最近一条用户消息：用于主题匹配，决定注入哪些主题的准则（主题隔离）。 */
   let lastUserText = '';
+  /** 纠正链入口（在 setupRoutes 里赋值；这里只留引用，避开作用域问题） */
+  let correctionChainRef: ((text: string) => Promise<unknown>) | undefined;
   /** 由 setupRoutes 内赋值；工具层通过它把真实取代转给沉积层。 */
   let observeSupersedeRef: ((oldId: string, newId: string, reason?: string) => void) | undefined;
   /** 由 setupRoutes 内赋值；注入渲染在前，实例在后，所以用引用。 */
@@ -1676,7 +1679,18 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         } else if (type === 'user/message') {
           const text = extractUserText(data);
           turnTracker.appendUserText(sessionId, text);
-          if (!isRuntimeContext(text) && text.trim().length > 0) lastUserText = text;
+          if (!isRuntimeContext(text) && text.trim().length > 0) {
+          lastUserText = text;
+          // 自动扳机：这句话像纠正、且开关开着，就跑一次链（内部有 10 分钟冷却）
+          if (detectCorrection(text).corrected) {
+            const auto = autoToggles();
+            if (auto.autoLearn || auto.autoRevise) {
+              void correctionChainRef?.(text).catch((error: unknown) => {
+                ctx.logger?.warn?.(`cognition-engine: 纠正链失败 ${messageOf(error)}`);
+              });
+            }
+          }
+        }
           // 用户明确纠正 → 之前那些"模型自作假设"已被否掉，清空台账。
           // 依据 arXiv:2505.06120：模型走错方向后不会自己回头，得靠外部信号打断。
           if (!isRuntimeContext(text) && classifyFeedback(text) === 'correction') {
@@ -3336,7 +3350,87 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       },
       { method: 'POST', requireAuth: explicitLock },
     );
-    // —— 自动修订：先存档再改，改完带标注，可回滚 ——
+    // —— 纠正触发：识别 → 反思 → 联网 → 候选（扳机只认用户原话）——
+  const correctionsFile = join(dataDir(), 'cognition-corrections.jsonl');
+  const readCorrections = (limit = 20): Array<{ id: string; at: number; text: string; rule?: string }> => {
+    if (!existsSync(correctionsFile)) return [];
+    const rows: Array<{ id: string; at: number; text: string; rule?: string }> = [];
+    for (const line of readFileSync(correctionsFile, 'utf8').replace(/^\uFEFF/, '').split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
+      try {
+        rows.push(JSON.parse(trimmed) as { id: string; at: number; text: string; rule?: string });
+      } catch {
+        continue;
+      }
+    }
+    return rows.slice(-Math.max(1, limit)).reverse();
+  };
+  let lastCorrectionAt = 0;
+  const runCorrectionChain = async (text: string): Promise<Record<string, unknown>> => {
+    const signal = detectCorrection(text);
+    if (!signal.corrected) return { corrected: false };
+    const now = Date.now();
+    if (now - lastCorrectionAt < 10 * 60 * 1000) return { corrected: true, skipped: '冷却中（10 分钟内只跑一次）' };
+    lastCorrectionAt = now;
+    const toggles = autoToggles();
+    const subject = topics.match(text, 1)[0]?.topic.name;
+    const id = `cor-${now.toString(36)}`;
+
+    let reflection = { wrong: '', diagnosis: '', rule: '' };
+    if (toggles.autoLearn || toggles.autoRevise) {
+      try {
+        const raw = await callRealModel(buildCorrectionPrompt({ correction: signal.quote, ...(subject === undefined ? {} : { subject }) }), 800, 'correction');
+        reflection = parseCorrectionResult(raw);
+      } catch (error) {
+        ctx.logger?.warn?.(`cognition-engine: 纠正反思失败 ${messageOf(error)}`);
+      }
+    }
+    let learned: string[] = [];
+    if (toggles.autoLearn) {
+      try {
+        const result = await importFromSearch(text, 'correction');
+        learned = result.imported.map((item) => item.sourceId);
+      } catch (error) {
+        ctx.logger?.warn?.(`cognition-engine: 纠正后自动联网失败 ${messageOf(error)}`);
+      }
+    }
+    try {
+      mkdirSync(dirname(correctionsFile), { recursive: true });
+      appendFileSync(correctionsFile, `${JSON.stringify({ id, at: now, text: signal.quote, wrong: reflection.wrong, diagnosis: reflection.diagnosis, rule: reflection.rule, learned })}\n`, 'utf8');
+    } catch {
+      /* 日志失败不影响主流程 */
+    }
+    let candidateId: string | null = null;
+    if (reflection.rule.length >= 8) {
+      const added = learning.add({
+        kind: 'rule',
+        content: reflection.rule,
+        anchor: { type: 'turn', ref: id, quote: signal.quote },
+        ...(subject === undefined ? {} : { subject }),
+        scope: 'user',
+        confidence: 0.7,
+        note: '来自你的纠正：' + (reflection.wrong.length > 0 ? reflection.wrong : '（未提炼出错在哪）'),
+      });
+      candidateId = added.duplicate ? null : added.candidate.id;
+    }
+    return { corrected: true, id, wrong: reflection.wrong, diagnosis: reflection.diagnosis, rule: reflection.rule, learned, candidateId };
+  };
+  correctionChainRef = runCorrectionChain;
+  route('/cognition-engine/correction/check', (url) => detectCorrection(url.searchParams.get('text') ?? ''));
+  route('/cognition-engine/correction/list', (url) => ({ items: readCorrections(Number(url.searchParams.get('limit') ?? 20)) }));
+  route(
+    '/cognition-engine/correction/run',
+    async (url, body) => {
+      const json = readBodyJson(body);
+      const text = (url.searchParams.get('text') ?? bodyString(json, 'text') ?? '').trim();
+      if (text.length === 0) throw new Error('需要 text（你那句纠正）');
+      return runCorrectionChain(text);
+    },
+    { method: 'POST', requireAuth: explicitLock },
+  );
+
+  // —— 自动修订：先存档再改，改完带标注，可回滚 ——
     route('/cognition-engine/autorevise/list', (url) => ({
       items: revisionLog.list(Number(url.searchParams.get('limit') ?? 30)),
       enabled: autoToggles().autoRevise,
