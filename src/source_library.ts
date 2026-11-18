@@ -250,8 +250,10 @@ export class SourceLibrary {
       try {
         this.blockCache.push(JSON.parse(trimmed) as SourceBlock);
       } catch {
-        // 坏行直接停下：宁可少几块，也不要拿半条错数据去污染检索
-        break;
+        // 单行坏了就跳过这一行，**不能 break**：截断后的数组一旦被回写
+        // （deleteSource 会写盘），后半部分块就永久丢了
+        // （2026-11-18 实测：黄页那篇 15 块在删除操作后整段消失）
+        continue;
       }
     }
     return this.blockCache;
@@ -315,15 +317,18 @@ export class SourceLibrary {
    * SoMem 的账本是只追加的证据层，删除只能发生在"派生视图"上——这正是块和摘要所在的层。
    */
   deleteSource(sourceId: string): { sourceId: string; blocks: number; note: boolean } {
+    // 先丢掉缓存、从磁盘重读：删除会整文件回写，用可能过期的内存数组回写
+    // 会把别的来源的块一起抹掉（2026-11-18 黄页那篇就这样丢了 15 块）
+    this.blockCache = undefined;
     const blocks = this.loadBlocks();
-    const before = blocks.length;
     const kept = blocks.filter((block) => block.sourceId !== sourceId);
-    const removed = before - kept.length;
+    const removed = blocks.length - kept.length;
     if (removed > 0) {
-      this.blockCache = kept;
       mkdirSync(dirname(this.blocksFile), { recursive: true });
       writeFileSync(this.blocksFile, kept.map((block) => `${JSON.stringify(block)}\n`).join(''), 'utf8');
+      this.blockCache = kept;
     }
+    this.noteCache = undefined;
     const notes = this.loadNotes();
     const hadNote = notes[sourceId] !== undefined;
     if (hadNote) {
