@@ -3356,13 +3356,17 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         if (content.length === 0) throw new Error('需要 content（改后的内容）');
         if (diagnosis.length < 4) throw new Error('必须写诊断（≥4 字）：错在哪、以后怎么避免');
         if (by === 'auto') {
-          // 自动修订要过门槛：开关 / 冷却 / 反证条数 / 准则还需用户明确说过
+          // 自动修订要过门槛：开关 / 用户明确纠正 / 冷却 / 当天上限
           const last = revisionLog.lastAt(targetId);
+          const midnight = new Date();
+          midnight.setHours(0, 0, 0, 0);
+          const todayCount = revisionLog.list(200).filter((item) => item.by === 'auto' && item.undone !== true && item.at >= midnight.getTime()).length;
           const gate = shouldAutoRevise({
             target: target as 'fact' | 'rule',
-            counterEvidence: Number(url.searchParams.get('counterEvidence') ?? bodyString(json, 'counterEvidence') ?? 2),
+            counterEvidence: Number(url.searchParams.get('counterEvidence') ?? bodyString(json, 'counterEvidence') ?? 1),
             hoursSinceLastRevision: last === undefined ? 9999 : (Date.now() - last) / 3_600_000,
             userSaidSo: (url.searchParams.get('userSaidSo') ?? bodyString(json, 'userSaidSo') ?? 'false') === 'true',
+            todayCount,
             autoReviseEnabled: autoToggles().autoRevise,
           });
           if (!gate.allow) throw new Error('自动修订被门槛挡住：' + gate.reason);

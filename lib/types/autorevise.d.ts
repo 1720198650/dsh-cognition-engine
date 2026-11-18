@@ -1,5 +1,24 @@
-/** 自动改过的内容统一带这个前缀，肉眼和检索都能认出来。 */
-export declare const AUTO_MARK = "[\u81EA\u52A8\u4FEE\u8BA2]";
+/**
+ * 自动修订的元数据（落数据字段，**不往内容里写前缀**）。
+ *
+ * 依据 docs/l3-autorevise.md：ACE 的 bullet 元数据只有 id 和 helpful/harmful 计数，
+ * 不满足"可审计"；能抄的是 SkillHone 的决策记录 h=(诊断, 修订, 证据, 结果)。
+ * 前缀只该出现在显示层——写进 content 会污染检索与去重，也会混进注入。
+ */
+export interface RevisionMeta {
+    origin: 'auto_revise' | 'manual';
+    by: 'auto' | 'user';
+    /** 触发来源：用户纠正 / 反证 / 资料 */
+    trigger: 'user_correction' | 'counter_evidence' | 'source';
+    /** 可核对证据（原话或出处 id） */
+    evidence: string;
+    reason: string;
+}
+/** 渲染层用：给自动修订过的条目加个可见标记（不进数据）。 */
+export declare function revisionBadge(meta: {
+    by?: 'auto' | 'user';
+    origin?: string;
+} | undefined): string;
 export type RevisionTarget = 'fact' | 'rule';
 export interface RevisionRecord {
     id: string;
@@ -27,6 +46,8 @@ export interface ReviseGateInput {
     hoursSinceLastRevision: number;
     /** 用户是否明确说过"以前那条不对/改成这样" */
     userSaidSo: boolean;
+    /** 今天已经自动改了几次 */
+    todayCount?: number;
     /** 全局自动修订开关 */
     autoReviseEnabled: boolean;
 }
@@ -37,17 +58,27 @@ export type ReviseDecision = {
     allow: false;
     reason: string;
 };
+/** 每天自动修订上限（工程取值，见 docs/l3-autorevise.md 的强度标注）。 */
+export declare const MAX_REVISIONS_PER_DAY = 5;
+/** 冷却小时数（工程取值）。 */
+export declare const COOLDOWN_HOURS = 24;
 /**
- * 自动修订门槛（依据 docs/l3-autorevise.md）：
- *   - 事实：≥2 条反证即可（有双时态，改错能回滚，代价低）；
- *   - 准则：必须「用户明确说过」+ ≥2 条反证（准则每轮注入，改错影响面大）；
- *   - 任何目标都有 24 小时冷却，避免来回抖；
- *   - 开关关着就一律不改。
+ * 自动修订门槛（依据 docs/l3-autorevise.md）。
+ *
+ * 最重要的一条不是阈值，而是**触发只能来自外部信号**：
+ * Huang et al. 2024 实测，没有外部反馈的自我修订轮数越多越差
+ * （GPT-3.5 GSM8K 75.9→74.7，Llama-2 CommonSenseQA 62.0→36.5）。
+ * 所以这里没有"自查"这条路：没有你的明确纠正，就只提建议、不自改。
+ *
+ *   1. 你明确纠正过（≥1 次）→ 可以改；
+ *   2. 只是"资料说要这样"→ 不改内容，只提候选（本函数直接拒绝）；
+ *   3. 24 小时冷却、每天最多 5 次。
+ * 阈值强度：第 1 条有实验支持（Huang 2024 外部反馈），第 3 条是工程取值。
  */
 export declare function shouldAutoRevise(input: ReviseGateInput): ReviseDecision;
-/** 自动改过的内容加标注；已带标注的不重复加。 */
+/** 兼容旧调用：不再往内容里写前缀，原样返回（标注改在数据字段与渲染层）。 */
 export declare function markAuto(content: string): string;
-/** 去掉标注（回滚时用，避免回滚后的内容还挂着"自动修订"）。 */
+/** 兼容旧调用：内容里没有前缀了，去掉历史前缀即可。 */
 export declare function unmarkAuto(content: string): string;
 /** append-only 修订存档。 */
 export declare class RevisionLog {

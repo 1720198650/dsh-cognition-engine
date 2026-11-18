@@ -51,7 +51,7 @@ import { SourceLibrary, chunkText, isPathOnlyBlock, scoreQuery } from './source_
 import { DEFAULT_POLICY, FetchThrottle, WhitelistStore, checkUrl, parseRobots } from './web_fetch.ts';
 import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts';
 import { buildSearchQueries, pickSources } from './autolearn.ts';
-import { RevisionLog, markAuto, shouldAutoRevise, unmarkAuto } from './autorevise.ts';
+import { RevisionLog, markAuto, revisionBadge, shouldAutoRevise, unmarkAuto } from './autorevise.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote } from './source_note.ts';
 import { summarizeUsage } from './usage.ts';
 import { resolveInjectMode } from './settings.ts';
@@ -4720,15 +4720,16 @@ async function main(): Promise<void> {
   });
 
   section('[71] 自动修订：门槛、存档、标注、回滚');
-  await test('门槛：事实要 2 条反证；准则还要用户明说；24 小时冷却；开关关着一律不改', () => {
-    const base = { target: 'fact' as const, counterEvidence: 2, hoursSinceLastRevision: 48, userSaidSo: false, autoReviseEnabled: true };
+  await test('门槛：没有你的明确纠正就不自改；24 小时冷却、每天上限 5 次、开关关着一律不改', () => {
+    const base = { target: 'fact' as const, counterEvidence: 1, hoursSinceLastRevision: 48, userSaidSo: true, autoReviseEnabled: true, todayCount: 0 };
     assert.equal(shouldAutoRevise(base).allow, true);
     assert.equal(shouldAutoRevise({ ...base, autoReviseEnabled: false }).allow, false, '开关关了就不改');
-    assert.equal(shouldAutoRevise({ ...base, counterEvidence: 1 }).allow, false, '反证不足不改');
+    // 关键一条（Huang 2024）：没有外部纠正时，自查/资料都不许自改
+    assert.equal(shouldAutoRevise({ ...base, userSaidSo: false }).allow, false, '没有用户纠正只能提建议');
+    assert.equal(shouldAutoRevise({ ...base, counterEvidence: 0 }).allow, false, '没有可核对证据不改');
     assert.equal(shouldAutoRevise({ ...base, hoursSinceLastRevision: 3 }).allow, false, '冷却期内不改');
-    assert.equal(shouldAutoRevise({ ...base, target: 'rule' }).allow, false, '准则没用户明说不改');
-    assert.equal(shouldAutoRevise({ ...base, target: 'rule', userSaidSo: true }).allow, true);
-    assert.equal(shouldAutoRevise({ ...base, target: 'rule', userSaidSo: true, counterEvidence: 1 }).allow, false);
+    assert.equal(shouldAutoRevise({ ...base, todayCount: 5 }).allow, false, '当天到上限不改');
+    assert.equal(shouldAutoRevise({ ...base, target: 'rule' }).allow, true, '准则只要用户明说也能改');
   });
 
   await test('存档：先写后改、坏行只跳过、能查上次时间、回滚留痕', () => {
@@ -4756,11 +4757,13 @@ async function main(): Promise<void> {
     }
   });
 
-  await test('标注：自动改过的内容带标记，回滚时能去掉', () => {
-    assert.equal(markAuto('准则内容'), '[自动修订] 准则内容');
-    assert.equal(markAuto('[自动修订] 已标注'), '[自动修订] 已标注', '不能重复加');
-    assert.equal(unmarkAuto('[自动修订] 准则内容'), '准则内容');
-    assert.equal(unmarkAuto('普通内容'), '普通内容');
+  await test('标注放数据字段，不往内容里写前缀（写进去会污染检索与注入）', () => {
+    // markAuto 现在不改内容：前缀只在渲染层出现
+    assert.equal(markAuto('准则内容'), '准则内容');
+    assert.equal(unmarkAuto('[自动修订] 旧数据带前缀'), '旧数据带前缀', '历史前缀要能清掉');
+    assert.equal(revisionBadge({ origin: 'auto_revise', by: 'auto' }), '[自动修订] ');
+    assert.equal(revisionBadge({ origin: 'manual', by: 'user' }), '');
+    assert.equal(revisionBadge(undefined), '');
   });
 
   section('[63] 文件编码：GBK 表格不能读成乱码');  await test('UTF-8/GBK/UTF-16 都能正确解码，不乱码', () => {
