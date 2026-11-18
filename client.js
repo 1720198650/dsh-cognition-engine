@@ -1925,7 +1925,9 @@ window.__ModuleLoader__.load({
             pendingCands.length === 0
               ? h('div', { style: S.explain }, '还没有候选。点上面那个按钮，从资料库已提炼的结论里生成。')
               : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-                  ...pendingCands.map((cand) => h('div', {
+                  // 密度控制在 7 项以内（深研学到的 dashboard 原则：一次别铺满，
+                  // 数据项以七个左右为限，其余折叠成一行，避免杂乱）
+                  ...pendingCands.slice(0, 7).map((cand) => h('div', {
                     key: cand.id,
                     style: {
                       ...S.item,
@@ -1991,6 +1993,10 @@ window.__ModuleLoader__.load({
                       } }, '丢弃'),
                     ),
                   ))),
+                  pendingCands.length > 7
+                    ? h('div', { style: { ...S.explain, fontSize: 11 } },
+                        '还有 ' + (pendingCands.length - 7) + ' 条没显示：先处理上面这几条，或去资料库按来源筛。')
+                    : null,
             h('div', { style: { paddingTop: 8, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
               h(LearningEmbedded, { variant: 'embedded' })),
           );
