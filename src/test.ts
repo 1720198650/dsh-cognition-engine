@@ -53,6 +53,7 @@ import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts'
 import { buildSearchQueries, pickSources } from './autolearn.ts';
 import { RevisionLog, markAuto, revisionBadge, shouldAutoRevise, unmarkAuto } from './autorevise.ts';
 import { detectCorrection, parseCorrectionResult } from './correction.ts';
+import { StanceStore } from './stance.ts';
 import { buildDeepClaimPrompt, crossCheck, crossCheckAnswers, buildAnswerPrompt, judgeAnswerPair, parseAnswer, parseDeepClaims, tokenF1 } from './deepresearch.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote } from './source_note.ts';
 import { summarizeUsage } from './usage.ts';
@@ -4911,6 +4912,36 @@ async function main(): Promise<void> {
       assert.ok(!again.text.includes('发版前先看一眼构建日志'), '重启后弱准则仍不该注入——restore 丢了 tentative 就会漏进去');
       const weakEntry = reopened.all().find((entry) => entry.content.includes('发版前先看一眼'));
       assert.equal(weakEntry?.tentative, true, 'restore 必须保住 tentative 字段');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  section('[77] 立场层：目标与判据（可读可改，不打分）');
+  await test('forbid 判据只做明确词命中；违反的候选被拦；render 不打分', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cog-stance-'));
+    try {
+      const store = new StanceStore({ filePath: join(dir, 'stance.json'), now: () => 1000 });
+      store.add({ kind: 'goal', text: '减少人的操作，能自动的不要让人点' });
+      store.add({ kind: 'prefer', text: '可验证 > 好听' });
+      store.add({ kind: 'forbid', text: '引入外部数据库依赖', deny: ['sqlite', '向量数据库'] });
+
+      assert.equal(store.violates('建议引入 SQLite 做持久化').violates, true, '明确命中必须拦');
+      assert.equal(store.violates('改用向量数据库存储').violates, true);
+      assert.equal(store.violates('记忆存纯 JSON 文件').violates, false, '正常内容不能误杀');
+      assert.equal(store.violates('把 sqlite 换成 json').violates, true, '命中词不讲情面——宁可人复核');
+
+      const rendered = store.render(320);
+      assert.ok(rendered.includes('目标：'), rendered);
+      assert.ok(rendered.includes('可验证 > 好听'), rendered);
+      assert.ok(rendered.includes('禁止：引入外部数据库依赖'), rendered);
+      // 不打分：不出现百分比/分数这类"倾向"表述
+      assert.ok(!/\d+%|score|评分/.test(rendered), '判据不许打分：' + rendered);
+
+      // 删了就不再生效
+      const forbid = store.list().find((item) => item.kind === 'forbid')!;
+      assert.equal(store.remove(forbid.id), true);
+      assert.equal(store.violates('建议引入 SQLite').violates, false, '删掉的判据不能再生效');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

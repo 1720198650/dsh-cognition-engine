@@ -36,6 +36,7 @@ import { SourceStore } from './sources.ts';
 import { SourceLibrary, type SourceNote } from './source_library.ts';
 import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts';
 import { RevisionLog, markAuto, shouldAutoRevise, unmarkAuto } from './autorevise.ts';
+import { StanceStore } from './stance.ts';
 import { mergeAnswers, toClaimTable, researchStatus, buildAnswerPrompt, buildTriagePrompt, parseAnswer, parseTriage, SAME_THRESHOLD, type AnswerRecord, type ResearchRecord } from './deepresearch.ts';
 import { buildCorrectionPrompt, detectCorrection, parseCorrectionResult } from './correction.ts';
 import { buildSearchQueries, pickSources, type AutoLearnRecord } from './autolearn.ts';
@@ -664,6 +665,23 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   const learning = new LearningQueue({ filePath: join(dataDir(), 'cognition-learning.json') });
   // 自动修订存档（append-only，改之前必须先写进去）
   const revisionLog = new RevisionLog({ filePath: join(dataDir(), 'cognition-revisions.jsonl') });
+  /**
+   * 立场层：项目目标 + 判据（2026-11-19 用户定，宪章同步修订）。
+   *
+   * 首次启动种入几条用户自己的话，省得他从空白开始加；每条都能删。
+   */
+  const stance = new StanceStore({ filePath: join(dataDir(), 'cognition-stance.json') });
+  if (stance.list().length === 0) {
+    try {
+      stance.add({ kind: 'goal', text: '让对话和工作更利落：工作→反馈→提升自动完成，人只提需求和反驳', origin: '用户原话 2026-11-19' });
+      stance.add({ kind: 'prefer', text: '可验证 > 好听：没有证据的结论不许说「已完成」', origin: '用户原话' });
+      stance.add({ kind: 'prefer', text: '少操作 > 多按钮：能自动的不要让人点', origin: '用户原话 2026-11-19' });
+      stance.add({ kind: 'prefer', text: '用户口径 > 资料结论：论文里的话不许冒充用户的规矩', origin: '用户原话' });
+      stance.add({ kind: 'forbid', text: '引入外部数据库依赖', deny: ['sqlite', '向量数据库', 'vector db', 'graph database', 'chromadb', 'faiss'], origin: '准则 ctxt-00003' });
+    } catch (error) {
+      ctx.logger?.warn?.(`cognition-engine: 立场初始化失败 ${messageOf(error)}`);
+    }
+  }
   // 运行时设置（面板可改）：注入方式
   /**
    * 练习样本：把「用户纠正/确认」的回合和当时的原话拼起来。
@@ -1611,6 +1629,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     const assumptionText = lastSessionId === null ? '' : assumptionLedger.render(lastSessionId);
     const withAssumptions = (text: string): string =>
       assumptionText.length === 0 ? text : `${assumptionText}\n\n${text}`;
+    // 立场放最前面：它决定"怎么判断"，后面所有内容都在这个框架下读
+    const stanceText = stance.render(320);
+    const withStance = (text: string): string => (stanceText.length === 0 ? text : `${stanceText}\n\n${text}`);
 
     /**
      * 资料层提示：把学到的结论**自动**带到本轮任务前面。
@@ -1694,7 +1715,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         wikiExcerpt.length === 0
           ? bounded
           : `${bounded}\n\n【主题附注·${wikiTitle}】\n${wikiExcerpt}`;
-      const text = withAssumptions(withGaps(withWiki + sourceHint));
+      const text = withStance(withAssumptions(withGaps(withWiki + sourceHint)));
       const emittedIds = [...ruleIds];
       return { text, source: 'playbook', ruleIds: emittedIds, chars: text.length };
     }
@@ -1704,7 +1725,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       const text = withAssumptions(withGaps(`${digest}\n（需要细节时调用 cognition_recall。）${sourceHint}`));
       return { text, source: 'digest', ruleIds: [], chars: text.length };
     }
-    const onlyGaps = withAssumptions(gapText);
+    const onlyGaps = withStance(withAssumptions(gapText));
     if (onlyGaps.length > 0) return { text: onlyGaps, source: 'playbook', ruleIds: [], chars: onlyGaps.length };
     return { text: '', source: 'none', ruleIds: [], chars: 0 };
   };
@@ -3522,6 +3543,31 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       },
       { method: 'POST', requireAuth: explicitLock },
     );
+    // —— 立场层：目标与判据（宪章 2026-11-19 修订：可读可改，不打分）——
+    route('/cognition-engine/stance/list', () => ({ items: stance.list(), rendered: stance.render(320) }));
+    route(
+      '/cognition-engine/stance/add',
+      (url, body) => {
+        const json = readBodyJson(body);
+        const kind = (url.searchParams.get('kind') ?? bodyString(json, 'kind') ?? '').trim();
+        if (kind !== 'goal' && kind !== 'prefer' && kind !== 'forbid') throw new Error('kind 只能是 goal / prefer / forbid');
+        const text = (url.searchParams.get('text') ?? bodyString(json, 'text') ?? '').trim();
+        const denyRaw = url.searchParams.get('deny') ?? bodyString(json, 'deny') ?? '';
+        const deny = denyRaw.split(/[,，、]/).map((word) => word.trim()).filter((word) => word.length > 0);
+        return stance.add({ kind, text, ...(deny.length === 0 ? {} : { deny }), origin: 'user' });
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+    route(
+      '/cognition-engine/stance/remove',
+      (url) => {
+        const id = (url.searchParams.get('id') ?? '').trim();
+        if (id.length === 0) throw new Error('需要 id');
+        return { removed: stance.remove(id), items: stance.list() };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
     // —— 深研：一个问题 → 多源 → 交叉核对 → 知识条目 ——
   route(
     '/cognition-engine/research/run',
@@ -3836,6 +3882,11 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       if (candidate.status !== 'pending') throw new Error('候选状态是 ' + candidate.status + '，不能再采用');
       const checked = checkAnchor(candidate.anchor, anchorLookup);
       if (!checked.ok) throw new Error('锚校验没通过，拒绝写入：' + checked.reason);
+      // 立场层：违反 forbid 判据的候选不入库（判据只做明确词命中，不语义推断）
+      const violation = stance.violates(candidate.content);
+      if (violation.violates) {
+        throw new Error('违反判据「' + (violation.rule?.text ?? '') + '」（命中「' + (violation.word ?? '') + '」），不入库');
+      }
 
       if (candidate.kind === 'fact') {
         const world = candidate.scope === 'world';
@@ -3904,7 +3955,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           const reason = messageOf(error);
           // 终局失败（重复 / 套话 / 过长 / 锚核不到）直接落定，别让队列越堆越长；
           // 其他（临时错误）留着待审，避免误丢
-          if (/重复|套话|过长|过短|锚校验|没有这个候选|准则没写进去/.test(reason)) {
+          if (/重复|套话|过长|过短|锚校验|违反判据|没有这个候选|准则没写进去/.test(reason)) {
             learning.reject(candidate.id, '自动跳过：' + reason);
             dropped += 1;
           } else {

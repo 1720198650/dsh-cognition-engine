@@ -586,6 +586,8 @@ window.__ModuleLoader__.load({
         const [autoInfo, setAutoInfo] = React.useState(null);
         /** 本轮注入占用（Letta 式容量条用）：{chars, ruleCount, activeRuleCount, injectMaxInstances} */
         const [injInfo, setInjInfo] = React.useState(null);
+        /** 立场层：{items, rendered} */
+        const [stanceInfo, setStanceInfo] = React.useState(null);
         // 开关类按钮统一成 chip 样子：有边框有内边距，不然看着像一行说明文字
         const CHIP = {
           ...S.tab,
@@ -655,9 +657,14 @@ window.__ModuleLoader__.load({
           let alive = true;
           (async () => {
             try {
-              const res = await call('/cognition-engine/injected', { cache: 'no-store' });
+              const [res, stanceRes] = await Promise.all([
+                call('/cognition-engine/injected', { cache: 'no-store' }),
+                call('/cognition-engine/stance/list', { cache: 'no-store' }),
+              ]);
               const data = await res.json();
               if (alive) setInjInfo(data);
+              const st = await stanceRes.json().catch(() => null);
+              if (alive) setStanceInfo(st);
             } catch {
               if (alive) setInjInfo(null);
             }
@@ -1211,6 +1218,54 @@ window.__ModuleLoader__.load({
                       setTick((v) => v + 1);
                     },
                   }, label)),
+              ),
+            ),
+            // 立场层：目标与判据（宪章 2026-11-19 修订：可读可改、不打分）
+            section(
+              '立场（目标与判据）',
+              h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                '按这个判断，与你的要求冲突时我会先说明分歧。这里不打分、不算总分——只列目标和判据，你能改能删。'),
+              stanceInfo && stanceInfo.items && stanceInfo.items.length > 0
+                ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 } },
+                    ...stanceInfo.items.map((item) => h('div', { key: item.id, style: { display: 'flex', gap: 6, alignItems: 'flex-start' } },
+                      h('span', { style: { flex: '0 0 auto', fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                        item.kind === 'goal' ? '目标' : item.kind === 'prefer' ? '判据' : '禁止'),
+                      h('span', { style: { flex: 1, fontSize: 12 } }, item.text +
+                        (item.deny && item.deny.length > 0 ? '（命中：' + item.deny.join('、') + ' 即拦）' : '')),
+                      h('button', { type: 'button', style: { ...S.tab, fontSize: 11 }, onClick: async () => {
+                        try {
+                          const res = await call('/cognition-engine/stance/remove?id=' + encodeURIComponent(item.id), { method: 'POST' });
+                          if (!res.ok) throw new Error('HTTP ' + res.status);
+                          setTick((v) => v + 1);
+                        } catch (error) {
+                          window.alert('删除失败：' + (error instanceof Error ? error.message : String(error)));
+                        }
+                      } }, '删'),
+                    )))
+                : h('div', { style: S.explain }, '还没有目标和判据。加一条：写清「要什么」或「不许什么」。'),
+              h('div', { style: { display: 'flex', gap: 6, marginTop: 6 } },
+                h('select', { id: 'stKind', style: { ...S.input, flex: '0 0 84px' } },
+                  h('option', { value: 'goal' }, '目标'),
+                  h('option', { value: 'prefer' }, '判据'),
+                  h('option', { value: 'forbid' }, '禁止'),
+                ),
+                h('input', { id: 'stText', placeholder: '例如：可验证 > 好听；或 不许引入外部数据库', style: S.input }),
+                h('button', { type: 'button', style: S.tab, onClick: async () => {
+                  const kindEl = document.getElementById('stKind');
+                  const textEl = document.getElementById('stText');
+                  const kind = kindEl ? kindEl.value : 'prefer';
+                  const text = textEl ? textEl.value.trim() : '';
+                  if (text.length < 4) { window.alert('至少 4 个字'); return; }
+                  try {
+                    const res = await call('/cognition-engine/stance/add?kind=' + kind + '&text=' + encodeURIComponent(text), { method: 'POST' });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+                    if (textEl) textEl.value = '';
+                    setTick((v) => v + 1);
+                  } catch (error) {
+                    window.alert('添加失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                } }, '加'),
               ),
             ),
             // 容量条（Letta memory blocks 的做法：直接显示 当前/上限，一眼看出快满没）
