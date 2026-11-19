@@ -1980,16 +1980,19 @@ window.__ModuleLoader__.load({
             // 自动学习开关：默认关，打开后才会自己检索花钱
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, paddingBottom: 8, borderBottom: '1px solid var(--dsw-alias-border-l1)' } },
               h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+                // 联网学习三档：关 → 快学 → 深研 → 关，一个按钮循环（原来两个开关并成一个）
                 h('button', { type: 'button', style: CHIP, onClick: async () => {
-                  const next = !(autoInfo && autoInfo.autoLearn);
+                  const level = (autoInfo && autoInfo.learnLevel) || (autoInfo && autoInfo.autoLearn ? 'fast' : 'off');
+                  const next = level === 'off' ? 'fast' : level === 'fast' ? 'deep' : 'off';
+                  if (next === 'deep' && !window.confirm('深研一次约 ¥0.1（多源检索 + 交叉核对），继续？')) return;
                   try {
-                    const res = await call('/cognition-engine/autolearn/toggle?autoLearn=' + next, { method: 'POST' });
+                    const res = await call('/cognition-engine/autolearn/toggle?learnLevel=' + next, { method: 'POST' });
                     if (!res.ok) throw new Error('HTTP ' + res.status);
                     setTick((v) => v + 1);
                   } catch (error) {
                     window.alert('切换失败：' + (error instanceof Error ? error.message : String(error)));
                   }
-                } }, '自动联网学习：' + (autoInfo && autoInfo.autoLearn ? '开' : '关')),
+                } }, '联网学习：' + ((autoInfo && autoInfo.learnLevel) === 'deep' ? '深研（约 ¥0.1/次）' : (autoInfo && autoInfo.learnLevel) === 'fast' ? '快学' : '关')),
                 h('button', { type: 'button', style: CHIP, onClick: async () => {
                   const next = !(autoInfo && autoInfo.autoRevise);
                   try {
@@ -2010,16 +2013,7 @@ window.__ModuleLoader__.load({
                     window.alert('切换失败：' + (error instanceof Error ? error.message : String(error)));
                   }
                 } }, '自动采用：' + (autoInfo && autoInfo.autoAccept !== false ? '开（不用点）' : '关（要手动点）')),
-                h('button', { type: 'button', style: CHIP, onClick: async () => {
-                  const next = !(autoInfo && autoInfo.deepResearch);
-                  try {
-                    const res = await call('/cognition-engine/autolearn/toggle?deepResearch=' + next, { method: 'POST' });
-                    if (!res.ok) throw new Error('HTTP ' + res.status);
-                    setTick((v) => v + 1);
-                  } catch (error) {
-                    window.alert('切换失败：' + (error instanceof Error ? error.message : String(error)));
-                  }
-                } }, '深研：' + (autoInfo && autoInfo.deepResearch ? '开（约 ¥0.1/次）' : '关')),
+
                 h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
                   autoInfo && autoInfo.webAvailable === false ? '宿主没有搜索服务' : '检索走宿主 web 服务（DeepSeek 官方搜索）'),
               ),
@@ -2046,7 +2040,7 @@ window.__ModuleLoader__.load({
                   const el = document.getElementById('drText');
                   const question = el ? el.value.trim() : '';
                   if (question.length < 4) { window.alert('问题至少 4 个字'); return; }
-                  if (!(autoInfo && autoInfo.deepResearch)) { window.alert('深研开关是关的：先点上面的「深研：关」打开'); return; }
+                  if (!(autoInfo && autoInfo.deepResearch)) { window.alert('联网学习不在「深研」档：先点上面的「联网学习」按钮切到深研'); return; }
                   window.alert('深研要跑 30~60 秒、约 ¥0.1，开始了。');
                   try {
                     const res = await call('/cognition-engine/research/run?q=' + encodeURIComponent(question), { method: 'POST' });
@@ -2066,17 +2060,8 @@ window.__ModuleLoader__.load({
                 ? '学习已自动化：资料一进来就切块、提炼、生成候选并**直接生效**，不用你点。下面只是"最近自动学了什么"，可以撤销。'
                 : '自动采用关着：下面是待你点的候选。'),
             h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
-              h('button', { type: 'button', style: S.tab, onClick: async () => {
-                try {
-                  const res = await call('/cognition-engine/learn/generate', { method: 'POST' });
-                  const data = await res.json().catch(() => ({}));
-                  if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
-                  window.alert('新增 ' + data.generated + ' 条候选，重复 ' + data.duplicates + ' 条，锚核不到丢弃 ' + data.dropped + ' 条');
-                  setTick((v) => v + 1);
-                } catch (error) {
-                  window.alert('生成失败：' + (error instanceof Error ? error.message : String(error)));
-                }
-              } }, '从资料生成候选'),
+              // 「从资料生成候选」按钮已删除：导入即自动生成并采用，按钮是重复动作
+              // （plan-consolidation.md P0-1）
               h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
                 learnInfo ? '待审 ' + learnInfo.stats.pending + ' 条 · 已采用 ' + learnInfo.stats.accepted + ' 条' : ''),
             ),

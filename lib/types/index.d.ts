@@ -195,6 +195,20 @@ export interface CognitionConfig {
     probeMinOverlap?: number;
     /** P4-2 试跑：反证达到多少条就拒收，默认 2。 */
     probeMaxCounter?: number;
+    /**
+     * 锚校验的两个覆盖率阈值（默认 0.9 / 0.6）。
+     *
+     * **经验值，未经标定**：audit-evidence.md 判为弱支撑。要调就改这里，别改 learning.ts 的常量。
+     */
+    anchorStrictCoverage?: number;
+    anchorLooseCoverage?: number;
+    /** 任务简报的事实相关性下限（默认 0.15，经验值）。 */
+    briefMinRelevance?: number;
+    /** 自动修订冷却小时（默认 24）与每日上限（默认 5）——经验值。 */
+    reviseCooldownHours?: number;
+    reviseMaxPerDay?: number;
+    /** 准则冲突裁决倍率（默认 1.2）——经验值。 */
+    conflictRatio?: number;
     /** 沉积层数据文件；默认 ~/.dsh/cognition-engine/cognition-sediment.jsonl。 */
     sedimentFile?: string;
     /** 沉积层单次位移系数 η，默认 0.02。 */
@@ -211,6 +225,14 @@ export interface CognitionConfig {
     wikiIncrementalMinChanges?: number;
     /** 影子模式：只记录不生效，默认 true（Step 3）。 */
     sedimentShadow?: boolean;
+    /**
+     * 沉积层总开关，**默认关**（2026-11-19 定）。
+     *
+     * 依据 docs/audit-evidence.md：四维划分与五分类是自造概念，检索不到同构工作，
+     * 判为弱支撑；且观察期到 11-25 时按 ≥20 条门槛大概率不达标。
+     * 关掉只停"写新事件"，已有链不删（哈希链要留证）。
+     */
+    sedimentEnabled?: boolean;
     /** 语义判定通道：'rules' 规则兜底（默认）/ 'llm' 走真实模型五分类。 */
     sedimentJudge?: 'rules' | 'llm';
     /** L2 抓取超时毫秒，默认 15000。 */

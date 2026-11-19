@@ -274,6 +274,12 @@ export interface PlaybookOptions {
   /** 每个 section 的条数上限。默认 5。 */
   maxPerSection?: number;
   /**
+   * 冲突裁决倍率：新条证据强度 ≥ 旧条 × 该值才取代。
+   *
+   * 默认 1.2，来自 LeAP 的做法，但**这个系数本身没有消融**（audit-evidence.md 判为经验值）。
+   */
+  conflictRatio?: number;
+  /**
    * 去重阈值（余弦）。
    *
    * 注意：ACE 报告的 0.90 是**稠密向量**口径，不能直接搬。
@@ -541,6 +547,8 @@ export class PlaybookStore {
   private readonly maxChars: number;
   private readonly maxEntries: number;
   private readonly maxPerSection: number;
+  /** 冲突裁决倍率（经验值，默认 1.2，可配） */
+  private readonly conflictRatio: number;
   private readonly dedupeThreshold: number;
   private readonly validateSourceIds: ((ids: readonly string[]) => string[]) | undefined;
   private readonly requireBoundary: boolean;
@@ -564,6 +572,7 @@ export class PlaybookStore {
     this.maxChars = Math.max(200, options.maxChars ?? 700);
     this.maxEntries = Math.max(1, options.maxEntries ?? 12);
     this.maxPerSection = Math.max(1, options.maxPerSection ?? 5);
+    this.conflictRatio = Math.max(1, options.conflictRatio ?? 1.2);
     // 默认 0.85：分档后这一档代表「自动合并」，不可逆，要比原来的 0.70 更保守
     this.dedupeThreshold = Math.min(0.99, Math.max(0.5, options.dedupeThreshold ?? 0.85));
     this.validateSourceIds = options.validateSourceIds;
@@ -939,13 +948,13 @@ export class PlaybookStore {
       if (other !== undefined && other.status === 'active') {
         const mine = this.confidenceOf(entry);
         const theirs = this.confidenceOf(other);
-        if (mine >= theirs * 1.2) {
+        if (mine >= theirs * this.conflictRatio) {
           // 新条更强：旧条退出（记清楚是被谁取代）
           other.status = 'retired';
           other.note = `被更强的准则 ${entry.id} 取代（证据强度 ${mine} vs ${theirs}）`;
           other.updatedAt = this.clock();
           entry.conflictWith = undefined;
-        } else if (theirs >= mine * 1.2) {
+        } else if (theirs >= mine * this.conflictRatio) {
           // 旧条更强：新条不能生效，留档说明原因
           entry.status = 'retired';
           entry.note = `证据强度不足，未推翻 ${other.id}（${mine} vs ${theirs}）`;
@@ -1003,13 +1012,13 @@ export class PlaybookStore {
     const mine = this.confidenceOf(a);
     const theirs = this.confidenceOf(b);
     // 差 1.2 倍以上直接裁决，否则挂未决组
-    if (mine >= theirs * 1.2) {
+    if (mine >= theirs * this.conflictRatio) {
       b.status = 'retired';
       b.note = `被更强的准则 ${aId} 取代（${mine} vs ${theirs}）`;
       b.updatedAt = this.clock();
       return true;
     }
-    if (theirs >= mine * 1.2) {
+    if (theirs >= mine * this.conflictRatio) {
       a.status = 'retired';
       a.note = `被更强的准则 ${bId} 取代（${theirs} vs ${mine}）`;
       a.updatedAt = this.clock();

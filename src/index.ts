@@ -52,7 +52,7 @@ import {
   type RobotsRules,
 } from './web_fetch.ts';
 import { recordUsage, summarizeUsage } from './usage.ts';
-import { SettingsStore, resolveInjectMode, isInjectMode, type InjectMode } from './settings.ts';
+import { SettingsStore, resolveInjectMode, isInjectMode, resolveLearnLevel, type InjectMode, type LearnLevel } from './settings.ts';
 import { runPracticeProbes, type ProbeTurn } from './probes.ts';
 import { extractText, scanFlags, wrapAsData } from './extract.ts';
 import { buildTaskBrief } from './brief.ts';
@@ -342,6 +342,20 @@ export interface CognitionConfig {
   probeMinOverlap?: number;
   /** P4-2 试跑：反证达到多少条就拒收，默认 2。 */
   probeMaxCounter?: number;
+  /**
+   * 锚校验的两个覆盖率阈值（默认 0.9 / 0.6）。
+   *
+   * **经验值，未经标定**：audit-evidence.md 判为弱支撑。要调就改这里，别改 learning.ts 的常量。
+   */
+  anchorStrictCoverage?: number;
+  anchorLooseCoverage?: number;
+  /** 任务简报的事实相关性下限（默认 0.15，经验值）。 */
+  briefMinRelevance?: number;
+  /** 自动修订冷却小时（默认 24）与每日上限（默认 5）——经验值。 */
+  reviseCooldownHours?: number;
+  reviseMaxPerDay?: number;
+  /** 准则冲突裁决倍率（默认 1.2）——经验值。 */
+  conflictRatio?: number;
   /** 沉积层数据文件；默认 ~/.dsh/cognition-engine/cognition-sediment.jsonl。 */
   sedimentFile?: string;
   /** 沉积层单次位移系数 η，默认 0.02。 */
@@ -358,6 +372,14 @@ export interface CognitionConfig {
   wikiIncrementalMinChanges?: number;
   /** 影子模式：只记录不生效，默认 true（Step 3）。 */
   sedimentShadow?: boolean;
+  /**
+   * 沉积层总开关，**默认关**（2026-11-19 定）。
+   *
+   * 依据 docs/audit-evidence.md：四维划分与五分类是自造概念，检索不到同构工作，
+   * 判为弱支撑；且观察期到 11-25 时按 ≥20 条门槛大概率不达标。
+   * 关掉只停"写新事件"，已有链不删（哈希链要留证）。
+   */
+  sedimentEnabled?: boolean;
   /** 语义判定通道：'rules' 规则兜底（默认）/ 'llm' 走真实模型五分类。 */
   sedimentJudge?: 'rules' | 'llm';
   /** L2 抓取超时毫秒，默认 15000。 */
@@ -514,6 +536,12 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     probeMaxTurns: Math.max(10, Math.round(numberOr(config.probeMaxTurns, 60))),
     probeMinOverlap: Math.min(0.9, Math.max(0.1, numberOr(config.probeMinOverlap, 0.3))),
     probeMaxCounter: Math.max(1, Math.round(numberOr(config.probeMaxCounter, 2))),
+    anchorStrictCoverage: Math.min(1, Math.max(0.6, numberOr(config.anchorStrictCoverage, 0.9))),
+    anchorLooseCoverage: Math.min(0.95, Math.max(0.3, numberOr(config.anchorLooseCoverage, 0.6))),
+    briefMinRelevance: Math.min(0.9, Math.max(0, numberOr(config.briefMinRelevance, 0.15))),
+    reviseCooldownHours: Math.max(0, numberOr(config.reviseCooldownHours, 24)),
+    reviseMaxPerDay: Math.max(1, Math.round(numberOr(config.reviseMaxPerDay, 5))),
+    conflictRatio: Math.max(1, numberOr(config.conflictRatio, 1.2)),
     inboxFile:
       typeof config.inboxFile === 'string' && config.inboxFile.trim().length > 0
         ? expandHome(config.inboxFile.trim())
@@ -523,6 +551,8 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
         ? expandHome(config.wikiDir.trim())
         : join(dataDir(), 'wiki'),
     sedimentShadow: config.sedimentShadow !== false,
+    // 沉积层默认关（弱支撑 + 观察期大概率不达标，见 docs/audit-evidence.md）
+    sedimentEnabled: config.sedimentEnabled === true,
     // 默认走 LLM 五分类（只在真实取代时触发，成本极低）；不可用时 fail-closed
     sedimentJudge: config.sedimentJudge === 'rules' ? 'rules' : 'llm',
     agentsFilePath:
@@ -631,6 +661,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     ...(config.playbookFile === undefined ? {} : { filePath: config.playbookFile }),
     maxChars: config.playbookChars,
     maxEntries: config.playbookMaxEntries,
+    // 冲突裁决倍率（默认 1.2，经验值，可配）
+    conflictRatio: config.conflictRatio,
     // P3-1：运行时强制「没有边界不许生效」，无边界的手工/候选准则会被打回
     requireBoundary: true,
     // P4-1：改准则必须写诊断
@@ -1080,14 +1112,17 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       ctx.logger?.warn?.(`cognition-engine: 自动学习日志写入失败 ${messageOf(error)}`);
     }
   };
-  const autoToggles = (): { autoLearn: boolean; autoRevise: boolean; autoAccept: boolean; deepResearch: boolean } => {
+  const autoToggles = (): { autoLearn: boolean; autoRevise: boolean; autoAccept: boolean; deepResearch: boolean; learnLevel: LearnLevel } => {
     const saved = settings.read();
+    // 三档是唯一真相：老的 autoLearn/deepResearch 由它推出来
+    const level = resolveLearnLevel(saved);
     return {
-      autoLearn: saved.autoLearn === true,
+      autoLearn: level !== 'off',
       autoRevise: saved.autoRevise === true,
       // 自动采用默认开：用户 2026-11-19「学习应完全自动化，人只提需求和反驳」
       autoAccept: saved.autoAccept !== false,
-      deepResearch: saved.deepResearch === true,
+      deepResearch: level === 'deep',
+      learnLevel: level,
     };
   };
 
@@ -1998,6 +2033,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         pending: taskManager.get_pending_tasks().length,
         due: taskManager.check_due_tasks().length,
       },
+      /** 沉积层总开关（默认关；关着只是不再写新事件，已有链不删） */
+      sediment: { enabled: config.sedimentEnabled === true },
       proactive: {
         pending: proactiveStore.pending().length,
         recordOnly: proactiveStore.phase === 'P1',
@@ -3453,6 +3490,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
     };
 
     const observeSupersede = (oldId: string, newId: string, reason?: string): void => {
+      // 总开关关着就完全不动：不写事件、不调判定模型（省 token）
+      if (config.sedimentEnabled !== true) return;
       const oldFact = memory.get(oldId);
       const newFact = memory.get(newId);
       if (oldFact === undefined || newFact === undefined) return;
@@ -3708,6 +3747,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
             userSaidSo: (url.searchParams.get('userSaidSo') ?? bodyString(json, 'userSaidSo') ?? 'false') === 'true',
             todayCount,
             autoReviseEnabled: autoToggles().autoRevise,
+            // 冷却与每日上限可配（默认 24h / 5 次，经验值未标定）
+            cooldownHours: config.reviseCooldownHours,
+            maxPerDay: config.reviseMaxPerDay,
           });
           if (!gate.allow) throw new Error('自动修订被门槛挡住：' + gate.reason);
         }
@@ -3833,17 +3875,24 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           autoAccept: readFlag('autoAccept'),
           deepResearch: readFlag('deepResearch'),
         };
+        // 三档：off / fast / deep（合并了原来的 autoLearn + deepResearch 两个开关）
+        const rawLevel = url.searchParams.get('learnLevel') ?? bodyString(json, 'learnLevel');
+        const learnLevel: LearnLevel | undefined =
+          rawLevel === 'off' || rawLevel === 'fast' || rawLevel === 'deep' ? rawLevel : undefined;
         const next = settings.writeToggles({
           ...(patch.autoLearn === undefined ? {} : { autoLearn: patch.autoLearn }),
           ...(patch.autoRevise === undefined ? {} : { autoRevise: patch.autoRevise }),
           ...(patch.autoAccept === undefined ? {} : { autoAccept: patch.autoAccept }),
           ...(patch.deepResearch === undefined ? {} : { deepResearch: patch.deepResearch }),
+          ...(learnLevel === undefined ? {} : { learnLevel }),
         });
+        const level = resolveLearnLevel(next);
         return {
-          autoLearn: next.autoLearn === true,
+          autoLearn: level !== 'off',
           autoRevise: next.autoRevise === true,
           autoAccept: next.autoAccept !== false,
-          deepResearch: next.deepResearch === true,
+          deepResearch: level === 'deep',
+          learnLevel: level,
         };
       },
       { method: 'POST', requireAuth: explicitLock },
@@ -3858,6 +3907,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         return text === undefined ? [] : scanFlags(text);
       },
     };
+    /** 锚校验阈值（默认 0.9/0.6，经验值未标定，可用 config 覆盖） */
+    const anchorOptions = { strictCoverage: config.anchorStrictCoverage, looseCoverage: config.anchorLooseCoverage };
     route('/cognition-engine/learn/list', (url) => {
       const status = url.searchParams.get('status');
       const allowed = ['pending', 'accepted', 'rejected'];
@@ -3880,7 +3931,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       const candidate = learning.get(candidateId);
       if (candidate === undefined) throw new Error('没有这个候选：' + candidateId);
       if (candidate.status !== 'pending') throw new Error('候选状态是 ' + candidate.status + '，不能再采用');
-      const checked = checkAnchor(candidate.anchor, anchorLookup);
+      const checked = checkAnchor(candidate.anchor, anchorLookup, anchorOptions);
       if (!checked.ok) throw new Error('锚校验没通过，拒绝写入：' + checked.reason);
       // 立场层：违反 forbid 判据的候选不入库（判据只做明确词命中，不语义推断）
       const violation = stance.violates(candidate.content);
@@ -3979,12 +4030,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         points: note.points,
         ...(note.quotes === undefined ? {} : { quotes: note.quotes }),
         blocks,
-      });
+      }, anchorOptions);
       let generated = 0;
       let duplicates = 0;
       let dropped = 0;
       for (const draft of drafts) {
-        const checked = checkAnchor(draft.anchor, anchorLookup);
+        const checked = checkAnchor(draft.anchor, anchorLookup, anchorOptions);
         if (!checked.ok) {
           dropped += 1;
           continue;
@@ -4037,9 +4088,9 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
             points: note.points,
             ...(note.quotes === undefined ? {} : { quotes: note.quotes }),
             blocks,
-          });
+          }, anchorOptions);
           for (const draft of drafts) {
-            const checked = checkAnchor(draft.anchor, anchorLookup);
+            const checked = checkAnchor(draft.anchor, anchorLookup, anchorOptions);
             if (!checked.ok) {
               noAnchor.push(draft.content.slice(0, 30) + '…：' + checked.reason);
               continue;
@@ -4469,6 +4520,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
           facts,
           rules,
           preferredSubjects,
+          // 相关性下限可配（默认 0.15，经验值未标定）
+          minRelevance: config.briefMinRelevance,
           ...(wikiExcerpt.length === 0 ? {} : { wikiExcerpt }),
           ...(completion === undefined ? {} : { completion }),
         });

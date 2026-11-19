@@ -101,9 +101,21 @@ export function quoteCoverage(quote: string, source: string): number {
 
 /** 引文太短就不算锚：12 字以下几乎在任何文章里都能撞上。 */
 export const MIN_QUOTE_CHARS = 12;
-/** 覆盖率到这条线才算"逐字引文"；0.6~0.9 是转述，要用户补原文后再核。 */
+/**
+ * 覆盖率阈值：0.9 以上算逐字、0.6~0.9 算转述。
+ *
+ * **这两个数是经验值，没有经过标定**（audit-evidence.md 判为弱支撑）：
+ * l3-anchor.md 给的对照确实落在 0.90 / 0.64 / 0.15 这类量级，但只在几条样本上跑过，
+ * 不是通过 30~50 对人工标注扫描得出的最优点。要改就走 config，不要改这里。
+ */
 export const STRICT_QUOTE_COVERAGE = 0.9;
 export const LOOSE_QUOTE_COVERAGE = 0.6;
+
+export interface AnchorOptions {
+  minQuoteChars?: number;
+  strictCoverage?: number;
+  looseCoverage?: number;
+}
 
 /**
  * 校验一条候选的外部锚（分三层，依据 docs/l3-anchor.md 的标定结果）。
@@ -113,18 +125,21 @@ export const LOOSE_QUOTE_COVERAGE = 0.6;
  *   3. 0.60~0.90（转述）→ 放行但标 needsQuote，提示用户补原文；不丢，因为内容仍可能对。
  * 逐字/覆盖都不够时再试相邻块（摘要常跨块），仍不行就判"张冠李戴"丢弃。
  */
-export function checkAnchor(anchor: Anchor, lookup: AnchorLookup): AnchorCheck {
+export function checkAnchor(anchor: Anchor, lookup: AnchorLookup, options: AnchorOptions = {}): AnchorCheck {
+  const minChars = options.minQuoteChars ?? MIN_QUOTE_CHARS;
+  const strict = options.strictCoverage ?? STRICT_QUOTE_COVERAGE;
+  const loose = options.looseCoverage ?? LOOSE_QUOTE_COVERAGE;
   const quote = normalizeForAnchor(anchor.quote);
-  if (quote.length < MIN_QUOTE_CHARS) {
-    return { ok: false, reason: `引文太短（${quote.length} 字，至少要 ${MIN_QUOTE_CHARS} 字），无法核对` };
+  if (quote.length < minChars) {
+    return { ok: false, reason: `引文太短（${quote.length} 字，至少要 ${minChars} 字），无法核对` };
   }
   type Verdict = { matchedChars: number; needsQuote?: boolean } | null;
   const judge = (text: string): Verdict => {
     const haystack = normalizeForAnchor(text);
     if (haystack.includes(quote)) return { matchedChars: quote.length };
     const coverage = quoteCoverage(anchor.quote, text);
-    if (coverage >= STRICT_QUOTE_COVERAGE) return { matchedChars: Math.round(quote.length * coverage) };
-    if (coverage >= LOOSE_QUOTE_COVERAGE) return { matchedChars: Math.round(quote.length * coverage), needsQuote: true };
+    if (coverage >= strict) return { matchedChars: Math.round(quote.length * coverage) };
+    if (coverage >= loose) return { matchedChars: Math.round(quote.length * coverage), needsQuote: true };
     return null;
   };
 
@@ -338,16 +353,16 @@ export function candidatesFromPoints(input: {
   /** 与 points 一一对应的原文引文（旧数据没有这一列） */
   quotes?: readonly string[];
   blocks: readonly { ord: number; text: string; flags?: string[] }[];
-}): Array<{ kind: CandidateKind; content: string; anchor: Anchor; subject?: string; confidence: number; anchorChars: number; anchorFlags: string[]; note: string }> {
+}, options: AnchorOptions = {}): Array<{ kind: CandidateKind; content: string; anchor: Anchor; subject?: string; confidence: number; anchorChars: number; anchorFlags: string[]; note: string }> {
   const out: Array<{ kind: CandidateKind; content: string; anchor: Anchor; subject?: string; confidence: number; anchorChars: number; anchorFlags: string[]; note: string }> = [];
   const normalizedBlocks = input.blocks.map((block) => ({ ...block, normalized: normalizeForAnchor(block.text) }));
   input.points.forEach((point, index) => {
     const content = point.trim();
-    if (content.length < MIN_QUOTE_CHARS) return;
+    if (content.length < (options.minQuoteChars ?? MIN_QUOTE_CHARS)) return;
     const quote = (input.quotes?.[index] ?? '').trim();
     const normalizedQuote = normalizeForAnchor(quote);
     // 没有引文（老数据/模型偷懒）就不生成：没有可核对出处的东西不该进待审
-    if (normalizedQuote.length < MIN_QUOTE_CHARS) return;
+    if (normalizedQuote.length < (options.minQuoteChars ?? MIN_QUOTE_CHARS)) return;
     // 与 checkAnchor 同一口径：逐字或 0.6 以上覆盖率才算"核得到"，
     // 但要挑**覆盖率最高**的那块——只看"第一个过线"会把摘要句配到相似的引言块上，
     // 结果每条都被标成"转述"（2026-11-18 实测 5 条全被误标 needsQuote）。
@@ -365,7 +380,7 @@ export function candidatesFromPoints(input: {
         hit = block;
       }
     }
-    if (hit === undefined || bestCoverage < LOOSE_QUOTE_COVERAGE) return;
+    if (hit === undefined || bestCoverage < (options.looseCoverage ?? LOOSE_QUOTE_COVERAGE)) return;
     out.push({
       kind: 'fact',
       content,

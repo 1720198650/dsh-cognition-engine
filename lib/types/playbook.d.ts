@@ -242,6 +242,12 @@ export interface PlaybookOptions {
     /** 每个 section 的条数上限。默认 5。 */
     maxPerSection?: number;
     /**
+     * 冲突裁决倍率：新条证据强度 ≥ 旧条 × 该值才取代。
+     *
+     * 默认 1.2，来自 LeAP 的做法，但**这个系数本身没有消融**（audit-evidence.md 判为经验值）。
+     */
+    conflictRatio?: number;
+    /**
      * 去重阈值（余弦）。
      *
      * 注意：ACE 报告的 0.90 是**稠密向量**口径，不能直接搬。
@@ -284,6 +290,8 @@ export declare class PlaybookStore {
     private readonly maxChars;
     private readonly maxEntries;
     private readonly maxPerSection;
+    /** 冲突裁决倍率（经验值，默认 1.2，可配） */
+    private readonly conflictRatio;
     private readonly dedupeThreshold;
     private readonly validateSourceIds;
     private readonly requireBoundary;

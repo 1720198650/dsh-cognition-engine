@@ -24,6 +24,13 @@ export interface BriefInput {
     maxFacts?: number;
     maxRules?: number;
     maxChars?: number;
+    /**
+     * 事实相关性下限，低于它视为"与任务无关"，只按重要度兜底。
+     *
+     * **0.15 是经验值、没有标定**（audit-evidence.md 判为弱支撑）：
+     * 依据只是"低于这个值的多半只共用几个常见字"，没有人工标注扫描支撑。
+     */
+    minRelevance?: number;
 }
 export interface BriefResult {
     markdown: string;

@@ -62,9 +62,20 @@ export declare function lcsLength(a: string, b: string): number;
 export declare function quoteCoverage(quote: string, source: string): number;
 /** 引文太短就不算锚：12 字以下几乎在任何文章里都能撞上。 */
 export declare const MIN_QUOTE_CHARS = 12;
-/** 覆盖率到这条线才算"逐字引文"；0.6~0.9 是转述，要用户补原文后再核。 */
+/**
+ * 覆盖率阈值：0.9 以上算逐字、0.6~0.9 算转述。
+ *
+ * **这两个数是经验值，没有经过标定**（audit-evidence.md 判为弱支撑）：
+ * l3-anchor.md 给的对照确实落在 0.90 / 0.64 / 0.15 这类量级，但只在几条样本上跑过，
+ * 不是通过 30~50 对人工标注扫描得出的最优点。要改就走 config，不要改这里。
+ */
 export declare const STRICT_QUOTE_COVERAGE = 0.9;
 export declare const LOOSE_QUOTE_COVERAGE = 0.6;
+export interface AnchorOptions {
+    minQuoteChars?: number;
+    strictCoverage?: number;
+    looseCoverage?: number;
+}
 /**
  * 校验一条候选的外部锚（分三层，依据 docs/l3-anchor.md 的标定结果）。
  *
@@ -73,7 +84,7 @@ export declare const LOOSE_QUOTE_COVERAGE = 0.6;
  *   3. 0.60~0.90（转述）→ 放行但标 needsQuote，提示用户补原文；不丢，因为内容仍可能对。
  * 逐字/覆盖都不够时再试相邻块（摘要常跨块），仍不行就判"张冠李戴"丢弃。
  */
-export declare function checkAnchor(anchor: Anchor, lookup: AnchorLookup): AnchorCheck;
+export declare function checkAnchor(anchor: Anchor, lookup: AnchorLookup, options?: AnchorOptions): AnchorCheck;
 export interface AddCandidateInput {
     kind: CandidateKind;
     content: string;
@@ -143,7 +154,7 @@ export declare function candidatesFromPoints(input: {
         text: string;
         flags?: string[];
     }[];
-}): Array<{
+}, options?: AnchorOptions): Array<{
     kind: CandidateKind;
     content: string;
     anchor: Anchor;

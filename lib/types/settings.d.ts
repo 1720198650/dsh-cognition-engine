@@ -9,7 +9,19 @@ export interface PersistedSettings {
     autoAccept?: boolean;
     /** 深研开关。默认关（一次约 ¥0.1，手动触发时才花）。 */
     deepResearch?: boolean;
+    /**
+     * 联网学习三档（合并了原来的 autoLearn + deepResearch 两个开关）：
+     *   off  = 完全不联网
+     *   fast = 快学（单次检索 + 抓 1~2 篇 + 提炼）
+     *   deep = 深研（多源 + 交叉核对，约 ¥0.1/次）
+     * 老字段仍然兼容：自动从 autoLearn/deepResearch 推出来。
+     */
+    learnLevel?: LearnLevel;
 }
+export type LearnLevel = 'off' | 'fast' | 'deep';
+export declare function isLearnLevel(value: unknown): value is LearnLevel;
+/** 由三档推出老的两个布尔量（保持既有代码路径不用改）。 */
+export declare function resolveLearnLevel(settings: PersistedSettings): LearnLevel;
 export declare function isInjectMode(value: unknown): value is InjectMode;
 /**
  * 决定最终注入方式。
@@ -33,5 +45,6 @@ export declare class SettingsStore {
         autoRevise?: boolean;
         autoAccept?: boolean;
         deepResearch?: boolean;
+        learnLevel?: LearnLevel;
     }): PersistedSettings;
 }

@@ -50,6 +50,10 @@ export interface ReviseGateInput {
     todayCount?: number;
     /** 全局自动修订开关 */
     autoReviseEnabled: boolean;
+    /** 冷却小时（默认 24，经验值） */
+    cooldownHours?: number;
+    /** 每天上限（默认 5，经验值） */
+    maxPerDay?: number;
 }
 export type ReviseDecision = {
     allow: true;
@@ -58,9 +62,9 @@ export type ReviseDecision = {
     allow: false;
     reason: string;
 };
-/** 每天自动修订上限（工程取值，见 docs/l3-autorevise.md 的强度标注）。 */
+/** 每天自动修订上限——**经验值，未标定**（audit-evidence.md 判为无来源）。 */
 export declare const MAX_REVISIONS_PER_DAY = 5;
-/** 冷却小时数（工程取值）。 */
+/** 冷却小时数——**经验值，未标定**。 */
 export declare const COOLDOWN_HOURS = 24;
 /**
  * 自动修订门槛（依据 docs/l3-autorevise.md）。

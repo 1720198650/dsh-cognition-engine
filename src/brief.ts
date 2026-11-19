@@ -42,6 +42,13 @@ export interface BriefInput {
   maxFacts?: number;
   maxRules?: number;
   maxChars?: number;
+  /**
+   * 事实相关性下限，低于它视为"与任务无关"，只按重要度兜底。
+   *
+   * **0.15 是经验值、没有标定**（audit-evidence.md 判为弱支撑）：
+   * 依据只是"低于这个值的多半只共用几个常见字"，没有人工标注扫描支撑。
+   */
+  minRelevance?: number;
 }
 
 export interface BriefResult {
@@ -60,6 +67,7 @@ export function buildTaskBrief(input: BriefInput): BriefResult {
   const maxFacts = input.maxFacts ?? 8;
   const maxRules = input.maxRules ?? 3;
   const maxChars = input.maxChars ?? 800;
+  const minRelevance = input.minRelevance ?? 0.15;
   const notes: string[] = [];
 
   const live = input.facts.filter((fact) => (fact.supersededBy ?? null) === null);
@@ -85,7 +93,7 @@ export function buildTaskBrief(input: BriefInput): BriefResult {
     .sort((a, b) => b.score - a.score);
 
   // 先按「相关性」过滤：纯重要度高但毫不相干的，不该占位置
-  let pickedFacts = scoredFacts.filter((item) => item.relevance > 0.15).slice(0, maxFacts);
+  let pickedFacts = scoredFacts.filter((item) => item.relevance > minRelevance).slice(0, maxFacts);
   if (pickedFacts.length === 0) {
     pickedFacts = live
       .slice()

@@ -19,6 +19,28 @@ export interface PersistedSettings {
   autoAccept?: boolean;
   /** 深研开关。默认关（一次约 ¥0.1，手动触发时才花）。 */
   deepResearch?: boolean;
+  /**
+   * 联网学习三档（合并了原来的 autoLearn + deepResearch 两个开关）：
+   *   off  = 完全不联网
+   *   fast = 快学（单次检索 + 抓 1~2 篇 + 提炼）
+   *   deep = 深研（多源 + 交叉核对，约 ¥0.1/次）
+   * 老字段仍然兼容：自动从 autoLearn/deepResearch 推出来。
+   */
+  learnLevel?: LearnLevel;
+}
+
+export type LearnLevel = 'off' | 'fast' | 'deep';
+
+export function isLearnLevel(value: unknown): value is LearnLevel {
+  return value === 'off' || value === 'fast' || value === 'deep';
+}
+
+/** 由三档推出老的两个布尔量（保持既有代码路径不用改）。 */
+export function resolveLearnLevel(settings: PersistedSettings): LearnLevel {
+  if (isLearnLevel(settings.learnLevel)) return settings.learnLevel;
+  if (settings.deepResearch === true) return 'deep';
+  if (settings.autoLearn === true) return 'fast';
+  return 'off';
 }
 
 export function isInjectMode(value: unknown): value is InjectMode {
@@ -74,12 +96,18 @@ export class SettingsStore {
   }
 
   /** 改自动学习/自动修订开关（面板按钮）。 */
-  writeToggles(patch: { autoLearn?: boolean; autoRevise?: boolean; autoAccept?: boolean; deepResearch?: boolean }): PersistedSettings {
+  writeToggles(patch: { autoLearn?: boolean; autoRevise?: boolean; autoAccept?: boolean; deepResearch?: boolean; learnLevel?: LearnLevel }): PersistedSettings {
     const next: PersistedSettings = { ...this.read() };
     if (patch.autoLearn !== undefined) next.autoLearn = patch.autoLearn;
     if (patch.autoRevise !== undefined) next.autoRevise = patch.autoRevise;
     if (patch.autoAccept !== undefined) next.autoAccept = patch.autoAccept;
     if (patch.deepResearch !== undefined) next.deepResearch = patch.deepResearch;
+    if (patch.learnLevel !== undefined) {
+      // 三档是唯一真相：写它的时候顺手把老两个布尔量对齐，避免两套状态打架
+      next.learnLevel = patch.learnLevel;
+      next.autoLearn = patch.learnLevel !== 'off';
+      next.deepResearch = patch.learnLevel === 'deep';
+    }
     mkdirSync(dirname(this.filePath), { recursive: true });
     writeFileSync(this.filePath, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
     this.cached = next;
