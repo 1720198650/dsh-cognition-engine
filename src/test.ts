@@ -1927,7 +1927,7 @@ async function main(): Promise<void> {
 
   await test('语域分桶：技术 > 情绪 > 闲聊，且技术优先', () => {
     assert.equal(classifyBucket('跑 `npm run build` 报错了'), 'technical');
-    assert.equal(classifyBucket('看 D:\\dshgz\\cognition-engine\\src\\index.ts'), 'technical');
+    assert.equal(classifyBucket('看 D:\\work\\cognition-engine\\src\\index.ts'), 'technical');
     assert.equal(classifyBucket('我今天有点焦虑，压力挺大的'), 'emotional');
     assert.equal(classifyBucket('好。嗯。我累了。'), 'emotional', '短句多 + 第一人称多也应判情绪');
     assert.equal(classifyBucket('明天把那份文档整理一下就好'), 'casual');
@@ -2224,7 +2224,7 @@ async function main(): Promise<void> {
       ['secret', '记住密码是 abc12345'],
       ['one-shot', '2026-11-06 这天要发版'],
       ['one-shot', '这次的单号 A12345 要留着'],
-      ['env-bound', '配置在 D:\\dshgz\\config.json 里'],
+      ['env-bound', '配置在 D:\\work\\config.json 里'],
       ['env-bound', '连 192.168.1.5 的端口就行'],
     ];
     for (const [code, text] of hard) {
@@ -4000,7 +4000,7 @@ async function main(): Promise<void> {
     const dirty = [
       '我在某岭220kV变做了剩余电流越限排查，读数 0.030A，回路5412。',
       '联系人 13812345678，邮箱 a.b@example.com，token: sk-abcdef123456',
-      '路径 D:\\dshgz\\2026工作\\11.04',
+      '路径 C:\\Users\\someone\\Documents\\报告.docx',
     ].join('\n');
     const run = (input: string): { code: number; out: string } => {
       try {

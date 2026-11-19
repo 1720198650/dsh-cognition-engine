@@ -2,10 +2,10 @@
   "manifest_version": 2,
   "type": "plugin",
   "id": "1720198650/dsh-cognition-engine",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "channel": "stable",
   "name": "认知引擎 Cognition Engine",
-  "description": "给 AI 装一个会作废、会记账、会自我纠错的长期记忆。双时态记忆 + 人定主题 + 准则本（带证据链、来源分级、冲突裁决），零外部依赖，纯本地 JSON。",
+  "description": "给 AI 装一个会作废、会记账、会自我纠错的长期记忆。双时态记忆 + 人定主题 + 准则本 + 立场判据 + 语感，自动学习，零依赖纯本地 JSON，联网功能默认关。",
   "runtime": {
     "type": "plugin",
     "host": "node",
@@ -23,7 +23,11 @@
     "topics.scope",
     "tasks.longhorizon",
     "context.injection",
-    "ui.dock"
+    "ui.dock",
+    "learning.auto",
+    "stance.criteria",
+    "voice.style",
+    "research.multisource"
   ],
   "permissions": [
     "filesystem"
@@ -48,7 +52,7 @@
     "url": "https://github.com/1720198650"
   },
   "security": {
-    "network": "none",
+    "network": "optional",
     "telemetry": "none",
     "data_location": "local"
   },
@@ -90,8 +94,8 @@
       "cognition_forget",
       "cognition_state",
       "cognition_reflect",
-        "cognition_clarify",
-        "manage_long_task"
+      "cognition_clarify",
+      "manage_long_task"
     ]
   }
 }

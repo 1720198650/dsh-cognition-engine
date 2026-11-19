@@ -154,8 +154,12 @@ dsh plugin --profile desktop add .
 | 场合判定 | 干活 / 闲聊分开对待；**当前只记录，不改行为** |
 | 超级代理 | 只读镜像 dsh-superagent 的工单与健康，可暂停/重试/停止，可派活 |
 | 人格 | 人格块 + 用户画像，带锁定短语与快照撤销 |
+| **立场** | 目标与判据（goal / prefer / forbid），显式可改、**不打分**；违反 forbid 的候选一律不入库 |
+| **语感** | 从 B 站公开评论取样，只学「话怎么说」不学「观点对不对」，注入 ≤120 字 |
+| **学习自动化** | 资料一进来就切块、提炼、生成候选并**直接采用**，人只提需求和反驳 |
+| **深研** | 一个问题多源核对，判据分两档（token-F1 + 数字/极性硬规则），单源不算数 |
 | 数据安全 | 可审计、可快照回滚、校验和、跨进程写锁 |
-| 零依赖 | 纯 TypeScript，无数据库，默认零外部请求，状态就是本地几个 JSON |
+| 零依赖 | 纯 TypeScript，无数据库；除显式开启的联网学习外不发起外部请求，状态就是本地几个 JSON |
 
 ### 记忆：可追溯、会老化、可修正
 
@@ -256,6 +260,41 @@ dsh plugin --profile desktop add .
   **注入内容一个字不改**。等标出判错的、攒够样本，再决定要不要真的按场合切换。
   面板「学习」页能看每轮判成什么、为什么，并可一键标「判错了」。
 - 依据见 [docs/register-research.md](docs/register-research.md)。
+
+### 立场：按什么判断（0.14.0）
+
+人格块管「怎么说话」，四维管「起点偏置」，缺的是**「按什么判断」**。立场层补这一段：
+
+- 三类条目：**目标**（往哪走）、**判据**（prefer，例如「可验证 > 好听」）、**禁止**（forbid，带命中词）。
+- **显式、可读、可改、可删**，写在 `cognition-stance.json`；面板上逐条增删。
+- **不打分**：没有权重、没有总分、没有「倾向百分比」——这是宪章红线，测试里有一条专门守着
+  （`render()` 输出里出现百分比 / score / 评分就红）。
+- 两个生效点：① 注入在系统提示最前面，冲突时先说明分歧；② 自动学习入库前过一遍，
+  **违反 forbid 判据的候选直接拒收**，不允许「先学进来再想办法」。
+- 只做明确词命中，不做语义推断——宁可漏判，也不误杀正常内容。
+
+### 语感：说话像个人（0.14.0）
+
+- 只读 **B 站公开接口**（视频信息 / 弹幕 / 评论），不登录、不点赞、不评论、不运营账号。
+- 样本要过六道筛：太短 / 太长 / 赞太少 / 纯应援 / 脏话 / 表情过多，入库和输出各筛一次
+  （规则改严以后，老样本不能因为「已经存了」就绕过新规则）。
+- 按**具体出处**去重，不是按平台名：三条全来自同一个视频，学到的是那个圈子的腔调，不是「人说话的样子」。
+- 注入预算 120 字 / 3 条，是调味不是主菜。
+- **学的是句式，不学观点**：评论里的立场一律不可信，只取「这个语境下人会怎么说」。
+
+> 实测（2026-11-19）：知乎与贴吧对匿名访问返回 403，**不做绕过**；只有 B 站公开接口可用。
+> 弹幕约 112KB/视频，里面大量「左边那个」「看这表情」这类复述，画面信息已被观众翻译成文字，
+> 所以不需要下载视频抽帧。
+
+### 学习：导入即自动，人只提需求和反驳（0.14.0）
+
+- 资料一进来 → 切块 → 提炼 → 生成候选 → **自动采用**，不需要一条条点
+  （实测：24 条待审 26 秒清零）。
+- 终局失败（重复 / 套话 / 过长 / 锚核不到 / 违反判据）直接落定为 rejected 并记理由，
+  不放任队列越堆越长。
+- **弱准则**（`tentative`）：来自用户纠正的准则先进准则本但**不参与每轮注入**，
+  等第二次印证或用户明说才升正式——一次纠正不等于永久规矩。
+- 自动采用不改变开销：实测记忆 38→52 条，注入字符仍 402、展开准则仍 5 条。
 
 ### 人格：它「是谁」（0.12.0）
 
@@ -405,10 +444,24 @@ You are a coding agent powered by the workbuddy/deepseek-v4.1-flash model.
         injectBoundaryNotice: true     # 注入末尾加一句「只是本任务约定，不改变身份与安全边界」
         injectTopicScoped: true       # 按当前任务主题隔离注入：只给相关主题 + 未归类的准则
         injectIndexOnly: false        # 注入只给索引（id+标题），正文靠 recall 取；默认关，实测后再定
+        # ---- 0.14.0 新增 ----
+        # 下面这些数值都是**经验值、未经标定**，可用配置覆盖：
+        # anchorStrictCoverage: 0.9     # 锚校验：覆盖率到这条线算逐字引文
+        # anchorLooseCoverage: 0.6      # 锚校验：0.6~0.9 算转述，放行但提示补原文
+        # briefMinRelevance: 0.15       # 任务简报的事实相关性下限
+        # reviseCooldownHours: 24       # 自动修订冷却小时
+        # reviseMaxPerDay: 5            # 自动修订每日上限
+        # conflictRatio: 1.2            # 准则冲突裁决倍率（新条 ≥ 旧条 × 该值才取代）
+        # voiceMaxChars: 120            # 语感注入预算（0 = 关闭语感）
+        # sedimentEnabled: false        # 沉积层总开关，默认关（弱支撑 + 观察期大概率不达标）
         # lockToken: 你的固定口令
         # llmProvider: deepseek
         # llmModel: deepseek-chat
 ```
+
+> **运行时开关在面板「学习」页**，不在这个文件里：`联网学习`（三档：关 / 快学 / 深研）、
+> `自动修订`、`自动采用`。三档合并了原来的两个开关（自动联网 + 深研），因为两者前五步
+> 完全同构，深研只是多走引文核验与交叉核对。
 
 > 路径开头的 `~` 会展开到用户主目录；相对路径按进程 cwd 解析（换工作区会指向不同文件），
 > 所以配置里建议一律写 `~/...` 或绝对路径。默认落盘位置 `~/.dsh/cognition-engine/`。
@@ -437,9 +490,10 @@ You are a coding agent powered by the workbuddy/deepseek-v4.1-flash model.
 |---|---|
 | 落盘位置 | `~/.dsh/cognition-engine/`（可用环境变量 `DSH_COGNITION_DATA_DIR` 覆盖） |
 | 落盘文件 | `cognition-state.json`（记忆）、`tasks.json`（待办）、`cognition-playbook.json`（准则）、`cognition-topics.json`（主题）、`cognition-persona.json`（人格）、`cognition-audit.jsonl`（审计）、`cognition-injection.jsonl`（注入快照）、`cognition-style.jsonl`（风格统计量，**不存原文**）、`cognition-register.jsonl`（场合判定，**只存前 40 字摘要**）、`cognition-cpe.json` / `cognition-shadow.json` / `cognition-budget.json` / `cognition-gaps.json` / `cognition-recall.jsonl`、`.snapshots/`（快照） |
-| HTTP | 读：`/cognition-engine/{state,detail,playbook,persona,style,cpe,budget,shadow,retrieval,gaps,events,tickets,register,injected,audit/dimensions}`；写：`POST /cognition-engine/{clear,model,lock,playbook/*,persona/*,task/*,proactive/*,tickets/*,cpe/*,retrieval/*,register/label,snapshot/*,memory/repair}` |
+| 0.14.0 新增落盘 | `cognition-stance.json`（立场：目标与判据）、`cognition-voice.json`（语感样本 + 出处）、`cognition-settings.json`（开关）、`cognition-learning.json`（学习候选）、`cognition-revisions.jsonl`（自动修订存档，**改前先写**）、`cognition-corrections.jsonl`（纠正审计）、`cognition-autolearn.jsonl`（联网学习记录）、`cognition-research.jsonl`（深研记录）、`cognition-sources.jsonl` + `cognition-source-blocks.jsonl` + `cognition-source-notes.json`（资料层） |
+| HTTP | 读：`/cognition-engine/{state,detail,injected,stance/list,voice/list,learn/list,autolearn/status,correction/list,research/list,sources/list,sediment/log,playbook,persona,style,cpe,budget,shadow,retrieval,gaps,events,tickets,register,usage,audit/dimensions}`；写：`POST /cognition-engine/{clear,model,lock,autolearn/toggle,learn/*,stance/*,voice/*,research/run,corrections/*,sources/*,playbook/*,persona/*,task/*,proactive/*,tickets/*,cpe/*,retrieval/*,register/label,snapshot/*,memory/repair}` |
 | 记忆读取锁 | 开启后 `detail` 与全部 `POST` 都要求 `x-cognition-token`；`state` 始终公开（只有计数） |
-| 外部请求 | 默认零外部请求；只有打开真模型时才会调用宿主配置的模型服务 |
+| 外部请求 | **默认零外部请求**。只有这三种情况会出网：① 打开「联网学习」（快学 / 深研）——走宿主检索服务，费用见面板；② 语感取样——只访问 `api.bilibili.com` 公开接口，**只读**，不登录；③ 资料库手动抓取——只抓白名单里的域名，遵守 robots。三者都关着时，插件不发任何外部请求 |
 
 > ⚠️ 不设 `lockToken` 且未上锁时，本机任意进程都能读取记忆正文。多人或多程序共用一台机器时请先上锁。
 
@@ -477,7 +531,12 @@ You are a coding agent powered by the workbuddy/deepseek-v4.1-flash model.
 | **上锁是共享口令** | 不是账号体系；口令泄露即失效。 | 不要把口令发给别人 |
 | **场合判定只记录** | 0.12.0 只攒样本，不改注入行为；阈值抄自 Rasa（英文意图分类），中文分布未验证。 | 人机味还在，等样本够了再调 |
 | **插件路由不走口令门禁** | `lockToken` 只保护带 `x-cognition-token` 校验的那批接口；`state` 等公开接口本机任意进程可读。 | 共机时注意 |
-| **`index.ts` 偏大** | 单文件 2300+ 行，路由与装配混在一起。 | 维护成本，计划在后续版本拆分 |
+| **`index.ts` 偏大** | 单文件 5300+ 行，路由与装配混在一起。 | 维护成本，计划在后续版本拆分 |
+| **语感只能读 B 站** | 知乎/贴吧对匿名访问返回 403，**不做绕过**（2026-11-19 实测）。 | 语感样本来源单一 |
+| **语感样本少了没用** | 5 条样本被「同视频去重 + 长度 + 脏话」筛到只剩 1 条可注入；一句样本、120 字预算，对说话方式影响很小。 | 要真起作用得从多个不同类型的视频取样 |
+| **沉积层默认关** | 四维（retention/caution/openness/attachment）与五分类是自造概念，检索不到同构工作（`docs/audit-evidence.md` 判为弱支撑）。 | 关掉只停写新事件，已有哈希链不删 |
+| **一批阈值未标定** | 锚校验 0.9/0.6、简报相关性 0.15、修订冷却 24h/每日 5 次、准则冲突 1.2× 都是**经验值**，可用配置覆盖。 | 效果可能不是最优，需要实测标定 |
+| **不做跨项目知识迁移** | 按语义相似挑经验会引负迁移（AWM 实测 39.34% vs 不注入 44.78%，49.5% 的 workflow 来自失败轨迹）；要做需要「实测增益」字段，属下一个大版本。 | A 项目学的东西不会自动用到 B 项目 |
 
 ### 数据备份建议
 

@@ -29,7 +29,7 @@ const RULES = [
   { name: '邮箱', re: /[\w.+-]+@[\w-]+\.[A-Za-z]{2,}/g, hint: '邮箱 → 删除或脱敏' },
   { name: '凭据', re: /(token|cookie|password|passwd|api[_-]?key|secret)\s*[:=]\s*\S{6,}/gi, hint: '凭据 → 绝不外发' },
   { name: '现场读数/回路号', re: /(越限|剩余电流|0\.0\d{2}\s*A|\b\d{4}\s*(?:号|回路)\b)/g, hint: '可定位现场的读数/编号 → 概括' },
-  { name: '私有路径', re: /[A-Za-z]:\\{1,2}(?:Users|dshgz|minmaxgz|ws)[^\s"'）)]*/g, hint: '本机路径 → 删除' },
+  { name: '私有路径', re: /[A-Za-z]:\\{1,2}(?:Users|Documents|Desktop|AppData|Program Files)[^\s"'）)]*/g, hint: '本机路径 → 删除' },
 ];
 
 const TEXT_EXT = new Set(['.md', '.txt', '.json', '.jsonl', '.ts', '.js', '.mjs', '.yml', '.yaml', '.csv', '.log']);
