@@ -100,6 +100,14 @@ export interface PlaybookEntry {
      * 注意：冲突裁决仍用 helpful/harmful 推导出的强度，不读这个字段。
      */
     confidence?: number;
+    /**
+     * 「弱准则」：自动学到、但证据还不够硬（例如只来自一次纠正）。
+     *
+     * 弱准则**不参与每轮注入**，只在被问到 / recall 时出现。
+     * 依据：Huang et al. 2024——没有外部反馈的自学越改越差；用户 2026-11-19 定
+     * 「一次纠正不等于永久规矩」。要升成正式准则，得再来一次印证或用户明说。
+     */
+    tentative?: boolean;
     /** 何时生效；null 表示不限。 */
     validFrom: number | null;
     /** 何时失效；null 表示长期有效。P3 才会自动生成。 */
@@ -211,6 +219,8 @@ export interface PlaybookCandidate {
     boundaryEnvs?: string[];
     /** 展示用置信度 0..1。 */
     confidence?: number;
+    /** 弱准则：生效但不进每轮注入。 */
+    tentative?: boolean;
 }
 export interface MergeOutcome {
     accepted: boolean;
@@ -329,6 +339,8 @@ export declare class PlaybookStore {
         when?: string;
         boundaryEnvs?: string[];
         confidence?: number;
+        /** 弱准则：生效但不进每轮注入，等二次印证或用户确认再升 */
+        tentative?: boolean;
     }): MergeOutcome;
     /**
      * 接受一条待审准则。

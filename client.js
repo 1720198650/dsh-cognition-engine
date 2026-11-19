@@ -1945,6 +1945,26 @@ window.__ModuleLoader__.load({
                     window.alert('切换失败：' + (error instanceof Error ? error.message : String(error)));
                   }
                 } }, '自动修订：' + (autoInfo && autoInfo.autoRevise ? '开（会标注+留存档）' : '关')),
+                h('button', { type: 'button', style: CHIP, onClick: async () => {
+                  const next = !(autoInfo && autoInfo.autoAccept !== false);
+                  try {
+                    const res = await call('/cognition-engine/autolearn/toggle?autoAccept=' + next, { method: 'POST' });
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    setTick((v) => v + 1);
+                  } catch (error) {
+                    window.alert('切换失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                } }, '自动采用：' + (autoInfo && autoInfo.autoAccept !== false ? '开（不用点）' : '关（要手动点）')),
+                h('button', { type: 'button', style: CHIP, onClick: async () => {
+                  const next = !(autoInfo && autoInfo.deepResearch);
+                  try {
+                    const res = await call('/cognition-engine/autolearn/toggle?deepResearch=' + next, { method: 'POST' });
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    setTick((v) => v + 1);
+                  } catch (error) {
+                    window.alert('切换失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                } }, '深研：' + (autoInfo && autoInfo.deepResearch ? '开（约 ¥0.1/次）' : '关')),
                 h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
                   autoInfo && autoInfo.webAvailable === false ? '宿主没有搜索服务' : '检索走宿主 web 服务（DeepSeek 官方搜索）'),
               ),
@@ -1965,8 +1985,31 @@ window.__ModuleLoader__.load({
                   }
                 } }, '学一次'),
               ),
+              h('div', { style: { display: 'flex', gap: 6 } },
+                h('input', { id: 'drText', placeholder: '深研一个问题（多源核对，只留多源印证过的）', style: S.input }),
+                h('button', { type: 'button', style: S.tab, onClick: async () => {
+                  const el = document.getElementById('drText');
+                  const question = el ? el.value.trim() : '';
+                  if (question.length < 4) { window.alert('问题至少 4 个字'); return; }
+                  if (!(autoInfo && autoInfo.deepResearch)) { window.alert('深研开关是关的：先点上面的「深研：关」打开'); return; }
+                  window.alert('深研要跑 30~60 秒、约 ¥0.1，开始了。');
+                  try {
+                    const res = await call('/cognition-engine/research/run?q=' + encodeURIComponent(question), { method: 'POST' });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+                    const label = { verified: '已多源印证', divergent: '来源互斥', insufficient_sources: '有效来源不足', no_agreement: '没有一致答案' }[data.status] || data.status;
+                    window.alert('深研完成：' + label + '；读 ' + data.sources.length + ' 篇，结论 ' + (data.claims || []).length + ' 条');
+                    setTick((v) => v + 1);
+                  } catch (error) {
+                    window.alert('深研失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                } }, '深研'),
+              ),
             ),
-            h('div', { style: S.explain }, '学习候选：从资料里提炼出的结论，每条都能点开核对原文块。锚核不到的不会出现在这里。'),
+            h('div', { style: S.explain },
+              autoInfo && autoInfo.autoAccept !== false
+                ? '学习已自动化：资料一进来就切块、提炼、生成候选并**直接生效**，不用你点。下面只是"最近自动学了什么"，可以撤销。'
+                : '自动采用关着：下面是待你点的候选。'),
             h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
               h('button', { type: 'button', style: S.tab, onClick: async () => {
                 try {

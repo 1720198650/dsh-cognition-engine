@@ -1030,9 +1030,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   /** 导入一处来源后统一走这里：先建块索引，再后台提炼。 */
   const ingestSource = (record: { id: string; title: string; content: string }): void => {
     indexSourceNow(record);
-    void distillSourceNote(record).catch((error: unknown) => {
-      ctx.logger?.warn?.(`cognition-engine: 来源提炼失败 ${record.id}: ${messageOf(error)}`);
-    });
+    void distillSourceNote(record)
+      // 提炼完自动进学习流水线：生成候选 → 自动采用。人不点任何按钮。
+      .then(() => learningPipelineRef?.(record.id))
+      .catch((error: unknown) => {
+        ctx.logger?.warn?.(`cognition-engine: 来源提炼失败 ${record.id}: ${messageOf(error)}`);
+      });
   };
 
   // —— 自动学习：走宿主 web 服务（DeepSeek 官方搜索），不需要自己维护白名单 ——
@@ -1059,9 +1062,15 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       ctx.logger?.warn?.(`cognition-engine: 自动学习日志写入失败 ${messageOf(error)}`);
     }
   };
-  const autoToggles = (): { autoLearn: boolean; autoRevise: boolean } => {
+  const autoToggles = (): { autoLearn: boolean; autoRevise: boolean; autoAccept: boolean; deepResearch: boolean } => {
     const saved = settings.read();
-    return { autoLearn: saved.autoLearn === true, autoRevise: saved.autoRevise === true };
+    return {
+      autoLearn: saved.autoLearn === true,
+      autoRevise: saved.autoRevise === true,
+      // 自动采用默认开：用户 2026-11-19「学习应完全自动化，人只提需求和反驳」
+      autoAccept: saved.autoAccept !== false,
+      deepResearch: saved.deepResearch === true,
+    };
   };
 
   /**
@@ -1773,6 +1782,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
   let lastUserText = '';
   /** 纠正链入口（在 setupRoutes 里赋值；这里只留引用，避开作用域问题） */
   let correctionChainRef: ((text: string) => Promise<unknown>) | undefined;
+  /** 学习流水线入口：提完摘要后自动生成候选 + 自动采用（在 setupRoutes 里赋值） */
+  let learningPipelineRef: ((sourceId: string) => Promise<void>) | undefined;
   /** 由 setupRoutes 内赋值；工具层通过它把真实取代转给沉积层。 */
   let observeSupersedeRef: ((oldId: string, newId: string, reason?: string) => void) | undefined;
   /** 由 setupRoutes 内赋值；注入渲染在前，实例在后，所以用引用。 */
@@ -3518,6 +3529,7 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       const json = readBodyJson(body);
       const question = (url.searchParams.get('q') ?? bodyString(json, 'q') ?? '').trim();
       if (question.length < 4) throw new Error('需要 q（要搞清楚的问题，至少 4 个字）');
+      if (!autoToggles().deepResearch) throw new Error('深研开关是关的：一次约 ¥0.1，先在面板打开再跑');
       return runDeepResearch(question);
     },
     { method: 'POST', requireAuth: explicitLock },
@@ -3764,17 +3776,29 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       '/cognition-engine/autolearn/toggle',
       (url, body) => {
         const json = readBodyJson(body);
-        const readFlag = (name: 'autoLearn' | 'autoRevise'): boolean | undefined => {
+        const readFlag = (name: 'autoLearn' | 'autoRevise' | 'autoAccept' | 'deepResearch'): boolean | undefined => {
           const raw = url.searchParams.get(name) ?? bodyString(json, name);
           if (raw === null || raw === undefined) return undefined;
           return raw === 'true' || raw === '1';
         };
-        const patch = { autoLearn: readFlag('autoLearn'), autoRevise: readFlag('autoRevise') };
+        const patch = {
+          autoLearn: readFlag('autoLearn'),
+          autoRevise: readFlag('autoRevise'),
+          autoAccept: readFlag('autoAccept'),
+          deepResearch: readFlag('deepResearch'),
+        };
         const next = settings.writeToggles({
           ...(patch.autoLearn === undefined ? {} : { autoLearn: patch.autoLearn }),
           ...(patch.autoRevise === undefined ? {} : { autoRevise: patch.autoRevise }),
+          ...(patch.autoAccept === undefined ? {} : { autoAccept: patch.autoAccept }),
+          ...(patch.deepResearch === undefined ? {} : { deepResearch: patch.deepResearch }),
         });
-        return { autoLearn: next.autoLearn === true, autoRevise: next.autoRevise === true };
+        return {
+          autoLearn: next.autoLearn === true,
+          autoRevise: next.autoRevise === true,
+          autoAccept: next.autoAccept !== false,
+          deepResearch: next.deepResearch === true,
+        };
       },
       { method: 'POST', requireAuth: explicitLock },
     );
@@ -3794,6 +3818,147 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       const filter = status !== null && allowed.includes(status) ? (status as 'pending') : undefined;
       return { stats: learning.stats(), items: learning.list(filter) };
     });
+
+    /**
+     * 采用一个候选（路由与自动采用共用同一套规则）。
+     *
+     * 自动/手动唯一的区别是 boundary 有没有人填：
+     *   - 事实 → 写入记忆（世界知识降权）
+     *   - 准则 → 写进准则本；**来自用户纠正的标 tentative（不参与每轮注入）**，
+     *     等第二次印证或用户明说才升正式（用户 2026-11-19 定的）
+     */
+    const applyCandidate = (
+      candidateId: string,
+      options: { boundary?: string[]; auto?: boolean } = {},
+    ): { kind: string; ref: string; tentative: boolean } => {
+      const candidate = learning.get(candidateId);
+      if (candidate === undefined) throw new Error('没有这个候选：' + candidateId);
+      if (candidate.status !== 'pending') throw new Error('候选状态是 ' + candidate.status + '，不能再采用');
+      const checked = checkAnchor(candidate.anchor, anchorLookup);
+      if (!checked.ok) throw new Error('锚校验没通过，拒绝写入：' + checked.reason);
+
+      if (candidate.kind === 'fact') {
+        const world = candidate.scope === 'world';
+        const fact = memory.ingest({
+          content: candidate.content,
+          subject: (world ? '资料:' : '') + (candidate.subject ?? '待归类').slice(0, 40),
+          tags: [
+            'learned',
+            ...(options.auto === true ? ['auto-accepted'] : []),
+            ...(world ? ['world-knowledge'] : []),
+            'anchor:' + candidate.anchor.ref + (candidate.anchor.block === undefined ? '' : '#' + candidate.anchor.block),
+          ],
+          importance: world ? 0.25 : Math.min(0.9, 0.4 + candidate.confidence * 0.4),
+          source: 'imported',
+          origin: 'ui',
+        });
+        learning.markAccepted(candidateId, fact.id);
+        refreshEvidence();
+        touch();
+        void stateStore.flush();
+        return { kind: 'fact', ref: fact.id, tentative: false };
+      }
+
+      if (candidate.kind === 'rule') {
+        // 来自用户纠正的准则：先当弱准则（不进注入），等二次印证再升
+        const fromCorrection = candidate.anchor.type === 'turn';
+        const tentative = fromCorrection && candidate.confidence < 0.9;
+        // 边界自动派生：有 subject 用它，否则标"通用"；弱准则允许空边界
+        const boundary = options.boundary !== undefined && options.boundary.length > 0
+          ? options.boundary
+          : [candidate.subject === undefined ? '通用（自动派生，可改）' : candidate.subject];
+        if (!tentative && boundary.length === 0) {
+          throw new Error('准则候选必须填适用边界：没有边界的准则会被到处套用');
+        }
+        const outcome = playbook.addManual({
+          content: candidate.content,
+          boundaryEnvs: tentative ? [] : boundary,
+          confidence: candidate.confidence,
+          ...(tentative ? { tentative: true } : {}),
+        });
+        if (!outcome.accepted) throw new Error('准则没写进去：' + (outcome.reason ?? '未知原因'));
+        const ruleId = (outcome as { entry?: { id?: string }; merged?: { id?: string } }).entry?.id ?? (outcome as { merged?: { id?: string } }).merged?.id ?? 'unknown';
+        learning.markAccepted(candidateId, ruleId);
+        touch();
+        void stateStore.flush();
+        return { kind: 'rule', ref: ruleId, tentative };
+      }
+      throw new Error('技能候选暂未开放');
+    };
+
+    /**
+     * 自动采用：把 pending 里"够格"的直接生效，人不点。
+     *
+     * 够格 = 事实一律；准则按上面规则（纠正来的变弱准则）。
+     * 这是"学习完全自动化"的落点——用户只提需求和反驳。
+     */
+    const autoAcceptPending = (): { accepted: number; skipped: number; dropped: number } => {
+      let accepted = 0;
+      let skipped = 0;
+      let dropped = 0;
+      for (const candidate of learning.list('pending')) {
+        try {
+          applyCandidate(candidate.id, { auto: true });
+          accepted += 1;
+        } catch (error) {
+          const reason = messageOf(error);
+          // 终局失败（重复 / 套话 / 过长 / 锚核不到）直接落定，别让队列越堆越长；
+          // 其他（临时错误）留着待审，避免误丢
+          if (/重复|套话|过长|过短|锚校验|没有这个候选|准则没写进去/.test(reason)) {
+            learning.reject(candidate.id, '自动跳过：' + reason);
+            dropped += 1;
+          } else {
+            skipped += 1;
+          }
+        }
+      }
+      return { accepted, skipped, dropped };
+    };
+
+    /** 从单条来源生成候选（提炼完自动调用），再按开关自动采用。 */
+    const generateFromSource = (sourceId: string): { generated: number; duplicates: number; dropped: number } => {
+      const note = library.note(sourceId);
+      if (note === undefined || note.status !== 'ready') return { generated: 0, duplicates: 0, dropped: 0 };
+      const blocks = library.blocksOf(sourceId).map((block) => ({ ord: block.ord, text: block.text, flags: scanFlags(block.text) }));
+      const drafts = candidatesFromPoints({
+        sourceId,
+        title: note.title,
+        ...(note.topic === undefined ? {} : { topic: note.topic }),
+        summary: note.summary,
+        points: note.points,
+        ...(note.quotes === undefined ? {} : { quotes: note.quotes }),
+        blocks,
+      });
+      let generated = 0;
+      let duplicates = 0;
+      let dropped = 0;
+      for (const draft of drafts) {
+        const checked = checkAnchor(draft.anchor, anchorLookup);
+        if (!checked.ok) {
+          dropped += 1;
+          continue;
+        }
+        const result = learning.add({
+          ...draft,
+          anchorChars: checked.matchedChars,
+          anchorFlags: checked.flags,
+          scope: 'world',
+          needsQuote: checked.needsQuote === true,
+        });
+        if (result.duplicate) duplicates += 1;
+        else generated += 1;
+      }
+      return { generated, duplicates, dropped };
+    };
+
+    learningPipelineRef = async (sourceId: string): Promise<void> => {
+      try {
+        generateFromSource(sourceId);
+        if (autoToggles().autoAccept) autoAcceptPending();
+      } catch (error) {
+        ctx.logger?.warn?.(`cognition-engine: 学习流水线失败 ${sourceId}: ${messageOf(error)}`);
+      }
+    };
     /**
      * 从资料库已提炼的结论生成候选。
      *
@@ -3840,7 +4005,8 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
             else generated += 1;
           }
         }
-        return { generated, duplicates, dropped: noAnchor.length, droppedDetail: noAnchor.slice(0, 5), stats: learning.stats() };
+        const auto = autoToggles().autoAccept ? autoAcceptPending() : { accepted: 0, skipped: 0 };
+        return { generated, duplicates, dropped: noAnchor.length, droppedDetail: noAnchor.slice(0, 5), auto, stats: learning.stats() };
       },
       { method: 'POST', requireAuth: explicitLock },
     );
@@ -3849,57 +4015,17 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       (url, body) => {
         const id = (url.searchParams.get('id') ?? '').trim();
         if (id.length === 0) throw new Error('需要 id');
-        const candidate = learning.get(id);
-        if (candidate === undefined) throw new Error('没有这个候选：' + id);
-        if (candidate.status !== 'pending') throw new Error('候选状态是 ' + candidate.status + '，不能再采用');
-        // 采用前再核一次锚：原文可能已经被删掉或被重切
-        const checked = checkAnchor(candidate.anchor, anchorLookup);
-        if (!checked.ok) throw new Error('锚校验没通过，拒绝写入：' + checked.reason);
-
         const json = readBodyJson(body);
         const boundaryRaw = url.searchParams.get('boundary') ?? bodyString(json, 'boundary') ?? '';
         const boundary = boundaryRaw.split(/[,，、]/).map((item) => item.trim()).filter((item) => item.length > 0);
-
-        if (candidate.kind === 'fact') {
-          const world = candidate.scope === 'world';
-          const fact = memory.ingest({
-            content: candidate.content,
-            // 世界知识加前缀，避免以后被当成"用户口径"引用；主题也带前缀
-            subject: (world ? '资料:' : '') + (candidate.subject ?? '待归类').slice(0, 40),
-            tags: [
-              'learned',
-              ...(world ? ['world-knowledge'] : []),
-              'anchor:' + candidate.anchor.ref + (candidate.anchor.block === undefined ? '' : '#' + candidate.anchor.block),
-            ],
-            // 外部知识压低权重：能 recall 到，但不该挤掉用户自己的工作口径
-            importance: world ? 0.25 : Math.min(0.9, 0.4 + candidate.confidence * 0.4),
-            source: 'imported',
-            origin: 'ui',
-          });
-          const done = learning.markAccepted(id, fact.id);
-          refreshEvidence();
-          touch();
-          void stateStore.flush();
-          return { candidate: done, factId: fact.id };
-        }
-        if (candidate.kind === 'rule') {
-          if (boundary.length === 0) {
-            throw new Error('准则候选必须填适用边界（boundary=场景一,场景二）：没有边界的准则会被到处套用');
-          }
-          const outcome = playbook.addManual({
-            content: candidate.content,
-            boundaryEnvs: boundary,
-            confidence: candidate.confidence,
-          });
-          if (!outcome.accepted) throw new Error('准则没写进去：' + (outcome.reason ?? '未知原因'));
-          const ruleId = (outcome as { entry?: { id?: string }; merged?: { id?: string } }).entry?.id ?? (outcome as { merged?: { id?: string } }).merged?.id ?? 'unknown';
-          const done = learning.markAccepted(id, ruleId);
-          touch();
-          void stateStore.flush();
-          return { candidate: done, ruleId };
-        }
-        throw new Error('技能候选暂未开放（格式还没定下来，先积累事实与准则）');
+        return applyCandidate(id, { boundary });
       },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+    // 一键把所有够格的候选自动采用（人不用点）
+    route(
+      '/cognition-engine/learn/auto-accept',
+      () => ({ ...autoAcceptPending(), stats: learning.stats() }),
       { method: 'POST', requireAuth: explicitLock },
     );
     route(

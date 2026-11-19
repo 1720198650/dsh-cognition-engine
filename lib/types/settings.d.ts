@@ -5,6 +5,10 @@ export interface PersistedSettings {
     autoLearn?: boolean;
     /** 自动修订：学到更普适的版本时自动改之前学的。默认关，且必须留存档。 */
     autoRevise?: boolean;
+    /** 自动采用候选：学到的直接生效，人不用一条条点。默认开（用户 2026-11-19：减少人的操作）。 */
+    autoAccept?: boolean;
+    /** 深研开关。默认关（一次约 ¥0.1，手动触发时才花）。 */
+    deepResearch?: boolean;
 }
 export declare function isInjectMode(value: unknown): value is InjectMode;
 /**
@@ -27,5 +31,7 @@ export declare class SettingsStore {
     writeToggles(patch: {
         autoLearn?: boolean;
         autoRevise?: boolean;
+        autoAccept?: boolean;
+        deepResearch?: boolean;
     }): PersistedSettings;
 }

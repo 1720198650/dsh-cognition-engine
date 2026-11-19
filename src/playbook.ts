@@ -129,6 +129,14 @@ export interface PlaybookEntry {
    * 注意：冲突裁决仍用 helpful/harmful 推导出的强度，不读这个字段。
    */
   confidence?: number;
+  /**
+   * 「弱准则」：自动学到、但证据还不够硬（例如只来自一次纠正）。
+   *
+   * 弱准则**不参与每轮注入**，只在被问到 / recall 时出现。
+   * 依据：Huang et al. 2024——没有外部反馈的自学越改越差；用户 2026-11-19 定
+   * 「一次纠正不等于永久规矩」。要升成正式准则，得再来一次印证或用户明说。
+   */
+  tentative?: boolean;
   /** 何时生效；null 表示不限。 */
   validFrom: number | null;
   /** 何时失效；null 表示长期有效。P3 才会自动生成。 */
@@ -241,6 +249,8 @@ export interface PlaybookCandidate {
   boundaryEnvs?: string[];
   /** 展示用置信度 0..1。 */
   confidence?: number;
+  /** 弱准则：生效但不进每轮注入。 */
+  tentative?: boolean;
 }
 
 export interface MergeOutcome {
@@ -628,6 +638,7 @@ export class PlaybookStore {
           ? entry.boundaryEnvs.map(String).map((value) => value.trim()).filter((value) => value.length > 0)
           : [],
         ...(entry.confidence === undefined ? {} : { confidence: Number(entry.confidence) }),
+        ...(entry.tentative === true ? { tentative: true } : {}),
         required: typeof entry.required === 'string' ? entry.required : '',
         violations: Number(entry.violations ?? 0),
         lastViolationAt:
@@ -802,6 +813,7 @@ export class PlaybookStore {
       sourceIds: sourceIds.length === 0 ? [] : validSourceIds,
       ...(boundary.length === 0 ? {} : { boundaryEnvs: boundary }),
       ...(candidate.confidence === undefined ? {} : { confidence: Math.min(1, Math.max(0, Number(candidate.confidence))) }),
+      ...(candidate.tentative === true ? { tentative: true } : {}),
       validFrom: null,
       validTo: candidate.validTo === undefined ? null : candidate.validTo,
       status: 'pending',
@@ -882,11 +894,13 @@ export class PlaybookStore {
     when?: string;
     boundaryEnvs?: string[];
     confidence?: number;
+    /** 弱准则：生效但不进每轮注入，等二次印证或用户确认再升 */
+    tentative?: boolean;
   }): MergeOutcome {
     const boundary = Array.isArray(input.boundaryEnvs)
       ? input.boundaryEnvs.map((value) => String(value).trim()).filter((value) => value.length > 0)
       : [];
-    if (this.requireBoundary && boundary.length === 0) {
+    if (this.requireBoundary && boundary.length === 0 && input.tentative !== true) {
       return { accepted: false, reason: '准则必须写明适用边界（boundaryEnvs）：没有边界的准则会被到处套用' };
     }
     const outcome = this.submit({ ...input, boundaryEnvs: boundary, origin: 'human' });
@@ -1447,6 +1461,8 @@ export class PlaybookStore {
     // filter 用于主题隔离：只注入当前任务相关主题的条目（ACL 2026, 1770：窄示例会外溢）
     const active = this.active(now)
       .filter((entry) => entry.evidence?.status !== 'orphaned')
+      // 弱准则不进每轮注入（用户 2026-11-19：一次纠正不等于永久规矩）
+      .filter((entry) => entry.tentative !== true)
       .filter((entry) => (filter === undefined ? true : filter(entry)));
     if (active.length === 0) return { text: '', omitted: 0, ruleIds: [] };
 
