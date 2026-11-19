@@ -584,6 +584,8 @@ window.__ModuleLoader__.load({
         const [learnInfo, setLearnInfo] = React.useState(null);
         /** 自动学习开关状态：{autoLearn, autoRevise, webAvailable, recent} */
         const [autoInfo, setAutoInfo] = React.useState(null);
+        /** 本轮注入占用（Letta 式容量条用）：{chars, ruleCount, activeRuleCount, injectMaxInstances} */
+        const [injInfo, setInjInfo] = React.useState(null);
         // 开关类按钮统一成 chip 样子：有边框有内边距，不然看着像一行说明文字
         const CHIP = {
           ...S.tab,
@@ -640,6 +642,24 @@ window.__ModuleLoader__.load({
               if (alive) setAutoInfo(auto);
             } catch {
               if (alive) setLearnInfo(null);
+            }
+          })();
+          return () => {
+            alive = false;
+          };
+        }, [tab, tick]);
+
+        // 注入占用（设置页容量条）：只在设置页拉，避免不必要的轮询
+        React.useEffect(() => {
+          if (tab !== 'settings') return undefined;
+          let alive = true;
+          (async () => {
+            try {
+              const res = await call('/cognition-engine/injected', { cache: 'no-store' });
+              const data = await res.json();
+              if (alive) setInjInfo(data);
+            } catch {
+              if (alive) setInjInfo(null);
             }
           })();
           return () => {
@@ -1193,6 +1213,37 @@ window.__ModuleLoader__.load({
                   }, label)),
               ),
             ),
+            // 容量条（Letta memory blocks 的做法：直接显示 当前/上限，一眼看出快满没）
+            (() => {
+              if (injInfo === null) return null;
+              const bar = (label, current, limit, unit, warnAt) => {
+                const pct = limit <= 0 ? 0 : Math.min(100, Math.round((current / limit) * 100));
+                const over = limit > 0 && current >= warnAt * limit;
+                return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+                  h('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                    h('span', null, label),
+                    h('span', { style: over ? { color: 'var(--dsw-alias-state-warn-primary)' } : null },
+                      current + ' / ' + limit + ' ' + unit + '（' + pct + '%）')),
+                  h('div', { style: { height: 6, borderRadius: 3, background: 'var(--dsw-alias-border-l1)', overflow: 'hidden' } },
+                    h('div', {
+                      style: {
+                        width: pct + '%',
+                        height: '100%',
+                        background: over ? 'var(--dsw-alias-state-warn-primary)' : 'var(--dsw-alias-state-success-primary)',
+                      },
+                    })),
+                );
+              };
+              return section(
+                '注入占用（每轮）',
+                h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+                  bar('注入字符', injInfo.chars || 0, 800, '字', 0.9),
+                  bar('展开准则', injInfo.ruleCount || 0, injInfo.injectMaxInstances || 8, '条', 1),
+                ),
+                h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                  '字符上限 800 是按索引 350 / 全文 700 实测估的软线；准则到上限会自动折叠成一行 id，需要时再 recall。'),
+              );
+            })(),
             usage
               ? section(
                   '用量（估算）',
@@ -2077,6 +2128,14 @@ window.__ModuleLoader__.load({
                 h('span', { style: { ...S.chip, color: item.current ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-label-secondary)' } }, item.current ? dict.current : dict.superseded),
                 item.revisedAt ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-warn-primary)' } }, '已手动修正') : null,
                 item.mergedInto ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-label-secondary)' } }, '已并入 ' + item.mergedInto) : null,
+                // Mem0 的变更链做法：让人同屏看到"这条替换了谁 / 被谁替换"，不用去猜
+                item.replaces && item.replaces.length > 0
+                  ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-state-success-primary)' } },
+                      '取代了 ' + item.replaces.length + ' 条旧记录（' + item.replaces.join('、') + '）')
+                  : null,
+                item.supersededBy
+                  ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-label-secondary)' } }, '已被 ' + item.supersededBy + ' 取代')
+                  : null,
                 item.supersedeReason ? h('span', { style: { ...S.chip, color: 'var(--dsw-alias-label-secondary)' } }, '取代理由：' + item.supersedeReason) : null,
                 h('span', null, item.subject),
                 h('span', null, new Date(item.recordedAt).toLocaleString()),
