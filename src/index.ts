@@ -37,6 +37,8 @@ import { SourceLibrary, type SourceNote } from './source_library.ts';
 import { LearningQueue, candidatesFromPoints, checkAnchor } from './learning.ts';
 import { RevisionLog, markAuto, shouldAutoRevise, unmarkAuto } from './autorevise.ts';
 import { StanceStore } from './stance.ts';
+import { VoiceStore } from './voice.ts';
+import { fetchComments, resolveAid } from './voice_source.ts';
 import { mergeAnswers, toClaimTable, researchStatus, buildAnswerPrompt, buildTriagePrompt, parseAnswer, parseTriage, SAME_THRESHOLD, type AnswerRecord, type ResearchRecord } from './deepresearch.ts';
 import { buildCorrectionPrompt, detectCorrection, parseCorrectionResult } from './correction.ts';
 import { buildSearchQueries, pickSources, type AutoLearnRecord } from './autolearn.ts';
@@ -356,6 +358,8 @@ export interface CognitionConfig {
   reviseMaxPerDay?: number;
   /** 准则冲突裁决倍率（默认 1.2）——经验值。 */
   conflictRatio?: number;
+  /** 语感注入预算（字符，默认 120）。语感是调味，别让它挤掉事实和准则。 */
+  voiceMaxChars?: number;
   /** 沉积层数据文件；默认 ~/.dsh/cognition-engine/cognition-sediment.jsonl。 */
   sedimentFile?: string;
   /** 沉积层单次位移系数 η，默认 0.02。 */
@@ -542,6 +546,8 @@ function normalizeConfig(raw: unknown): ResolvedConfig {
     reviseCooldownHours: Math.max(0, numberOr(config.reviseCooldownHours, 24)),
     reviseMaxPerDay: Math.max(1, Math.round(numberOr(config.reviseMaxPerDay, 5))),
     conflictRatio: Math.max(1, numberOr(config.conflictRatio, 1.2)),
+    // 语感预算：默认 120 字，上限 240（再多就会挤掉事实）
+    voiceMaxChars: Math.min(240, Math.max(0, numberOr(config.voiceMaxChars, 120))),
     inboxFile:
       typeof config.inboxFile === 'string' && config.inboxFile.trim().length > 0
         ? expandHome(config.inboxFile.trim())
@@ -703,6 +709,13 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
    * 首次启动种入几条用户自己的话，省得他从空白开始加；每条都能删。
    */
   const stance = new StanceStore({ filePath: join(dataDir(), 'cognition-stance.json') });
+  /**
+   * 语感层：从公开讨论学「怎么说」，不学「说什么」。
+   *
+   * 只读公开接口（B站），不登录、不互动、不发内容。
+   * 注入预算极小（≤120 字），是调味不是主菜。
+   */
+  const voice = new VoiceStore({ filePath: join(dataDir(), 'cognition-voice.json') });
   if (stance.list().length === 0) {
     try {
       stance.add({ kind: 'goal', text: '让对话和工作更利落：工作→反馈→提升自动完成，人只提需求和反驳', origin: '用户原话 2026-11-19' });
@@ -1666,7 +1679,12 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
       assumptionText.length === 0 ? text : `${assumptionText}\n\n${text}`;
     // 立场放最前面：它决定"怎么判断"，后面所有内容都在这个框架下读
     const stanceText = stance.render(320);
-    const withStance = (text: string): string => (stanceText.length === 0 ? text : `${stanceText}\n\n${text}`);
+    // 语感样本：放在立场之后。只给句子，不给规则——规则会变成套话。
+    const voiceText = config.voiceMaxChars <= 0 ? '' : voice.render(config.voiceMaxChars, 3);
+    const withStance = (text: string): string => {
+      const head = [stanceText, voiceText].filter((part) => part.length > 0).join('\n\n');
+      return head.length === 0 ? text : `${head}\n\n${text}`;
+    };
 
     /**
      * 资料层提示：把学到的结论**自动**带到本轮任务前面。
@@ -3603,6 +3621,46 @@ export function apply(ctx: PluginContext, rawConfig?: unknown): (() => void) | u
         const id = (url.searchParams.get('id') ?? '').trim();
         if (id.length === 0) throw new Error('需要 id');
         return { removed: stance.remove(id), items: stance.list() };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+
+    // —— 语感层：只读公开讨论，学句式不学观点 ——
+    route('/cognition-engine/voice/list', () => ({
+      items: voice.list(50),
+      stats: voice.stats(),
+      rendered: voice.render(config.voiceMaxChars, 3),
+    }));
+    route(
+      '/cognition-engine/voice/fetch',
+      async (url, body) => {
+        const json = readBodyJson(body);
+        const bvid = (url.searchParams.get('bvid') ?? bodyString(json, 'bvid') ?? '').trim();
+        const aidRaw = Number(url.searchParams.get('aid') ?? bodyString(json, 'aid') ?? 0);
+        const aid = aidRaw > 0 ? aidRaw : await resolveAid(bvid);
+        const comments = await fetchComments(aid, 1, 20);
+        let added = 0;
+        const rejected: Record<string, number> = {};
+        for (const comment of comments) {
+          const result = voice.add({
+            text: comment.text,
+            from: 'bilibili',
+            url: `https://www.bilibili.com/video/av${aid}`,
+            likes: comment.likes,
+          });
+          if (result.added) added += 1;
+          else if (result.reason !== undefined) rejected[result.reason] = (rejected[result.reason] ?? 0) + 1;
+        }
+        return { aid, fetched: comments.length, added, rejected, stats: voice.stats() };
+      },
+      { method: 'POST', requireAuth: explicitLock },
+    );
+    route(
+      '/cognition-engine/voice/remove',
+      (url) => {
+        const id = (url.searchParams.get('id') ?? '').trim();
+        if (id.length === 0) throw new Error('需要 id');
+        return { removed: voice.remove(id), stats: voice.stats() };
       },
       { method: 'POST', requireAuth: explicitLock },
     );

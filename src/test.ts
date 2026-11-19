@@ -54,6 +54,7 @@ import { buildSearchQueries, pickSources } from './autolearn.ts';
 import { RevisionLog, markAuto, revisionBadge, shouldAutoRevise, unmarkAuto } from './autorevise.ts';
 import { detectCorrection, parseCorrectionResult } from './correction.ts';
 import { StanceStore } from './stance.ts';
+import { VoiceStore, isVoiceWorthy } from './voice.ts';
 import { buildDeepClaimPrompt, crossCheck, crossCheckAnswers, buildAnswerPrompt, judgeAnswerPair, parseAnswer, parseDeepClaims, tokenF1 } from './deepresearch.ts';
 import { buildSourceNotePrompt, distillSkipReason, parseSourceNote } from './source_note.ts';
 import { summarizeUsage } from './usage.ts';
@@ -4967,6 +4968,61 @@ async function main(): Promise<void> {
       const read2 = store.read();
       assert.equal(read2.autoLearn, false, '切回关时老字段必须一起关');
       assert.equal(read2.deepResearch, false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  section('[79] 语感层：只学句式，不学观点');
+  await test('筛选规则：灌水/梗/脏话/超长 全部拒掉，有细节的留下', () => {
+    assert.equal(isVoiceWorthy('支持[支持][支持][支持][支持][支持][支持]', 300).ok, false, '纯应援要拒');
+    assert.equal(isVoiceWorthy('好', 900).ok, false, '太短要拒');
+    assert.equal(isVoiceWorthy('你说的这个我不同意，你这人真是傻逼一个', 800).ok, false, '脏话要拒');
+    assert.equal(isVoiceWorthy('啊'.repeat(140), 800).ok, false, '超长要拒');
+    assert.equal(isVoiceWorthy('这谈坐牢出来多难，闭口不谈怎么进去的', 5).ok, false, '点赞太少要拒');
+
+    const good = '这谈坐牢出来多难，闭口不谈怎么进去的[doge]，我认识几个出来的人都是这样';
+    assert.equal(isVoiceWorthy(good, 293).ok, true, '有具体内容的要留：' + JSON.stringify(isVoiceWorthy(good, 293)));
+  });
+
+  await test('取样保证来源多样，渲染只给句子不给规则', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cog-voice-'));
+    try {
+      const store = new VoiceStore({ filePath: join(dir, 'v.json'), now: () => 1000 });
+      store.add({ text: '第一句样本内容要够长一点才行啊', from: 'bilibili', likes: 100 });
+      store.add({ text: '第二句样本来自同一个地方内容也够长', from: 'bilibili', likes: 900 });
+      store.add({ text: '第三句样本换个来源才有代表性呢', from: 'zhihu', likes: 50 });
+      // 重复的要被拦住
+      const dup = store.add({ text: '第一句样本内容要够长一点才行啊', from: 'bilibili', likes: 100 });
+      assert.equal(dup.added, false);
+      assert.ok((dup.reason ?? '').includes('重复'), dup.reason);
+
+      assert.equal(store.stats().total, 3);
+      const picked = store.pick(2);
+      // 高赞同源 vs 低赞异源：先保证来源多样
+      assert.equal(new Set(picked.map((item) => item.from)).size, 2, JSON.stringify(picked.map((p) => p.from)));
+      const rendered = store.render(120, 3);
+      assert.ok(rendered.includes('【语感参考】'), rendered);
+      assert.ok(rendered.includes('· '), '要直接给句子，不是给规则');
+      assert.ok(!/应该|必须|要注意/.test(rendered), '不能写成规则：' + rendered);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('同一视频的样本不能占满三条（按具体出处去重，不是按平台名）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cog-voice2-'));
+    try {
+      const store = new VoiceStore({ filePath: join(dir, 'v.json'), now: () => 1000 });
+      // 同一个视频来三条高赞
+      for (const text of ['这是同一个视频里的第一句高赞评论', '这是同一个视频里的第二句高赞评论', '这是同一个视频里的第三句高赞评论']) {
+        store.add({ text, from: 'bilibili', url: 'https://www.bilibili.com/video/av1', likes: 900 });
+      }
+      // 另一个视频来一条
+      store.add({ text: '这条来自另一个视频内容也够长了', from: 'bilibili', url: 'https://www.bilibili.com/video/av2', likes: 30 });
+      const picked = store.pick(2);
+      const urls = new Set(picked.map((item) => item.url));
+      assert.equal(urls.size, 2, '同一视频的样本不能占满名额：' + JSON.stringify(picked.map((p) => p.url)));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

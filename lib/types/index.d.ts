@@ -209,6 +209,8 @@ export interface CognitionConfig {
     reviseMaxPerDay?: number;
     /** 准则冲突裁决倍率（默认 1.2）——经验值。 */
     conflictRatio?: number;
+    /** 语感注入预算（字符，默认 120）。语感是调味，别让它挤掉事实和准则。 */
+    voiceMaxChars?: number;
     /** 沉积层数据文件；默认 ~/.dsh/cognition-engine/cognition-sediment.jsonl。 */
     sedimentFile?: string;
     /** 沉积层单次位移系数 η，默认 0.02。 */

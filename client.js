@@ -588,6 +588,8 @@ window.__ModuleLoader__.load({
         const [injInfo, setInjInfo] = React.useState(null);
         /** 立场层：{items, rendered} */
         const [stanceInfo, setStanceInfo] = React.useState(null);
+        /** 语感样本：{items, stats, rendered} */
+        const [voiceInfo, setVoiceInfo] = React.useState(null);
         // 开关类按钮统一成 chip 样子：有边框有内边距，不然看着像一行说明文字
         const CHIP = {
           ...S.tab,
@@ -657,14 +659,17 @@ window.__ModuleLoader__.load({
           let alive = true;
           (async () => {
             try {
-              const [res, stanceRes] = await Promise.all([
+              const [res, stanceRes, voiceRes] = await Promise.all([
                 call('/cognition-engine/injected', { cache: 'no-store' }),
                 call('/cognition-engine/stance/list', { cache: 'no-store' }),
+                call('/cognition-engine/voice/list', { cache: 'no-store' }),
               ]);
               const data = await res.json();
               if (alive) setInjInfo(data);
               const st = await stanceRes.json().catch(() => null);
               if (alive) setStanceInfo(st);
+              const vi = await voiceRes.json().catch(() => null);
+              if (alive) setVoiceInfo(vi);
             } catch {
               if (alive) setInjInfo(null);
             }
@@ -1267,6 +1272,50 @@ window.__ModuleLoader__.load({
                   }
                 } }, '加'),
               ),
+            ),
+            // 语感层：只读公开讨论，学句式不学观点
+            section(
+              '语感（说话像个人）',
+              h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+                '从 B 站公开评论里取样，只学「话怎么说」，不学「观点对不对」。只读、不登录、不互动。' +
+                (voiceInfo && voiceInfo.stats ? ' 现有 ' + voiceInfo.stats.total + ' 条样本。' : '')),
+              voiceInfo && voiceInfo.rendered
+                ? h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'pre-wrap', marginTop: 4, paddingLeft: 8, borderLeft: '2px solid var(--dsw-alias-border-l2)' } }, voiceInfo.rendered)
+                : null,
+              h('div', { style: { display: 'flex', gap: 6, marginTop: 6 } },
+                h('input', { id: 'vsBvid', placeholder: 'B站视频 BV 号（用公开接口取评论）', style: S.input }),
+                h('button', { type: 'button', style: S.tab, onClick: async () => {
+                  const el = document.getElementById('vsBvid');
+                  const bvid = el ? el.value.trim() : '';
+                  if (!bvid) { window.alert('填一个 BV 号'); return; }
+                  try {
+                    const res = await call('/cognition-engine/voice/fetch?bvid=' + encodeURIComponent(bvid), { method: 'POST' });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+                    const why = Object.entries(data.rejected || {}).map(([k, v]) => k + ' ' + v).join('、');
+                    window.alert('取到 ' + data.fetched + ' 条评论，收了 ' + data.added + ' 条。\n' + (why ? '没收的：' + why : ''));
+                    setTick((v) => v + 1);
+                  } catch (error) {
+                    window.alert('取样失败：' + (error instanceof Error ? error.message : String(error)));
+                  }
+                } }, '取样'),
+              ),
+              voiceInfo && voiceInfo.items && voiceInfo.items.length > 0
+                ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 } },
+                    ...voiceInfo.items.slice(0, 8).map((item) => h('div', { key: item.id, style: { display: 'flex', gap: 6, alignItems: 'flex-start' } },
+                      h('span', { style: { flex: '0 0 auto', fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } }, '赞' + item.likes),
+                      h('span', { style: { flex: 1, fontSize: 12 } }, item.text),
+                      h('button', { type: 'button', style: { ...S.tab, fontSize: 11 }, onClick: async () => {
+                        try {
+                          const res = await call('/cognition-engine/voice/remove?id=' + encodeURIComponent(item.id), { method: 'POST' });
+                          if (!res.ok) throw new Error('HTTP ' + res.status);
+                          setTick((v) => v + 1);
+                        } catch (error) {
+                          window.alert('删除失败：' + (error instanceof Error ? error.message : String(error)));
+                        }
+                      } }, '删'),
+                    )))
+                : h('div', { style: S.explain }, '还没有语感样本。填一个 BV 号，从公开评论里取样。'),
             ),
             // 容量条（Letta memory blocks 的做法：直接显示 当前/上限，一眼看出快满没）
             (() => {
